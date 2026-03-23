@@ -28,14 +28,19 @@ public class AuthController {
 
     /**
      * 构造函数：注入认证服务。
+     *
+     * @param authService 认证领域服务
      */
     public AuthController(AuthService authService) {
         this.authService = authService;
     }
 
     /**
-     * 用户注册。
+     * 用户注册接口。
      * 作用：创建新用户并签发 Access/Refresh 双令牌，返回登录态会话信息。
+     *
+     * @param request 注册请求体
+     * @return 标准响应包装的会话信息
      */
     @PostMapping("/register")
     public ApiResponse<AuthSessionData> register(@Valid @RequestBody RegisterRequest request) {
@@ -43,8 +48,11 @@ public class AuthController {
     }
 
     /**
-     * 用户登录。
+     * 用户登录接口。
      * 作用：校验账号凭证并签发 Access/Refresh 双令牌，返回登录态会话信息。
+     *
+     * @param request 登录请求体
+     * @return 标准响应包装的会话信息
      */
     @PostMapping("/login")
     public ApiResponse<AuthSessionData> login(@Valid @RequestBody LoginRequest request) {
@@ -52,8 +60,11 @@ public class AuthController {
     }
 
     /**
-     * 刷新访问令牌。
+     * 刷新令牌接口。
      * 作用：使用 Refresh Token 完成令牌轮换，返回新的 Access/Refresh 令牌对。
+     *
+     * @param request 刷新令牌请求体
+     * @return 标准响应包装的新令牌对
      */
     @PostMapping("/token/refresh")
     public ApiResponse<AuthTokens> refresh(@Valid @RequestBody RefreshTokenRequest request) {
@@ -61,8 +72,11 @@ public class AuthController {
     }
 
     /**
-     * 用户登出。
+     * 用户登出接口。
      * 作用：撤销指定范围内的 Refresh Token（当前设备或全部设备），使会话失效。
+     *
+     * @param request 登出请求体
+     * @return 标准响应包装的登出结果
      */
     @PostMapping("/logout")
     public ApiResponse<ActionResult> logout(@Valid @RequestBody LogoutRequest request) {
@@ -70,8 +84,11 @@ public class AuthController {
     }
 
     /**
-     * 重置密码。
+     * 密码重置接口。
      * 作用：校验重置请求并更新用户密码，返回重置处理结果。
+     *
+     * @param request 密码重置请求体
+     * @return 标准响应包装的重置结果
      */
     @PostMapping("/password/reset")
     public ApiResponse<ActionResult> resetPassword(@Valid @RequestBody PasswordResetRequest request) {

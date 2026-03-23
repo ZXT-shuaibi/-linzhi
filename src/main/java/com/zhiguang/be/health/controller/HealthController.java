@@ -16,8 +16,10 @@ import java.util.Map;
 public class HealthController {
 
     /**
-     * 服务存活检查。
-     * 作用：返回固定的健康状态，用于负载均衡和监控系统快速判断服务是否可用。
+     * 服务存活检查接口。
+     * 作用：返回固定健康状态，用于负载均衡和监控系统快速判断服务是否可用。
+     *
+     * @return 标准响应包装的健康状态键值对
      */
     @GetMapping("/ping")
     public ApiResponse<Map<String, String>> ping() {
