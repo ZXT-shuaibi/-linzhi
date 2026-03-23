@@ -10,22 +10,23 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 @ConditionalOnProperty(name = "security.refresh-store", havingValue = "in-memory")
 /**
- * 类说明。
+ * InMemory 刷新令牌白名单实现。
  */
 public class InMemoryRefreshTokenStore implements RefreshTokenStore {
 
     /**
-     * 方法：未命名方法。
+     * key: userId:jti, value: expiresAt。
      */
     private final ConcurrentHashMap<String, Instant> refreshKeyToExpiresAt = new ConcurrentHashMap<>();
+
     /**
-     * 方法：未命名方法。
+     * key: userId, value: 该用户所有 refresh key 集合。
      */
     private final ConcurrentHashMap<String, Set<String>> userToKeys = new ConcurrentHashMap<>();
 
     @Override
     /**
-     * 方法说明。
+     * 保存刷新令牌白名单记录。
      */
     public void save(String userId, String jti, Instant expiresAt) {
         String key = toKey(userId, jti);
@@ -35,7 +36,7 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
 
     @Override
     /**
-     * 方法说明。
+     * 判断刷新令牌是否有效。
      */
     public boolean isValid(String userId, String jti) {
         String key = toKey(userId, jti);
@@ -52,23 +53,32 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
 
     @Override
     /**
-     * 方法说明。
+     * 原子消费刷新令牌，确保同一个 refresh token 只能使用一次。
      */
-    public void remove(String userId, String jti) {
+    public boolean consumeIfValid(String userId, String jti) {
         String key = toKey(userId, jti);
-        refreshKeyToExpiresAt.remove(key);
-        Set<String> keys = userToKeys.get(userId);
-        if (keys != null) {
-            keys.remove(key);
-            if (keys.isEmpty()) {
-                userToKeys.remove(userId);
-            }
+        Instant expiresAt = refreshKeyToExpiresAt.remove(key);
+        if (expiresAt == null) {
+            return false;
         }
+
+        removeUserIndex(userId, key);
+        return !Instant.now().isAfter(expiresAt);
     }
 
     @Override
     /**
-     * 方法说明。
+     * 撤销单个刷新令牌。
+     */
+    public void remove(String userId, String jti) {
+        String key = toKey(userId, jti);
+        refreshKeyToExpiresAt.remove(key);
+        removeUserIndex(userId, key);
+    }
+
+    @Override
+    /**
+     * 撤销用户全部刷新令牌。
      */
     public void removeAll(String userId) {
         Set<String> keys = userToKeys.remove(userId);
@@ -81,7 +91,20 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
     }
 
     /**
-     * 方法说明。
+     * 移除用户索引中的 refresh key。
+     */
+    private void removeUserIndex(String userId, String key) {
+        Set<String> keys = userToKeys.get(userId);
+        if (keys != null) {
+            keys.remove(key);
+            if (keys.isEmpty()) {
+                userToKeys.remove(userId);
+            }
+        }
+    }
+
+    /**
+     * 拼装 refresh key。
      */
     private String toKey(String userId, String jti) {
         return userId + ":" + jti;

@@ -16,17 +16,13 @@ import com.zhiguang.be.auth.token.RefreshTokenStore;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.UUID;
 
 /**
- * 认证服务实现类。
- * 负责串联用户存储、JWT 服务、登录黑名单与刷新令牌存储，完成认证主流程。
+ * 认证服务实现。
  */
 @Service
 public class AuthServiceImpl implements AuthService {
@@ -38,42 +34,46 @@ public class AuthServiceImpl implements AuthService {
     private final RefreshTokenStore refreshTokenStore;
     private final AuthUserMapper authUserMapper;
     private final LoginBlacklistStore loginBlacklistStore;
+    private final PasswordEncoder passwordEncoder;
 
     /**
-     * 构造函数：注入认证流程依赖组件。
+     * 构造函数：注入认证流程依赖。
      *
-     * @param jwtService JWT 签发与验签服务
-     * @param refreshTokenStore 刷新令牌存储组件
-     * @param authUserMapper 认证用户数据访问组件
-     * @param loginBlacklistStore 登录黑名单存储组件
+     * @param jwtService JWT 服务
+     * @param refreshTokenStore refresh 白名单存储
+     * @param authUserMapper 用户数据访问
+     * @param loginBlacklistStore 登录黑名单存储
+     * @param passwordEncoder 密码加密器
      */
     public AuthServiceImpl(
             JwtService jwtService,
             RefreshTokenStore refreshTokenStore,
             AuthUserMapper authUserMapper,
-            LoginBlacklistStore loginBlacklistStore
+            LoginBlacklistStore loginBlacklistStore,
+            PasswordEncoder passwordEncoder
     ) {
         this.jwtService = jwtService;
         this.refreshTokenStore = refreshTokenStore;
         this.authUserMapper = authUserMapper;
         this.loginBlacklistStore = loginBlacklistStore;
+        this.passwordEncoder = passwordEncoder;
     }
 
     /**
      * 注册用户并创建会话。
-     *
-     * @param request 注册请求
-     * @return 注册成功后的会话数据
      */
     @Override
     public AuthSessionData register(RegisterRequest request) {
-        if (authUserMapper.existsByPhone(request.phone())) {
-            throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
-        }
+        String phone = normalizeIdentifier(request.phone());
 
         String userId = UUID.randomUUID().toString();
-        AuthUserEntity account = new AuthUserEntity(userId, request.phone(), request.nickname(), hash(request.password()));
-        authUserMapper.save(account);
+        String encodedPassword = passwordEncoder.encode(request.password());
+        AuthUserEntity account = new AuthUserEntity(userId, phone, request.nickname(), encodedPassword);
+
+        // 原子写入，避免并发注册同手机号时的检查-写入竞争窗口。
+        if (!authUserMapper.saveIfPhoneAbsent(account)) {
+            throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
+        }
 
         AuthTokens tokens = issueAndStoreTokens(userId);
         return new AuthSessionData(userId, tokens);
@@ -81,21 +81,20 @@ public class AuthServiceImpl implements AuthService {
 
     /**
      * 登录并创建会话。
-     *
-     * @param request 登录请求
-     * @return 登录成功后的会话数据
      */
     @Override
     public AuthSessionData login(LoginRequest request) {
-        // 在账号密码校验前优先执行黑名单拦截。
-        if (loginBlacklistStore.isBlocked(request.identifier())) {
+        String identifier = normalizeIdentifier(request.identifier());
+
+        // 账号密码校验前执行黑名单拦截。
+        if (loginBlacklistStore.isBlocked(identifier)) {
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        AuthUserEntity account = authUserMapper.findByPhone(request.identifier())
+        AuthUserEntity account = authUserMapper.findByPhone(identifier)
                 .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED));
 
-        if (!account.passwordHash().equals(hash(request.password()))) {
+        if (!passwordEncoder.matches(request.password(), account.passwordHash())) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
         }
 
@@ -104,29 +103,31 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 刷新令牌并执行令牌轮换。
-     *
-     * @param refreshToken 刷新令牌
-     * @return 新签发的令牌对
+     * 刷新令牌并执行轮换。
      */
     @Override
     public AuthTokens refreshToken(String refreshToken) {
         RefreshTokenClaims claims = jwtService.verifyRefreshToken(refreshToken);
-        if (!refreshTokenStore.isValid(claims.userId(), claims.jti())) {
+
+        AuthUserEntity account = authUserMapper.findByUserId(claims.userId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_REFRESH_TOKEN, HttpStatus.UNAUTHORIZED));
+
+        // 命中黑名单时，主动吊销用户全部 refresh 会话，再拒绝本次换发。
+        if (loginBlacklistStore.isBlocked(account.phone())) {
+            refreshTokenStore.removeAll(claims.userId());
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+
+        // 原子消费 refresh token，防并发重放。
+        if (!refreshTokenStore.consumeIfValid(claims.userId(), claims.jti())) {
             throw new BusinessException(ErrorCode.INVALID_REFRESH_TOKEN, HttpStatus.UNAUTHORIZED);
         }
 
-        // 刷新令牌轮换：先吊销旧令牌标识，再签发并保存新刷新令牌。
-        refreshTokenStore.remove(claims.userId(), claims.jti());
         return issueAndStoreTokens(claims.userId());
     }
 
     /**
-     * 执行登出并按范围撤销刷新令牌。
-     *
-     * @param refreshToken 当前刷新令牌
-     * @param logoutScope 登出范围
-     * @return 登出操作结果
+     * 执行登出并按范围撤销 refresh token。
      */
     @Override
     public ActionResult logout(String refreshToken, String logoutScope) {
@@ -142,29 +143,25 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 重置密码并使该用户历史会话失效。
-     *
-     * @param request 重置密码请求
-     * @return 密码重置结果
+     * 重置密码并使历史会话失效。
      */
     @Override
     public ActionResult resetPassword(PasswordResetRequest request) {
-        AuthUserEntity account = authUserMapper.findByPhone(request.phone())
+        String phone = normalizeIdentifier(request.phone());
+        AuthUserEntity account = authUserMapper.findByPhone(phone)
                 .orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Phone not registered"));
 
-        AuthUserEntity updated = account.withPasswordHash(hash(request.newPassword()));
+        String encodedPassword = passwordEncoder.encode(request.newPassword());
+        AuthUserEntity updated = account.withPasswordHash(encodedPassword);
         authUserMapper.update(updated);
 
-        // 重置密码后需要使该用户所有刷新会话失效。
+        // 重置密码后清理该用户全部 refresh 会话。
         refreshTokenStore.removeAll(account.userId());
         return new ActionResult(true, "password_reset", account.userId(), "done");
     }
 
     /**
-     * 签发并持久化刷新令牌状态。
-     *
-     * @param userId 用户 ID
-     * @return 新签发的令牌对
+     * 签发并保存 refresh 令牌。
      */
     private AuthTokens issueAndStoreTokens(String userId) {
         AuthTokens tokens = jwtService.issueTokens(userId);
@@ -175,9 +172,6 @@ public class AuthServiceImpl implements AuthService {
 
     /**
      * 规范化登出范围参数。
-     *
-     * @param logoutScope 原始登出范围参数
-     * @return 归一化后的登出范围，非法值回退为当前设备
      */
     private String normalizeScope(String logoutScope) {
         if (logoutScope == null || logoutScope.isBlank()) {
@@ -190,17 +184,12 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 计算输入字符串的 SHA-256 哈希值。
-     *
-     * @param input 原始字符串
-     * @return 十六进制格式哈希值
+     * 规范化登录标识。
      */
-    private String hash(String input) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(input.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException ex) {
-            throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR);
+    private String normalizeIdentifier(String identifier) {
+        if (identifier == null) {
+            return "";
         }
+        return identifier.trim();
     }
 }

@@ -6,7 +6,6 @@ import java.util.Optional;
 
 /**
  * 用户认证数据访问接口。
- * 封装认证用户在持久层的查询与更新行为。
  */
 public interface AuthUserMapper {
 
@@ -14,29 +13,46 @@ public interface AuthUserMapper {
      * 判断手机号是否已注册。
      *
      * @param phone 待校验手机号
-     * @return true 表示该手机号已存在，false 表示不存在
+     * @return true 表示手机号已存在
      */
     boolean existsByPhone(String phone);
 
     /**
-     * 保存新用户记录。
+     * 保存新用户。
      *
-     * @param entity 待保存的用户实体
+     * @param entity 待保存用户实体
      */
     void save(AuthUserEntity entity);
 
     /**
-     * 根据手机号查询用户。
+     * 按手机号原子写入新用户。
+     * 若手机号已存在则不写入并返回 false。
+     *
+     * @param entity 待保存用户实体
+     * @return true 表示写入成功，false 表示手机号已存在
+     */
+    boolean saveIfPhoneAbsent(AuthUserEntity entity);
+
+    /**
+     * 按手机号查询用户。
      *
      * @param phone 手机号
-     * @return 用户实体（存在时返回），不存在则返回空 Optional
+     * @return 用户存在时返回实体
      */
     Optional<AuthUserEntity> findByPhone(String phone);
 
     /**
+     * 按用户 ID 查询用户。
+     *
+     * @param userId 用户 ID
+     * @return 用户存在时返回实体
+     */
+    Optional<AuthUserEntity> findByUserId(String userId);
+
+    /**
      * 更新用户记录。
      *
-     * @param entity 包含最新字段值的用户实体
+     * @param entity 含最新字段值的用户实体
      */
     void update(AuthUserEntity entity);
 }

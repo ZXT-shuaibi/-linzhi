@@ -30,13 +30,13 @@ import java.util.Base64;
 @Configuration
 @EnableConfigurationProperties(AuthJwtProperties.class)
 /**
- * 类说明。
+ * JWT 编解码配置。
  */
 public class AuthJwtConfiguration {
 
     @Bean
     /**
-     * 方法说明。
+     * 生成或加载 RSA 密钥材料。
      */
     public RsaKeyMaterial rsaKeyMaterial(AuthJwtProperties properties) {
         try {
@@ -48,7 +48,11 @@ public class AuthJwtConfiguration {
                 return new RsaKeyMaterial(publicKey, privateKey);
             }
 
-            // 当未配置密钥文本时，为本地开发生成临时密钥对。
+            if (!properties.isAllowEphemeralKeys()) {
+                throw new IllegalStateException("JWT key material is missing and security.jwt.allow-ephemeral-keys=false");
+            }
+
+            // 仅在显式允许时生成临时密钥，避免生产环境因重启导致令牌整体失效。
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
             KeyPair pair = generator.generateKeyPair();
@@ -60,7 +64,7 @@ public class AuthJwtConfiguration {
 
     @Bean
     /**
-     * 方法说明。
+     * JWT 编码器。
      */
     public JwtEncoder jwtEncoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
         RSAKey rsaKey = new RSAKey.Builder(keyMaterial.publicKey())
@@ -73,13 +77,12 @@ public class AuthJwtConfiguration {
 
     @Bean("accessJwtDecoder")
     /**
-     * 方法说明。
+     * Access Token 解码器，仅接受 token_type=access。
      */
     public JwtDecoder accessJwtDecoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(keyMaterial.publicKey()).build();
 
         OAuth2TokenValidator<Jwt> baseValidator = JwtValidators.createDefaultWithIssuer(properties.getIssuer());
-        // 访问令牌解码器必须拒绝刷新令牌。
         OAuth2TokenValidator<Jwt> accessTypeValidator = jwt -> {
             String tokenType = jwt.getClaimAsString("token_type");
             if ("access".equals(tokenType)) {
@@ -94,7 +97,7 @@ public class AuthJwtConfiguration {
 
     @Bean("tokenJwtDecoder")
     /**
-     * 方法说明。
+     * 通用令牌解码器（用于 refresh 解析）。
      */
     public JwtDecoder tokenJwtDecoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(keyMaterial.publicKey()).build();
@@ -102,6 +105,9 @@ public class AuthJwtConfiguration {
         return decoder;
     }
 
+    /**
+     * 解析 PEM 公钥。
+     */
     private RSAPublicKey readPublicKey(String pem) throws Exception {
         String normalized = pem.replace("\\n", "\n")
                 .replace("-----BEGIN PUBLIC KEY-----", "")
@@ -112,6 +118,9 @@ public class AuthJwtConfiguration {
         return (RSAPublicKey) KeyFactory.getInstance("RSA").generatePublic(spec);
     }
 
+    /**
+     * 解析 PEM 私钥。
+     */
     private RSAPrivateKey readPrivateKey(String pem) throws Exception {
         String normalized = pem.replace("\\n", "\n")
                 .replace("-----BEGIN PRIVATE KEY-----", "")

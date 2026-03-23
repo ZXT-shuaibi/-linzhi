@@ -23,10 +23,13 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 /**
- * 类说明。
+ * Spring Security 配置。
  */
 public class SecurityConfiguration {
 
+    /**
+     * 认证过滤链配置。
+     */
     @Bean
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
@@ -36,10 +39,8 @@ public class SecurityConfiguration {
     ) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
-                // 基于令牌的认证链路应保持无状态。
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // 认证初始化接口与健康检查接口保持匿名可访问。
                         .requestMatchers(
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/register",
@@ -52,7 +53,6 @@ public class SecurityConfiguration {
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(accessJwtDecoder)))
-                // 在鉴权与业务日志之前先补齐请求标识。
                 .addFilterBefore(requestIdFilter, BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) ->
@@ -63,7 +63,6 @@ public class SecurityConfiguration {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
-                .oauth2Client(AbstractHttpConfigurer::disable)
                 .rememberMe(AbstractHttpConfigurer::disable)
                 .anonymous(Customizer.withDefaults());
 
@@ -71,7 +70,7 @@ public class SecurityConfiguration {
     }
 
     /**
-     * 方法说明。
+     * 输出统一错误响应。
      */
     private void writeError(HttpServletResponse response, int status, ErrorCode errorCode, ObjectMapper objectMapper) {
         try {

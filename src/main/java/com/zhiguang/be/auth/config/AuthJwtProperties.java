@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "security.jwt")
 /**
- * 类说明。
+ * JWT 配置属性。
  */
 public class AuthJwtProperties {
 
@@ -14,88 +14,103 @@ public class AuthJwtProperties {
     private long refreshTokenTtlDays = 7;
     private String publicKey = "";
     private String privateKey = "";
+    private boolean allowEphemeralKeys = false;
 
     /**
-     * 方法说明。
+     * 获取发行方。
      */
     public String getIssuer() {
         return issuer;
     }
 
     /**
-     * 方法说明。
+     * 设置发行方。
      */
     public void setIssuer(String issuer) {
         this.issuer = issuer;
     }
 
     /**
-     * 方法说明。
+     * 获取 keyId。
      */
     public String getKeyId() {
         return keyId;
     }
 
     /**
-     * 方法说明。
+     * 设置 keyId。
      */
     public void setKeyId(String keyId) {
         this.keyId = keyId;
     }
 
     /**
-     * 方法说明。
+     * 获取 Access Token TTL（分钟）。
      */
     public long getAccessTokenTtlMinutes() {
         return accessTokenTtlMinutes;
     }
 
     /**
-     * 方法说明。
+     * 设置 Access Token TTL（分钟）。
      */
     public void setAccessTokenTtlMinutes(long accessTokenTtlMinutes) {
         this.accessTokenTtlMinutes = accessTokenTtlMinutes;
     }
 
     /**
-     * 方法说明。
+     * 获取 Refresh Token TTL（天）。
      */
     public long getRefreshTokenTtlDays() {
         return refreshTokenTtlDays;
     }
 
     /**
-     * 方法说明。
+     * 设置 Refresh Token TTL（天）。
      */
     public void setRefreshTokenTtlDays(long refreshTokenTtlDays) {
         this.refreshTokenTtlDays = refreshTokenTtlDays;
     }
 
     /**
-     * 方法说明。
+     * 获取公钥内容。
      */
     public String getPublicKey() {
         return publicKey;
     }
 
     /**
-     * 方法说明。
+     * 设置公钥内容。
      */
     public void setPublicKey(String publicKey) {
         this.publicKey = publicKey;
     }
 
     /**
-     * 方法说明。
+     * 获取私钥内容。
      */
     public String getPrivateKey() {
         return privateKey;
     }
 
     /**
-     * 方法说明。
+     * 设置私钥内容。
      */
     public void setPrivateKey(String privateKey) {
         this.privateKey = privateKey;
+    }
+
+    /**
+     * 是否允许在密钥缺失时生成临时密钥。
+     */
+    public boolean isAllowEphemeralKeys() {
+        return allowEphemeralKeys;
+    }
+
+    /**
+     * 设置是否允许临时密钥。
+     */
+    public void setAllowEphemeralKeys(boolean allowEphemeralKeys) {
+        this.allowEphemeralKeys = allowEphemeralKeys;
     }
 }

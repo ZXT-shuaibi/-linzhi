@@ -8,55 +8,77 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * AuthUserMapper 的内存实现。
- * 使用线程安全的 ConcurrentHashMap 模拟持久化存储，主要用于本地开发与演示。
  */
 @Repository
 public class InMemoryAuthUserMapper implements AuthUserMapper {
 
     /**
-     * 以内存 HashMap 按手机号索引用户。
+     * 按手机号索引用户。
      */
     private final ConcurrentHashMap<String, AuthUserEntity> usersByPhone = new ConcurrentHashMap<>();
 
     /**
-     * 判断手机号是否已存在。
-     *
-     * @param phone 待查询手机号
-     * @return true 表示已存在，false 表示不存在
+     * 按用户 ID 索引用户。
      */
+    private final ConcurrentHashMap<String, AuthUserEntity> usersByUserId = new ConcurrentHashMap<>();
+
     @Override
+    /**
+     * 判断手机号是否存在。
+     */
     public boolean existsByPhone(String phone) {
         return usersByPhone.containsKey(phone);
     }
 
-    /**
-     * 保存用户实体到内存存储。
-     *
-     * @param entity 待保存用户
-     */
     @Override
+    /**
+     * 保存用户实体。
+     */
     public void save(AuthUserEntity entity) {
         usersByPhone.put(entity.phone(), entity);
+        usersByUserId.put(entity.userId(), entity);
     }
 
-    /**
-     * 根据手机号查询用户实体。
-     *
-     * @param phone 手机号
-     * @return 匹配到的用户实体；未匹配则返回空 Optional
-     */
     @Override
+    /**
+     * 按手机号原子写入新用户。
+     */
+    public boolean saveIfPhoneAbsent(AuthUserEntity entity) {
+        AuthUserEntity existed = usersByPhone.putIfAbsent(entity.phone(), entity);
+        if (existed != null) {
+            return false;
+        }
+
+        AuthUserEntity userIdConflict = usersByUserId.putIfAbsent(entity.userId(), entity);
+        if (userIdConflict != null) {
+            usersByPhone.remove(entity.phone(), entity);
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    /**
+     * 按手机号查询用户。
+     */
     public Optional<AuthUserEntity> findByPhone(String phone) {
         return Optional.ofNullable(usersByPhone.get(phone));
     }
 
+    @Override
+    /**
+     * 按用户 ID 查询用户。
+     */
+    public Optional<AuthUserEntity> findByUserId(String userId) {
+        return Optional.ofNullable(usersByUserId.get(userId));
+    }
+
+    @Override
     /**
      * 更新用户实体。
-     *
-     * @param entity 包含新状态的用户实体
      */
-    @Override
     public void update(AuthUserEntity entity) {
         usersByPhone.put(entity.phone(), entity);
+        usersByUserId.put(entity.userId(), entity);
     }
 }
