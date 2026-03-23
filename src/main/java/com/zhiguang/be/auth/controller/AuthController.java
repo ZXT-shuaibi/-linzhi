@@ -1,4 +1,4 @@
-﻿package com.zhiguang.be.auth.controller;
+package com.zhiguang.be.auth.controller;
 
 import com.zhiguang.be.auth.model.ActionResult;
 import com.zhiguang.be.auth.model.AuthSessionData;

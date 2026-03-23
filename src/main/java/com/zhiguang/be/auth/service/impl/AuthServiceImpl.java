@@ -1,5 +1,6 @@
-﻿package com.zhiguang.be.auth.service.impl;
+package com.zhiguang.be.auth.service.impl;
 
+import com.zhiguang.be.auth.blacklist.LoginBlacklistStore;
 import com.zhiguang.be.auth.mapper.AuthUserMapper;
 import com.zhiguang.be.auth.model.ActionResult;
 import com.zhiguang.be.auth.model.AuthSessionData;
@@ -25,7 +26,7 @@ import java.util.UUID;
 
 /**
  * 认证服务实现类。
- * 负责串联用户存储、JWT 服务与刷新令牌存储，完成认证主流程。
+ * 负责串联用户存储、JWT 服务、登录黑名单与刷新令牌存储，完成认证主流程。
  */
 @Service
 public class AuthServiceImpl implements AuthService {
@@ -36,6 +37,7 @@ public class AuthServiceImpl implements AuthService {
     private final JwtService jwtService;
     private final RefreshTokenStore refreshTokenStore;
     private final AuthUserMapper authUserMapper;
+    private final LoginBlacklistStore loginBlacklistStore;
 
     /**
      * 构造函数：注入认证流程依赖组件。
@@ -43,11 +45,18 @@ public class AuthServiceImpl implements AuthService {
      * @param jwtService JWT 签发与验签服务
      * @param refreshTokenStore 刷新令牌存储组件
      * @param authUserMapper 认证用户数据访问组件
+     * @param loginBlacklistStore 登录黑名单存储组件
      */
-    public AuthServiceImpl(JwtService jwtService, RefreshTokenStore refreshTokenStore, AuthUserMapper authUserMapper) {
+    public AuthServiceImpl(
+            JwtService jwtService,
+            RefreshTokenStore refreshTokenStore,
+            AuthUserMapper authUserMapper,
+            LoginBlacklistStore loginBlacklistStore
+    ) {
         this.jwtService = jwtService;
         this.refreshTokenStore = refreshTokenStore;
         this.authUserMapper = authUserMapper;
+        this.loginBlacklistStore = loginBlacklistStore;
     }
 
     /**
@@ -78,6 +87,11 @@ public class AuthServiceImpl implements AuthService {
      */
     @Override
     public AuthSessionData login(LoginRequest request) {
+        // 在账号密码校验前优先执行黑名单拦截。
+        if (loginBlacklistStore.isBlocked(request.identifier())) {
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+
         AuthUserEntity account = authUserMapper.findByPhone(request.identifier())
                 .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED));
 

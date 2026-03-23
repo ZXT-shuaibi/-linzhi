@@ -1,4 +1,4 @@
-﻿package com.zhiguang.be.health.controller;
+package com.zhiguang.be.health.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
 import org.springframework.web.bind.annotation.GetMapping;

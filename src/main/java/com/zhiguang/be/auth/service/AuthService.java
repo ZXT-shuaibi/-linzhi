@@ -1,4 +1,4 @@
-﻿package com.zhiguang.be.auth.service;
+package com.zhiguang.be.auth.service;
 
 import com.zhiguang.be.auth.model.ActionResult;
 import com.zhiguang.be.auth.model.AuthSessionData;

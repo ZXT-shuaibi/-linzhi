@@ -1,4 +1,4 @@
-﻿package com.zhiguang.be.auth.mapper;
+package com.zhiguang.be.auth.mapper;
 
 import com.zhiguang.be.auth.model.AuthUserEntity;
 import org.springframework.stereotype.Repository;

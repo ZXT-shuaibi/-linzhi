@@ -17,6 +17,8 @@ management:
 
 security:
   refresh-store: redis
+  login-blacklist:
+    enabled: true
   jwt:
     issuer: zhiguang-be
     key-id: zhiguang-rsa
