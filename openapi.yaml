@@ -1,0 +1,1895 @@
+openapi: 3.0.3
+info:
+  title: 邻里知光 API
+  version: 1.0.0
+  description: |
+    基于《邻里知光-技术分档-详细版》与补充 docx 整理的目标态接口文档。
+    当前工作区无代码快照，本规范用于联调、评审与后续 Swagger/Knife4j/Postman 导入。
+servers:
+  - url: /api/v1
+    description: 默认 API 前缀
+security:
+  - BearerAuth: []
+tags:
+  - name: Auth
+    description: 认证与令牌生命周期
+  - name: Discover
+    description: LBS 附近发现
+  - name: Posts
+    description: 草稿、元数据与发布
+  - name: Storage
+    description: OSS 预签名上传
+  - name: Search
+    description: 搜索与联想
+  - name: Rag
+    description: RAG 流式问答
+  - name: Interactions
+    description: 点赞与收藏
+  - name: Follows
+    description: 关注关系
+  - name: Feed
+    description: 首页 Feed
+  - name: Trade
+    description: 秒杀与订单
+  - name: Ops
+    description: 限流、线程池和指标
+x-internal-events:
+  - name: counter-event
+    maturity: 已实现
+    source: 原文明确
+    topic: counter-event
+    eventTypes: [LIKE_CHANGED, FAVORITE_CHANGED]
+    trigger: 点赞或收藏位图状态发生变化
+    payloadSchema: '#/components/schemas/CounterEventPayload'
+    idempotencyKey: eventId
+    compensation: Kafka 重放、位图重建、DLQ
+  - name: follow-event
+    maturity: 已实现
+    source: 原文明确
+    topic: follow-event
+    eventTypes: [FOLLOW_CREATED, FOLLOW_REMOVED]
+    trigger: 关注主表与 outbox 事务提交后
+    payloadSchema: '#/components/schemas/FollowEventPayload'
+    idempotencyKey: eventId
+    compensation: 粉丝计数修复、关注列表重建
+  - name: post-published
+    maturity: 已实现
+    source: 原文明确
+    topic: post-published
+    eventTypes: [POST_PUBLISHED]
+    trigger: 内容发布成功后
+    payloadSchema: '#/components/schemas/PostPublishedPayload'
+    idempotencyKey: eventId
+    compensation: 摘要重试、搜索索引回填、Feed 刷新
+  - name: rag-index-rebuild
+    maturity: 已实现
+    source: 基于需求推导
+    topic: rag-index-rebuild
+    eventTypes: [RAG_INDEX_REBUILD_REQUESTED]
+    trigger: 文章内容更新或索引重建请求
+    payloadSchema: '#/components/schemas/RagIndexRebuildPayload'
+    idempotencyKey: postId+version
+    compensation: 切片全量重建
+  - name: seckill-success
+    maturity: 规划中
+    source: 原文明确
+    topic: seckill-success
+    eventTypes: [SECKILL_PRECHECK_PASSED]
+    trigger: 秒杀预检通过后
+    payloadSchema: '#/components/schemas/SeckillSuccessPayload'
+    idempotencyKey: requestId
+    compensation: 重新入队或标记失败
+  - name: order-timeout
+    maturity: 规划中
+    source: 基于需求推导
+    topic: order-timeout
+    eventTypes: [ORDER_PAYMENT_TIMEOUT]
+    trigger: 未支付订单超时
+    payloadSchema: '#/components/schemas/OrderTimeoutPayload'
+    idempotencyKey: orderId+expireAt
+    compensation: 关单补偿、库存回补
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: 用户注册
+      operationId: register
+      security: []
+      x-maturity: 已实现
+      x-source: 原文明确
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthSessionData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: 用户登录
+      operationId: login
+      security: []
+      x-maturity: 已实现
+      x-source: 原文明确
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthSessionData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+  /auth/token/refresh:
+    post:
+      tags: [Auth]
+      summary: 刷新令牌
+      operationId: refreshToken
+      security: []
+      x-maturity: 已实现
+      x-source: 原文明确
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthTokens'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: 用户登出
+      operationId: logout
+      x-maturity: 已实现
+      x-source: 原文明确
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '200':
+          description: 登出成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ActionResult'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /auth/password/reset:
+    post:
+      tags: [Auth]
+      summary: 重置密码
+      operationId: resetPassword
+      security: []
+      x-maturity: 已实现
+      x-source: 原文明确
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '200':
+          description: 重置成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ActionResult'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+  /discover/nearby:
+    get:
+      tags: [Discover]
+      summary: 附近发现
+      operationId: discoverNearby
+      x-maturity: 规划中
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/LatParam'
+        - $ref: '#/components/parameters/LngParam'
+        - $ref: '#/components/parameters/RadiusParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - name: entityType
+          in: query
+          schema:
+            type: string
+            enum: [post, merchant, mixed]
+            default: mixed
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/NearbyData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /posts/drafts:
+    post:
+      tags: [Posts]
+      summary: 创建草稿
+      operationId: createDraft
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDraftRequest'
+      responses:
+        '200':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DraftData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /storage/presign:
+    post:
+      tags: [Storage]
+      summary: 申请 OSS 预签名上传地址
+      operationId: createPresign
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignRequest'
+      responses:
+        '200':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PresignData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /posts/{postId}/content/confirm:
+    post:
+      tags: [Posts]
+      summary: 确认内容上传
+      operationId: confirmPostContent
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmContentRequest'
+      responses:
+        '200':
+          description: 确认成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ConfirmContentData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /posts/{postId}/metadata:
+    put:
+      tags: [Posts]
+      summary: 更新文章元数据
+      operationId: updatePostMetadata
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePostMetadataRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /posts/{postId}/publish:
+    post:
+      tags: [Posts]
+      summary: 发布文章
+      operationId: publishPost
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishPostRequest'
+      responses:
+        '200':
+          description: 发布成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+  /posts/{postId}:
+    get:
+      tags: [Posts]
+      summary: 查询文章详情
+      operationId: getPostDetail
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostDetail'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /search/posts:
+    get:
+      tags: [Search]
+      summary: 搜索文章
+      operationId: searchPosts
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SearchAfterParam'
+        - $ref: '#/components/parameters/LatParam'
+        - $ref: '#/components/parameters/LngParam'
+        - $ref: '#/components/parameters/RadiusParam'
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SearchPostsData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /search/suggest:
+    get:
+      tags: [Search]
+      summary: 搜索联想
+      operationId: suggestSearch
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 10
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SuggestData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /rag/queries/stream:
+    post:
+      tags: [Rag]
+      summary: 流式问答
+      operationId: streamRagQuery
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RagQueryRequest'
+      responses:
+        '200':
+          description: SSE 流式返回
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE 事件流，事件类型为 message、done、error。事件载荷结构见 `SseChunk`。
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+  /interactions/targets/{targetType}/{targetId}/like:
+    post:
+      tags: [Interactions]
+      summary: 点赞
+      operationId: likeTarget
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/TargetTypeParam'
+        - $ref: '#/components/parameters/TargetIdParam'
+      responses:
+        '200':
+          description: 点赞成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InteractionActionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+    delete:
+      tags: [Interactions]
+      summary: 取消点赞
+      operationId: unlikeTarget
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/TargetTypeParam'
+        - $ref: '#/components/parameters/TargetIdParam'
+      responses:
+        '200':
+          description: 取消成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InteractionActionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /interactions/targets/{targetType}/{targetId}/favorite:
+    post:
+      tags: [Interactions]
+      summary: 收藏
+      operationId: favoriteTarget
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/TargetTypeParam'
+        - $ref: '#/components/parameters/TargetIdParam'
+      responses:
+        '200':
+          description: 收藏成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InteractionActionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags: [Interactions]
+      summary: 取消收藏
+      operationId: unfavoriteTarget
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/TargetTypeParam'
+        - $ref: '#/components/parameters/TargetIdParam'
+      responses:
+        '200':
+          description: 取消成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InteractionActionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /interactions/targets/{targetType}/{targetId}/summary:
+    get:
+      tags: [Interactions]
+      summary: 查询互动汇总
+      operationId: getInteractionSummary
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/TargetTypeParam'
+        - $ref: '#/components/parameters/TargetIdParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InteractionSummary'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /follows/{followeeId}:
+    post:
+      tags: [Follows]
+      summary: 关注用户
+      operationId: followUser
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/FolloweeIdParam'
+      responses:
+        '200':
+          description: 关注成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FollowActionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+    delete:
+      tags: [Follows]
+      summary: 取消关注
+      operationId: unfollowUser
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/FolloweeIdParam'
+      responses:
+        '200':
+          description: 取消成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FollowActionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /follows/users/{userId}/following:
+    get:
+      tags: [Follows]
+      summary: 查询关注列表
+      operationId: getFollowingList
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FollowListData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /follows/users/{userId}/followers:
+    get:
+      tags: [Follows]
+      summary: 查询粉丝列表
+      operationId: getFollowersList
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FollowListData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /feed/home:
+    get:
+      tags: [Feed]
+      summary: 查询首页 Feed
+      operationId: getHomeFeed
+      x-maturity: 已实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/LatParam'
+        - $ref: '#/components/parameters/LngParam'
+        - name: geoHash
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FeedData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+  /trade/seckill/requests:
+    post:
+      tags: [Trade]
+      summary: 秒杀预检并受理请求
+      operationId: createSeckillRequest
+      x-maturity: 规划中
+      x-source: 基于需求推导
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeckillRequest'
+      responses:
+        '200':
+          description: 受理成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SeckillAcceptedData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+  /trade/seckill/requests/{requestId}:
+    get:
+      tags: [Trade]
+      summary: 查询秒杀受理状态
+      operationId: getSeckillRequestStatus
+      x-maturity: 规划中
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/RequestIdParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SeckillStatusData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /trade/orders/{orderId}:
+    get:
+      tags: [Trade]
+      summary: 查询订单详情
+      operationId: getOrderDetail
+      x-maturity: 规划中
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/OrderIdParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/OrderDetail'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /trade/orders/{orderId}/cancel:
+    post:
+      tags: [Trade]
+      summary: 主动取消订单
+      operationId: cancelOrder
+      x-maturity: 规划中
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/OrderIdParam'
+      responses:
+        '200':
+          description: 取消成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ActionResult'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+  /ops/rate-limits/scenes/{scene}:
+    get:
+      tags: [Ops]
+      summary: 查询限流场景
+      operationId: getRateLimitScene
+      x-maturity: 部分实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/SceneParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RateLimitScene'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /ops/thread-pools/{poolName}:
+    get:
+      tags: [Ops]
+      summary: 查询线程池快照
+      operationId: getThreadPoolSnapshot
+      x-maturity: 部分实现
+      x-source: 基于需求推导
+      parameters:
+        - $ref: '#/components/parameters/PoolNameParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ThreadPoolSnapshot'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /ops/metrics/overview:
+    get:
+      tags: [Ops]
+      summary: 查询指标总览
+      operationId: getMetricsOverview
+      x-maturity: 规划中
+      x-source: 基于需求推导
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MetricsOverview'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    SizeParam:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    SearchAfterParam:
+      name: searchAfter
+      in: query
+      schema:
+        type: string
+      description: Base64 编码的 search_after 游标
+    LatParam:
+      name: lat
+      in: query
+      schema:
+        type: number
+        format: double
+    LngParam:
+      name: lng
+      in: query
+      schema:
+        type: number
+        format: double
+    RadiusParam:
+      name: radius
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50000
+        default: 3000
+    PostIdParam:
+      name: postId
+      in: path
+      required: true
+      schema:
+        type: string
+    TargetTypeParam:
+      name: targetType
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [post, merchant]
+    TargetIdParam:
+      name: targetId
+      in: path
+      required: true
+      schema:
+        type: string
+    FolloweeIdParam:
+      name: followeeId
+      in: path
+      required: true
+      schema:
+        type: string
+    UserIdParam:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+    RequestIdParam:
+      name: requestId
+      in: path
+      required: true
+      schema:
+        type: string
+    OrderIdParam:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+    SceneParam:
+      name: scene
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [login, interaction, rag, trade, global]
+    PoolNameParam:
+      name: poolName
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnauthorizedError:
+      description: 认证失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequestsError:
+      description: 触发限流
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFoundError:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ConflictError:
+      description: 状态冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailableError:
+      description: 依赖服务不可用
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ApiResponse:
+      type: object
+      required: [code, message, requestId, timestamp]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        data:
+          description: 业务数据
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required: [code, message, requestId, timestamp]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              reason:
+                type: string
+        requestId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    PageMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+        totalPages:
+          type: integer
+        hasNext:
+          type: boolean
+    CursorPageMeta:
+      type: object
+      properties:
+        size:
+          type: integer
+        hasNext:
+          type: boolean
+        searchAfter:
+          type: array
+          items:
+            type: string
+    Location:
+      type: object
+      properties:
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        geoHash:
+          type: string
+        address:
+          type: string
+    UserProfileBrief:
+      type: object
+      properties:
+        userId:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: uri
+        fansCount:
+          type: integer
+        followCount:
+          type: integer
+    AuthTokens:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        accessExpiresAt:
+          type: string
+          format: date-time
+        refreshToken:
+          type: string
+        refreshExpiresAt:
+          type: string
+          format: date-time
+        tokenType:
+          type: string
+          example: Bearer
+    AuthSessionData:
+      type: object
+      properties:
+        userId:
+          type: string
+        tokens:
+          $ref: '#/components/schemas/AuthTokens'
+    RegisterRequest:
+      type: object
+      required: [phone, password, nickname, smsCode]
+      properties:
+        phone:
+          type: string
+        password:
+          type: string
+        nickname:
+          type: string
+        smsCode:
+          type: string
+    LoginRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier:
+          type: string
+        password:
+          type: string
+        channel:
+          type: string
+        captchaToken:
+          type: string
+    RefreshTokenRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+    LogoutRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+        logoutScope:
+          type: string
+          enum: [current_device, all_devices]
+    PasswordResetRequest:
+      type: object
+      required: [phone, smsCode, newPassword]
+      properties:
+        phone:
+          type: string
+        smsCode:
+          type: string
+        newPassword:
+          type: string
+    ActionResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        action:
+          type: string
+        resourceId:
+          type: string
+        status:
+          type: string
+    NearbyItem:
+      type: object
+      properties:
+        id:
+          type: string
+        entityType:
+          type: string
+          enum: [post, merchant]
+        title:
+          type: string
+        summary:
+          type: string
+        distanceMeters:
+          type: number
+          format: double
+        freshnessScore:
+          type: number
+          format: double
+        interactionScore:
+          type: number
+          format: double
+        trustScore:
+          type: number
+          format: double
+        location:
+          $ref: '#/components/schemas/Location'
+    NearbyData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/NearbyItem'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+    CreateDraftRequest:
+      type: object
+      properties:
+        contentType:
+          type: string
+        sourceType:
+          type: string
+    DraftData:
+      type: object
+      properties:
+        postId:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    PresignRequest:
+      type: object
+      required: [postId, filename, contentType, purpose]
+      properties:
+        postId:
+          type: string
+        filename:
+          type: string
+        contentType:
+          type: string
+        purpose:
+          type: string
+          enum: [content, cover, image]
+    PresignData:
+      type: object
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+        objectKey:
+          type: string
+        expireAt:
+          type: string
+          format: date-time
+    ConfirmContentRequest:
+      type: object
+      required: [objectKey, etag, sha256, size]
+      properties:
+        objectKey:
+          type: string
+        etag:
+          type: string
+        sha256:
+          type: string
+        size:
+          type: integer
+    ConfirmContentData:
+      type: object
+      properties:
+        postId:
+          type: string
+        status:
+          type: string
+        objectKey:
+          type: string
+    UpdatePostMetadataRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        coverUrl:
+          type: string
+          format: uri
+        location:
+          $ref: '#/components/schemas/Location'
+    PublishPostRequest:
+      type: object
+      properties:
+        visibility:
+          type: string
+          enum: [public, followers, private]
+        publishAt:
+          type: string
+          format: date-time
+    InteractionCounters:
+      type: object
+      properties:
+        likeCount:
+          type: integer
+        favoriteCount:
+          type: integer
+        commentCount:
+          type: integer
+    PostDetail:
+      type: object
+      properties:
+        postId:
+          type: string
+        author:
+          $ref: '#/components/schemas/UserProfileBrief'
+        status:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        contentUrl:
+          type: string
+          format: uri
+        coverUrl:
+          type: string
+          format: uri
+        tags:
+          type: array
+          items:
+            type: string
+        location:
+          $ref: '#/components/schemas/Location'
+        interactionCounters:
+          $ref: '#/components/schemas/InteractionCounters'
+        publishedAt:
+          type: string
+          format: date-time
+    SearchResultItem:
+      type: object
+      properties:
+        postId:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        score:
+          type: number
+          format: double
+        distanceMeters:
+          type: number
+          format: double
+        searchAfter:
+          type: array
+          items:
+            type: string
+    SearchPostsData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResultItem'
+        page:
+          $ref: '#/components/schemas/CursorPageMeta'
+    SuggestItem:
+      type: object
+      properties:
+        text:
+          type: string
+        score:
+          type: number
+          format: double
+        source:
+          type: string
+    SuggestData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestItem'
+    RagQueryRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+        postId:
+          type: string
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        topK:
+          type: integer
+          default: 8
+        sessionId:
+          type: string
+    RagReference:
+      type: object
+      properties:
+        postId:
+          type: string
+        chunkId:
+          type: string
+        title:
+          type: string
+    SseChunk:
+      type: object
+      properties:
+        event:
+          type: string
+          enum: [message, done, error]
+        seq:
+          type: integer
+        delta:
+          type: string
+        references:
+          type: array
+          items:
+            $ref: '#/components/schemas/RagReference'
+        finishReason:
+          type: string
+        errorCode:
+          type: string
+    InteractionActionData:
+      type: object
+      properties:
+        targetType:
+          type: string
+        targetId:
+          type: string
+        action:
+          type: string
+        active:
+          type: boolean
+        snapshotVersion:
+          type: integer
+    InteractionSummary:
+      type: object
+      properties:
+        targetType:
+          type: string
+        targetId:
+          type: string
+        likeCount:
+          type: integer
+        favoriteCount:
+          type: integer
+        viewerLiked:
+          type: boolean
+        viewerFavorited:
+          type: boolean
+    FollowActionData:
+      type: object
+      properties:
+        followeeId:
+          type: string
+        following:
+          type: boolean
+        followerCount:
+          type: integer
+        followCount:
+          type: integer
+    FollowUserItem:
+      type: object
+      properties:
+        userId:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: uri
+        followedAt:
+          type: string
+          format: date-time
+    FollowListData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowUserItem'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+    FeedItem:
+      type: object
+      properties:
+        postId:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        author:
+          $ref: '#/components/schemas/UserProfileBrief'
+        distanceMeters:
+          type: number
+          format: double
+        hotScore:
+          type: number
+          format: double
+        publishedAt:
+          type: string
+          format: date-time
+    FeedData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedItem'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+        cacheLayer:
+          type: string
+          enum: [L1, L2, L3, DB]
+    SeckillRequest:
+      type: object
+      required: [activityId, productId, quantity]
+      properties:
+        activityId:
+          type: string
+        productId:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        skuAttrs:
+          type: object
+          additionalProperties:
+            type: string
+    SeckillAcceptedData:
+      type: object
+      properties:
+        requestId:
+          type: string
+        accepted:
+          type: boolean
+        queueStatus:
+          type: string
+          enum: [accepted, queued]
+        acceptedAt:
+          type: string
+          format: date-time
+    SeckillStatusData:
+      type: object
+      properties:
+        requestId:
+          type: string
+        status:
+          type: string
+          enum: [accepted, queued, ordering, ordered, failed, expired]
+        orderId:
+          type: string
+        failureReason:
+          type: string
+    OrderDetail:
+      type: object
+      properties:
+        orderId:
+          type: string
+        activityId:
+          type: string
+        productId:
+          type: string
+        status:
+          type: string
+          enum: [INIT, PENDING_PAY, PAID, CLOSED, CANCELLED]
+        amount:
+          type: number
+          format: double
+        expireAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+    RateLimitScene:
+      type: object
+      properties:
+        scene:
+          type: string
+        enabled:
+          type: boolean
+        dimensions:
+          type: array
+          items:
+            type: string
+            enum: [global, ip, user]
+        windowSeconds:
+          type: integer
+        threshold:
+          type: integer
+        degradeStrategy:
+          type: string
+    ThreadPoolSnapshot:
+      type: object
+      properties:
+        poolName:
+          type: string
+        corePoolSize:
+          type: integer
+        maxPoolSize:
+          type: integer
+        activeCount:
+          type: integer
+        queueSize:
+          type: integer
+        completedTaskCount:
+          type: integer
+        saturationLevel:
+          type: string
+          enum: [low, medium, high]
+    MetricsOverview:
+      type: object
+      properties:
+        availability:
+          type: number
+          format: double
+        feedP95Ms:
+          type: number
+          format: double
+        lbsP95Ms:
+          type: number
+          format: double
+        ragFirstTokenMs:
+          type: number
+          format: double
+        tradeAcceptP95Ms:
+          type: number
+          format: double
+        observedAt:
+          type: string
+          format: date-time
+    CounterEventPayload:
+      type: object
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        action:
+          type: string
+        operatorId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+    FollowEventPayload:
+      type: object
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        followerId:
+          type: string
+        followeeId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+    PostPublishedPayload:
+      type: object
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        postId:
+          type: string
+        authorId:
+          type: string
+        visibility:
+          type: string
+        location:
+          $ref: '#/components/schemas/Location'
+        occurredAt:
+          type: string
+          format: date-time
+    RagIndexRebuildPayload:
+      type: object
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        postId:
+          type: string
+        etag:
+          type: string
+        sha256:
+          type: string
+        version:
+          type: integer
+        occurredAt:
+          type: string
+          format: date-time
+    SeckillSuccessPayload:
+      type: object
+      properties:
+        requestId:
+          type: string
+        eventType:
+          type: string
+        activityId:
+          type: string
+        productId:
+          type: string
+        userId:
+          type: string
+        quantity:
+          type: integer
+        acceptedAt:
+          type: string
+          format: date-time
+    OrderTimeoutPayload:
+      type: object
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        orderId:
+          type: string
+        userId:
+          type: string
+        expireAt:
+          type: string
+          format: date-time
+        occurredAt:
+          type: string
+          format: date-time
