@@ -9,6 +9,7 @@ import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.model.LoginRequest;
 import com.zhiguang.be.auth.model.PasswordResetRequest;
 import com.zhiguang.be.auth.model.RegisterRequest;
+import com.zhiguang.be.auth.risk.LoginRateLimitStore;
 import com.zhiguang.be.auth.service.AuthService;
 import com.zhiguang.be.auth.token.JwtService;
 import com.zhiguang.be.auth.token.RefreshTokenClaims;
@@ -19,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.UUID;
 
 /**
@@ -29,11 +31,16 @@ public class AuthServiceImpl implements AuthService {
 
     private static final String ALL_DEVICES = "all_devices";
     private static final String CURRENT_DEVICE = "current_device";
+    private static final int MAX_LOGIN_FAILURES = 5;
+    private static final Duration LOGIN_MIN_INTERVAL = Duration.ofSeconds(20);
+    private static final Duration LOGIN_FAILURE_TTL = Duration.ofMinutes(15);
+    private static final Duration LOGIN_BLOCK_TTL = Duration.ofHours(24);
 
     private final JwtService jwtService;
     private final RefreshTokenStore refreshTokenStore;
     private final AuthUserMapper authUserMapper;
     private final LoginBlacklistStore loginBlacklistStore;
+    private final LoginRateLimitStore loginRateLimitStore;
     private final PasswordEncoder passwordEncoder;
 
     /**
@@ -43,6 +50,7 @@ public class AuthServiceImpl implements AuthService {
      * @param refreshTokenStore refresh 白名单存储
      * @param authUserMapper 用户数据访问
      * @param loginBlacklistStore 登录黑名单存储
+     * @param loginRateLimitStore 登录限流存储
      * @param passwordEncoder 密码加密器
      */
     public AuthServiceImpl(
@@ -50,12 +58,14 @@ public class AuthServiceImpl implements AuthService {
             RefreshTokenStore refreshTokenStore,
             AuthUserMapper authUserMapper,
             LoginBlacklistStore loginBlacklistStore,
+            LoginRateLimitStore loginRateLimitStore,
             PasswordEncoder passwordEncoder
     ) {
         this.jwtService = jwtService;
         this.refreshTokenStore = refreshTokenStore;
         this.authUserMapper = authUserMapper;
         this.loginBlacklistStore = loginBlacklistStore;
+        this.loginRateLimitStore = loginRateLimitStore;
         this.passwordEncoder = passwordEncoder;
     }
 
@@ -85,19 +95,27 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public AuthSessionData login(LoginRequest request) {
         String identifier = normalizeIdentifier(request.identifier());
+        String accessToken = normalizeIdentifier(request.accessToken());
 
         // 账号密码校验前执行黑名单拦截。
         if (loginBlacklistStore.isBlocked(identifier)) {
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        AuthUserEntity account = authUserMapper.findByPhone(identifier)
-                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED));
-
-        if (!passwordEncoder.matches(request.password(), account.passwordHash())) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
+        // 同手机号请求最小间隔 20s。
+        if (!loginRateLimitStore.tryAcquire(identifier, accessToken, LOGIN_MIN_INTERVAL)) {
+            throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS,
+                    "Login request is too frequent, please retry after 20 seconds");
         }
 
+        AuthUserEntity account = authUserMapper.findByPhone(identifier)
+                .orElseThrow(() -> raiseLoginFailure(identifier));
+
+        if (!passwordEncoder.matches(request.password(), account.passwordHash())) {
+            throw raiseLoginFailure(identifier);
+        }
+
+        loginRateLimitStore.resetFailures(identifier);
         AuthTokens tokens = issueAndStoreTokens(account.userId());
         return new AuthSessionData(account.userId(), tokens);
     }
@@ -107,7 +125,7 @@ public class AuthServiceImpl implements AuthService {
      */
     @Override
     public AuthTokens refreshToken(String refreshToken) {
-        RefreshTokenClaims claims = jwtService.verifyRefreshToken(refreshToken);
+        RefreshTokenClaims claims = verifyRefreshTokenOrThrowInvalid(refreshToken);
 
         AuthUserEntity account = authUserMapper.findByUserId(claims.userId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_REFRESH_TOKEN, HttpStatus.UNAUTHORIZED));
@@ -131,7 +149,7 @@ public class AuthServiceImpl implements AuthService {
      */
     @Override
     public ActionResult logout(String refreshToken, String logoutScope) {
-        RefreshTokenClaims claims = jwtService.verifyRefreshToken(refreshToken);
+        RefreshTokenClaims claims = verifyRefreshTokenOrThrowInvalid(refreshToken);
         String scope = normalizeScope(logoutScope);
 
         if (ALL_DEVICES.equals(scope)) {
@@ -165,9 +183,37 @@ public class AuthServiceImpl implements AuthService {
      */
     private AuthTokens issueAndStoreTokens(String userId) {
         AuthTokens tokens = jwtService.issueTokens(userId);
-        RefreshTokenClaims claims = jwtService.verifyRefreshToken(tokens.refreshToken());
+        RefreshTokenClaims claims = verifyRefreshTokenOrThrowInvalid(tokens.refreshToken());
         refreshTokenStore.save(claims.userId(), claims.jti(), claims.expiresAt());
         return tokens;
+    }
+
+    /**
+     * 校验 refresh token 并统一错误码语义。
+     */
+    private RefreshTokenClaims verifyRefreshTokenOrThrowInvalid(String refreshToken) {
+        try {
+            return jwtService.verifyRefreshToken(refreshToken);
+        } catch (BusinessException ex) {
+            if (ex.errorCode() == ErrorCode.UNAUTHORIZED || ex.httpStatus() == HttpStatus.UNAUTHORIZED) {
+                throw new BusinessException(ErrorCode.INVALID_REFRESH_TOKEN, HttpStatus.UNAUTHORIZED);
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * 处理登录失败并执行失败计数、拉黑。
+     */
+    private BusinessException raiseLoginFailure(String identifier) {
+        int failures = loginRateLimitStore.incrementFailure(identifier, LOGIN_FAILURE_TTL);
+        if (failures >= MAX_LOGIN_FAILURES) {
+            loginBlacklistStore.block(identifier, LOGIN_BLOCK_TTL);
+            return new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN,
+                    "Login blocked after too many failed attempts");
+        }
+
+        return new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
     }
 
     /**
@@ -192,4 +238,5 @@ public class AuthServiceImpl implements AuthService {
         }
         return identifier.trim();
     }
+
 }

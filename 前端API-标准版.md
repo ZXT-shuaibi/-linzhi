@@ -42,7 +42,7 @@
 
 ### 2.2 请求参数
 - 注册：`phone/password/nickname/smsCode`
-- 登录：`identifier/password/channel/captchaToken`
+- 登录：`identifier/password/channel/accessToken`
 - 刷新：`refreshToken`
 - 登出：`refreshToken/logoutScope(current_device|all_devices)`
 - 重置密码：`phone/smsCode/newPassword`

@@ -4,6 +4,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+
 /**
  * Redis 登录黑名单实现。
  * 约定 key 结构：auth:blacklist:login:{identifier}。
@@ -38,6 +40,14 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
         }
         Boolean exists = redisTemplate.hasKey(toKey(identifier));
         return Boolean.TRUE.equals(exists);
+    }
+
+    @Override
+    public void block(String identifier, Duration ttl) {
+        if (identifier == null || identifier.isBlank()) {
+            return;
+        }
+        redisTemplate.opsForValue().set(toKey(identifier), "1", ttl);
     }
 
     /**

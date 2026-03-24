@@ -79,7 +79,7 @@
 
 请求关键字段：
 - `RegisterRequest`：`phone/password/nickname/smsCode`
-- `LoginRequest`：`identifier/password/channel/captchaToken`
+- `LoginRequest`：`identifier/password/channel/accessToken`
 - `LogoutRequest.logoutScope`：`current_device|all_devices`
 
 ### 3.3 内部事件契约

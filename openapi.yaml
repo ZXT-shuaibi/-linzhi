@@ -1282,7 +1282,7 @@ components:
           type: string
     LoginRequest:
       type: object
-      required: [identifier, password]
+      required: [identifier, password, accessToken]
       properties:
         identifier:
           type: string
@@ -1290,7 +1290,7 @@ components:
           type: string
         channel:
           type: string
-        captchaToken:
+        accessToken:
           type: string
     RefreshTokenRequest:
       type: object

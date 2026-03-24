@@ -8,6 +8,7 @@ import com.zhiguang.be.auth.model.AuthTokens;
 import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.model.LoginRequest;
 import com.zhiguang.be.auth.model.RegisterRequest;
+import com.zhiguang.be.auth.risk.LoginRateLimitStore;
 import com.zhiguang.be.auth.token.InMemoryRefreshTokenStore;
 import com.zhiguang.be.auth.token.JwtService;
 import com.zhiguang.be.auth.token.RefreshTokenClaims;
@@ -19,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
@@ -82,7 +84,7 @@ class AuthServiceImplTest {
                 new RegisterRequest("13800138002", "Passw0rd!", "tester", "123456")
         );
         AuthSessionData loginSession = fixture.service.login(
-                new LoginRequest("13800138002", "Passw0rd!", "h5", "captcha-token-123456")
+                new LoginRequest("13800138002", "Passw0rd!", "h5", "access-token-123456")
         );
 
         fixture.loginBlacklistStore.block("13800138002");
@@ -110,10 +112,60 @@ class AuthServiceImplTest {
         fixture.loginBlacklistStore.block("13800138003");
 
         BusinessException ex = assertThrows(BusinessException.class, () -> fixture.service.login(
-                new LoginRequest("13800138003", "Passw0rd!", "h5", "captcha-token-123456")
+                new LoginRequest("13800138003", "Passw0rd!", "h5", "access-token-123456")
         ));
         assertEquals(ErrorCode.LOGIN_BLOCKED, ex.errorCode());
         assertEquals(HttpStatus.FORBIDDEN, ex.httpStatus());
+    }
+
+    /**
+     * 同手机号在最小间隔内重复登录应触发限流。
+     */
+    @Test
+    void loginShouldBeRateLimitedWhenRequestedTooFrequently() {
+        TestFixture fixture = new TestFixture();
+        fixture.service.register(new RegisterRequest("13800138005", "Passw0rd!", "tester", "123456"));
+        fixture.loginRateLimitStore.setAllowAcquire(false);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> fixture.service.login(
+                new LoginRequest("13800138005", "Passw0rd!", "h5", "access-token-123456")
+        ));
+        assertEquals(ErrorCode.RATE_LIMITED, ex.errorCode());
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, ex.httpStatus());
+    }
+
+    /**
+     * 登录连续失败 5 次后应被拉黑。
+     */
+    @Test
+    void loginShouldBlockAfterTooManyFailures() {
+        TestFixture fixture = new TestFixture();
+        fixture.service.register(new RegisterRequest("13800138006", "Passw0rd!", "tester", "123456"));
+
+        for (int i = 0; i < 4; i++) {
+            BusinessException wrong = assertThrows(BusinessException.class, () -> fixture.service.login(
+                    new LoginRequest("13800138006", "wrongPass!", "h5", "access-token-123456")
+            ));
+            assertEquals(ErrorCode.UNAUTHORIZED, wrong.errorCode());
+        }
+
+        BusinessException blocked = assertThrows(BusinessException.class, () -> fixture.service.login(
+                new LoginRequest("13800138006", "wrongPass!", "h5", "access-token-123456")
+        ));
+        assertEquals(ErrorCode.LOGIN_BLOCKED, blocked.errorCode());
+        assertEquals(HttpStatus.FORBIDDEN, blocked.httpStatus());
+    }
+
+    /**
+     * 刷新 token 验签失败应统一映射为 INVALID_REFRESH_TOKEN。
+     */
+    @Test
+    void refreshShouldMapUnauthorizedToInvalidRefreshToken() {
+        TestFixture fixture = new TestFixture();
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> fixture.service.refreshToken("unknown-refresh-token"));
+        assertEquals(ErrorCode.INVALID_REFRESH_TOKEN, ex.errorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.httpStatus());
     }
 
     /**
@@ -136,6 +188,7 @@ class AuthServiceImplTest {
         private final AuthUserMapper userMapper = new InMemoryAuthUserMapper();
         private final RefreshTokenStore refreshTokenStore = new InMemoryRefreshTokenStore();
         private final SetBasedLoginBlacklistStore loginBlacklistStore = new SetBasedLoginBlacklistStore();
+        private final StubLoginRateLimitStore loginRateLimitStore = new StubLoginRateLimitStore();
         private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder(4);
         private final JwtService jwtService = new StubJwtService();
         private final AuthServiceImpl service = new AuthServiceImpl(
@@ -143,6 +196,7 @@ class AuthServiceImplTest {
                 refreshTokenStore,
                 userMapper,
                 loginBlacklistStore,
+                loginRateLimitStore,
                 passwordEncoder
         );
     }
@@ -158,12 +212,44 @@ class AuthServiceImplTest {
             return blocked.contains(identifier);
         }
 
+        @Override
+        public void block(String identifier, Duration ttl) {
+            blocked.add(identifier);
+        }
+
         private void block(String identifier) {
             blocked.add(identifier);
         }
 
         private void unblock(String identifier) {
             blocked.remove(identifier);
+        }
+    }
+
+    /**
+     * 登录限流存储测试桩。
+     */
+    private static final class StubLoginRateLimitStore implements LoginRateLimitStore {
+        private volatile boolean allowAcquire = true;
+        private final ConcurrentHashMap<String, Integer> failures = new ConcurrentHashMap<>();
+
+        @Override
+        public boolean tryAcquire(String phone, String accessToken, Duration minInterval) {
+            return allowAcquire;
+        }
+
+        @Override
+        public int incrementFailure(String phone, Duration ttl) {
+            return failures.merge(phone, 1, Integer::sum);
+        }
+
+        @Override
+        public void resetFailures(String phone) {
+            failures.remove(phone);
+        }
+
+        private void setAllowAcquire(boolean allowAcquire) {
+            this.allowAcquire = allowAcquire;
         }
     }
 

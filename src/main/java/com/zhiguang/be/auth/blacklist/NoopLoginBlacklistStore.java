@@ -3,6 +3,8 @@ package com.zhiguang.be.auth.blacklist;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+
 /**
  * 登录黑名单兜底实现。
  * 当未启用或未装配具体黑名单存储时，默认放行所有登录请求。
@@ -20,5 +22,10 @@ public class NoopLoginBlacklistStore implements LoginBlacklistStore {
     @Override
     public boolean isBlocked(String identifier) {
         return false;
+    }
+
+    @Override
+    public void block(String identifier, Duration ttl) {
+        // noop
     }
 }
