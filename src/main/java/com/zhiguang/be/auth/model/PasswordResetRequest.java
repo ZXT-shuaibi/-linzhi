@@ -10,6 +10,6 @@ import jakarta.validation.constraints.Size;
 public record PasswordResetRequest(
         @NotBlank @Pattern(regexp = "^1\\d{10}$", message = "phone must be a valid mobile number") String phone,
         @NotBlank @Pattern(regexp = "^\\d{6}$", message = "smsCode must be 6 digits") String smsCode,
-        @NotBlank @Size(min = 8, max = 128) String newPassword
+        @NotBlank @Size(min = 8, max = 128) @Pattern(regexp = "^(?=.*[A-Za-z])(?=.*\\d).{8,}$", message = "password must contain letters and numbers") String newPassword
 ) {
 }

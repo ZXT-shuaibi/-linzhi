@@ -1,0 +1,33 @@
+# 生产环境配置示例
+# 使用前请重命名为 application-prod.yml 并配置实际的密钥
+
+spring:
+  application:
+    name: zhiguang-be
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+server:
+  port: 8080
+
+security:
+  refresh-store: redis
+  login-blacklist:
+    enabled: true
+  jwt:
+    issuer: zhiguang-be
+    key-id: zhiguang-rsa
+    access-token-ttl-minutes: 15
+    refresh-token-ttl-days: 7
+    # 生产环境必须配置持久化的 RSA 密钥
+    # 生成密钥命令：
+    # openssl genrsa -out private.pem 2048
+    # openssl rsa -in private.pem -pubout -out public.pem
+    # 然后将密钥内容（包括 -----BEGIN/END----- 行）复制到下方，使用 \n 表示换行
+    public-key: ${JWT_PUBLIC_KEY}
+    private-key: ${JWT_PRIVATE_KEY}
+    # 生产环境必须设置为 false
+    allow-ephemeral-keys: false

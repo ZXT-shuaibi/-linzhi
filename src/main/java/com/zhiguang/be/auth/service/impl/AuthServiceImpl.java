@@ -1,5 +1,7 @@
 package com.zhiguang.be.auth.service.impl;
 
+import com.zhiguang.be.auth.audit.AuditEvent;
+import com.zhiguang.be.auth.audit.AuditLogger;
 import com.zhiguang.be.auth.blacklist.LoginBlacklistStore;
 import com.zhiguang.be.auth.mapper.AuthUserMapper;
 import com.zhiguang.be.auth.model.ActionResult;
@@ -9,6 +11,9 @@ import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.model.LoginRequest;
 import com.zhiguang.be.auth.model.PasswordResetRequest;
 import com.zhiguang.be.auth.model.RegisterRequest;
+import com.zhiguang.be.auth.security.CaptchaVerifier;
+import com.zhiguang.be.auth.security.LoginFailureTracker;
+import com.zhiguang.be.auth.security.SmsCodeVerifier;
 import com.zhiguang.be.auth.service.AuthService;
 import com.zhiguang.be.auth.token.JwtService;
 import com.zhiguang.be.auth.token.RefreshTokenClaims;
@@ -35,6 +40,10 @@ public class AuthServiceImpl implements AuthService {
     private final AuthUserMapper authUserMapper;
     private final LoginBlacklistStore loginBlacklistStore;
     private final PasswordEncoder passwordEncoder;
+    private final LoginFailureTracker failureTracker;
+    private final CaptchaVerifier captchaVerifier;
+    private final SmsCodeVerifier smsCodeVerifier;
+    private final AuditLogger auditLogger;
 
     /**
      * 构造函数：注入认证流程依赖。
@@ -44,19 +53,31 @@ public class AuthServiceImpl implements AuthService {
      * @param authUserMapper 用户数据访问
      * @param loginBlacklistStore 登录黑名单存储
      * @param passwordEncoder 密码加密器
+     * @param failureTracker 登录失败追踪器
+     * @param captchaVerifier 验证码验证器
+     * @param smsCodeVerifier 短信验证码验证器
+     * @param auditLogger 审计日志记录器
      */
     public AuthServiceImpl(
             JwtService jwtService,
             RefreshTokenStore refreshTokenStore,
             AuthUserMapper authUserMapper,
             LoginBlacklistStore loginBlacklistStore,
-            PasswordEncoder passwordEncoder
+            PasswordEncoder passwordEncoder,
+            LoginFailureTracker failureTracker,
+            CaptchaVerifier captchaVerifier,
+            SmsCodeVerifier smsCodeVerifier,
+            AuditLogger auditLogger
     ) {
         this.jwtService = jwtService;
         this.refreshTokenStore = refreshTokenStore;
         this.authUserMapper = authUserMapper;
         this.loginBlacklistStore = loginBlacklistStore;
         this.passwordEncoder = passwordEncoder;
+        this.failureTracker = failureTracker;
+        this.captchaVerifier = captchaVerifier;
+        this.smsCodeVerifier = smsCodeVerifier;
+        this.auditLogger = auditLogger;
     }
 
     /**
@@ -72,10 +93,12 @@ public class AuthServiceImpl implements AuthService {
 
         // 原子写入，避免并发注册同手机号时的检查-写入竞争窗口。
         if (!authUserMapper.saveIfPhoneAbsent(account)) {
+            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "Phone already exists"));
             throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
         }
 
         AuthTokens tokens = issueAndStoreTokens(userId);
+        auditLogger.log(AuditEvent.of("REGISTER_SUCCESS", phone, true, "User registered"));
         return new AuthSessionData(userId, tokens);
     }
 
@@ -86,19 +109,43 @@ public class AuthServiceImpl implements AuthService {
     public AuthSessionData login(LoginRequest request) {
         String identifier = normalizeIdentifier(request.identifier());
 
-        // 账号密码校验前执行黑名单拦截。
-        if (loginBlacklistStore.isBlocked(identifier)) {
+        // 检查失败次数，达到阈值则自动封禁
+        if (failureTracker.shouldBlock(identifier)) {
+            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Too many failed attempts"));
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        AuthUserEntity account = authUserMapper.findByPhone(identifier)
-                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED));
+        // 账号密码校验前执行黑名单拦截
+        if (loginBlacklistStore.isBlocked(identifier)) {
+            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Account blacklisted"));
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
 
-        if (!passwordEncoder.matches(request.password(), account.passwordHash())) {
+        // 检查是否需要验证码
+        if (failureTracker.requiresCaptcha(identifier)) {
+            if (request.captchaToken() == null || request.captchaToken().isBlank()) {
+                auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Captcha required"));
+                throw new BusinessException(ErrorCode.CAPTCHA_REQUIRED, HttpStatus.BAD_REQUEST);
+            }
+            if (!captchaVerifier.verify(request.captchaToken())) {
+                failureTracker.recordFailure(identifier);
+                auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid captcha"));
+                throw new BusinessException(ErrorCode.INVALID_CAPTCHA, HttpStatus.BAD_REQUEST);
+            }
+        }
+
+        // 统一错误消息，避免泄露账号是否存在
+        AuthUserEntity account = authUserMapper.findByPhone(identifier).orElse(null);
+        if (account == null || !passwordEncoder.matches(request.password(), account.passwordHash())) {
+            failureTracker.recordFailure(identifier);
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid credentials"));
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
         }
 
+        // 登录成功，重置失败计数
+        failureTracker.reset(identifier);
         AuthTokens tokens = issueAndStoreTokens(account.userId());
+        auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "User logged in"));
         return new AuthSessionData(account.userId(), tokens);
     }
 
@@ -148,6 +195,13 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public ActionResult resetPassword(PasswordResetRequest request) {
         String phone = normalizeIdentifier(request.phone());
+
+        // 验证短信验证码
+        if (!smsCodeVerifier.verify(phone, request.smsCode())) {
+            auditLogger.log(AuditEvent.of("PASSWORD_RESET_FAILED", phone, false, "Invalid SMS code"));
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
+        }
+
         AuthUserEntity account = authUserMapper.findByPhone(phone)
                 .orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Phone not registered"));
 
@@ -157,6 +211,7 @@ public class AuthServiceImpl implements AuthService {
 
         // 重置密码后清理该用户全部 refresh 会话。
         refreshTokenStore.removeAll(account.userId());
+        auditLogger.log(AuditEvent.of("PASSWORD_RESET_SUCCESS", phone, true, "Password reset completed"));
         return new ActionResult(true, "password_reset", account.userId(), "done");
     }
 

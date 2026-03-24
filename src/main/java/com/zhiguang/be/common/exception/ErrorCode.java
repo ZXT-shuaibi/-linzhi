@@ -11,6 +11,8 @@ public enum ErrorCode {
     FORBIDDEN("COMMON_403_FORBIDDEN", "Access denied"),
     INVALID_REFRESH_TOKEN("AUTH_401_REFRESH_REPLAY", "Refresh token invalid or revoked"),
     PHONE_EXISTS("AUTH_409_PHONE_EXISTS", "Phone already registered"),
+    CAPTCHA_REQUIRED("AUTH_400_CAPTCHA_REQUIRED", "Captcha verification required"),
+    INVALID_CAPTCHA("AUTH_400_INVALID_CAPTCHA", "Captcha verification failed"),
     NOT_FOUND("COMMON_404_NOT_FOUND", "Resource not found"),
     RATE_LIMITED("COMMON_429_RATE_LIMIT", "Too many requests"),
     INTERNAL_ERROR("COMMON_500_INTERNAL", "Internal server error");
