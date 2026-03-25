@@ -142,6 +142,7 @@ ES Index: knowledge_geo, merchant_geo
 
 **核心能力**：
 - 点赞/收藏（Redis 位图 + Kafka 异步）
+- 计数系统（自定义 SDS 计数统计）
 - 关注/取关（Outbox + Canal 同步）
 - 评论系统
 
