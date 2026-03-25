@@ -284,58 +284,88 @@ feed:segment:{geo_hash}:{timestamp}
 ### 整体架构流程
 
 ```mermaid
-flowchart TB
-    Client[客户端 React + Vite]
-    Gateway[API Gateway Spring Boot]
+graph TD
+    %% ==================== 前端 ====================
+    subgraph FE ["前端（React Native / UniApp / H5）"]
+        USER[用户入口<br>· LBS 定位<br>· 发布知识<br>· AI 问答<br>· 浏览 Feed<br>· 点赞/关注<br>· 秒杀抢购]
+    end
 
-    Client --> Gateway
+    %% ==================== 后端 12 个模块 ====================
+    subgraph BE ["后端核心（Spring Boot 3 + Java 21）"]
+        direction TB
+        
+        AUTH[模块1: 认证中心<br>JWT 双令牌 + Redis 白名单<br>滑动窗口限流]
+        
+        LBS[模块2: LBS 知识发现<br>Redis GeoHash + GeoRadius]
+        
+        PUBLISH[模块3: 知识发布系统<br>OSS 前端直传 + DeepSeek 摘要]
+        
+        RAG[模块4: AI 知识引擎<br>RAG 向量召回 + SSE 流式返回]
+        
+        SOCIAL[模块5: 社交裂变系统<br>点赞位图 Lua + Outbox + Canal]
+        
+        FEED[模块6: 智能 Feed 流<br>三级缓存架构<br>**HotKey 探测机制**（京东风格）<br>Geo+兴趣混合排序 + single-flight]
+        
+        SECKILL[模块7: 高并发交易引擎<br>Lua 预检 + Redisson + 乐观锁]
+        
+        LADBTP[模块8: 自研 LADBTP 线程池<br>Buffer Factor 动态扩容]
+        
+        CACHE[模块9: 缓存 & 防护中心<br>Caffeine 多级缓存 + 滑动窗口限流]
+        
+        DB[模块10: 数据库层<br>MySQL 乐观锁 + Outbox]
+        
+        CONSIST[模块11: 一致性保障<br>Kafka + Canal 事件驱动]
+        
+        EXTEND[模块12: 可扩展性<br>知识付费 + 个性化推荐]
+    end
 
-    Gateway --> Auth[1. Auth 认证模块]
-    Gateway --> Discover[2. Discover 发现模块]
-    Gateway --> Content[3. Content 内容模块]
-    Gateway --> RAG[4. RAG 问答模块]
-    Gateway --> Social[5. Social 社交模块]
-    Gateway --> Feed[6. Feed 流模块]
-    Gateway --> Trade[7. Trade 交易模块]
+    %% ==================== 基础设施 ====================
+    subgraph INF ["基础设施"]
+        MYSQL[(MySQL 8)]
+        REDIS[(Redis 7+)]
+        KAFKA[(Kafka)]
+        ES[(Elasticsearch)]
+        OSS[(阿里云 OSS)]
+        CANAL[Canal]
+        LLM[(DeepSeek)]
+        TASK[Spring Task]
+        REDISSON[Redisson]
+    end
 
-    Auth --> Redis[(Redis)]
-    Discover --> Redis
-    Discover --> ES[(Elasticsearch)]
+    %% ==================== 完整流程（突出 HotKey） ====================
+    USER -->|"JWT 请求"| AUTH
+    AUTH --> LBS & PUBLISH & RAG & SOCIAL & FEED & SECKILL
 
-    Content --> OSS[(OSS 对象存储)]
-    Content --> MySQL[(MySQL)]
-    Content --> Kafka[Kafka 消息队列]
+    LBS --> REDIS
+    LBS --> FEED
+    LBS --> ES
 
-    RAG --> ES
-    RAG --> DeepSeek[DeepSeek AI]
+    USER --> PUBLISH
+    PUBLISH --> OSS & MYSQL
+    PUBLISH -.-> KAFKA
+    KAFKA --> RAG & ES & FEED & SOCIAL
 
-    Social --> Kafka
-    Social --> MySQL
+    USER --> RAG
+    RAG --> ES & LLM & MYSQL
 
-    Feed --> Caffeine[Caffeine 本地缓存]
-    Feed --> Redis
-    Feed --> MySQL
+    USER --> SOCIAL
+    SOCIAL --> REDIS & MYSQL
+    CANAL --> KAFKA
 
-    Trade --> Redis
-    Trade --> Kafka
-    Trade --> MySQL
+    FEED -->|"HotKey 探测（京东风格采样+滑动窗口）<br>→ 自动延长 TTL + single-flight + 随机抖动"| CACHE
+    FEED -->|"缓存 miss"| MYSQL & ES & REDIS
+    FEED --> USER
 
-    Kafka --> Canal[Canal Binlog 订阅]
-    Canal --> MySQL
+    USER --> SECKILL
+    SECKILL --> REDIS & KAFKA
+    KAFKA --> LADBTP
+    LADBTP --> SECKILL
+    SECKILL --> REDISSON & MYSQL & TASK
 
-    Kafka --> Consumers[异步消费者]
-    Consumers --> Redis
-    Consumers --> ES
-    Consumers --> MySQL
-
-    style Auth fill:#90EE90
-    style Discover fill:#FFE4B5
-    style Content fill:#FFE4B5
-    style RAG fill:#FFE4B5
-    style Social fill:#FFE4B5
-    style Feed fill:#FFE4B5
-    style Trade fill:#FFE4B5
-```
+    CACHE -.-> REDIS
+    AUTH & SECKILL -.-> REDIS["限流"]
+    ALL[所有写操作] -.-> CONSIST
+    CONSIST -.-> REDIS & ES & FEED
 
 ### 知识发布流程
 
