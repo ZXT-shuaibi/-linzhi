@@ -293,29 +293,29 @@ graph TD
     %% ==================== 后端 12 个模块 ====================
     subgraph BE ["后端核心（Spring Boot 3 + Java 21）"]
         direction TB
-        
+
         AUTH[模块1: 认证中心<br>JWT 双令牌 + Redis 白名单<br>滑动窗口限流]
-        
+
         LBS[模块2: LBS 知识发现<br>Redis GeoHash + GeoRadius]
-        
+
         PUBLISH[模块3: 知识发布系统<br>OSS 前端直传 + DeepSeek 摘要]
-        
+
         RAG[模块4: AI 知识引擎<br>RAG 向量召回 + SSE 流式返回]
-        
+
         SOCIAL[模块5: 社交裂变系统<br>点赞位图 Lua + Outbox + Canal]
-        
+
         FEED[模块6: 智能 Feed 流<br>三级缓存架构<br>**HotKey 探测机制**（京东风格）<br>Geo+兴趣混合排序 + single-flight]
-        
+
         SECKILL[模块7: 高并发交易引擎<br>Lua 预检 + Redisson + 乐观锁]
-        
+
         LADBTP[模块8: 自研 LADBTP 线程池<br>Buffer Factor 动态扩容]
-        
+
         CACHE[模块9: 缓存 & 防护中心<br>Caffeine 多级缓存 + 滑动窗口限流]
-        
+
         DB[模块10: 数据库层<br>MySQL 乐观锁 + Outbox]
-        
+
         CONSIST[模块11: 一致性保障<br>Kafka + Canal 事件驱动]
-        
+
         EXTEND[模块12: 可扩展性<br>知识付费 + 个性化推荐]
     end
 
@@ -366,6 +366,38 @@ graph TD
     AUTH & SECKILL -.-> REDIS["限流"]
     ALL[所有写操作] -.-> CONSIST
     CONSIST -.-> REDIS & ES & FEED
+```
+
+### 知识发布流程
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant Content as Content 模块
+    participant OSS as OSS 对象存储
+    participant MySQL as MySQL
+    participant Kafka as Kafka
+    participant Consumer as 异步消费者
+    participant ES as Elasticsearch
+
+    Client->>Content: 1. 请求预签名 URL
+    Content->>OSS: 2. 生成预签名 URL
+    OSS-->>Content: 3. 返回预签名 URL
+    Content-->>Client: 4. 返回预签名 URL
+
+    Client->>OSS: 5. 直传文件到 OSS
+    OSS-->>Client: 6. 上传成功
+
+    Client->>Content: 7. 提交元数据（标题、位置、URL）
+    Content->>MySQL: 8. 写入知识表
+    Content->>Kafka: 9. 发送 content_published 事件
+    Content-->>Client: 10. 返回成功
+
+    Kafka->>Consumer: 11. 消费事件
+    Consumer->>Consumer: 12. 生成摘要
+    Consumer->>ES: 13. 更新全文索引
+    Consumer->>ES: 14. 更新向量索引（RAG）
+```
 
 ### Feed 浏览流程
 
