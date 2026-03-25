@@ -367,37 +367,6 @@ graph TD
     ALL[所有写操作] -.-> CONSIST
     CONSIST -.-> REDIS & ES & FEED
 
-### 知识发布流程
-
-```mermaid
-sequenceDiagram
-    participant Client as 客户端
-    participant Content as Content 模块
-    participant OSS as OSS 对象存储
-    participant MySQL as MySQL
-    participant Kafka as Kafka
-    participant Consumer as 异步消费者
-    participant ES as Elasticsearch
-
-    Client->>Content: 1. 请求预签名 URL
-    Content->>OSS: 2. 生成预签名 URL
-    OSS-->>Content: 3. 返回预签名 URL
-    Content-->>Client: 4. 返回预签名 URL
-
-    Client->>OSS: 5. 直传文件到 OSS
-    OSS-->>Client: 6. 上传成功
-
-    Client->>Content: 7. 提交元数据（标题、位置、URL）
-    Content->>MySQL: 8. 写入知识表
-    Content->>Kafka: 9. 发送 content_published 事件
-    Content-->>Client: 10. 返回成功
-
-    Kafka->>Consumer: 11. 消费事件
-    Consumer->>Consumer: 12. 生成摘要
-    Consumer->>ES: 13. 更新全文索引
-    Consumer->>ES: 14. 更新向量索引（RAG）
-```
-
 ### Feed 浏览流程
 
 ```mermaid
