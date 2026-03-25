@@ -1,5 +1,7 @@
 package com.zhiguang.be.auth.service.impl;
 
+import com.zhiguang.be.auth.audit.AuditEvent;
+import com.zhiguang.be.auth.audit.AuditLogger;
 import com.zhiguang.be.auth.blacklist.LoginBlacklistStore;
 import com.zhiguang.be.auth.mapper.AuthUserMapper;
 import com.zhiguang.be.auth.mapper.InMemoryAuthUserMapper;
@@ -8,6 +10,9 @@ import com.zhiguang.be.auth.model.AuthTokens;
 import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.model.LoginRequest;
 import com.zhiguang.be.auth.model.RegisterRequest;
+import com.zhiguang.be.auth.security.CaptchaVerifier;
+import com.zhiguang.be.auth.security.LoginFailureTracker;
+import com.zhiguang.be.auth.security.SmsCodeVerifier;
 import com.zhiguang.be.auth.token.InMemoryRefreshTokenStore;
 import com.zhiguang.be.auth.token.JwtService;
 import com.zhiguang.be.auth.token.RefreshTokenClaims;
@@ -32,13 +37,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * AuthServiceImpl 单元测试。
- */
+ * AuthServiceImpl 单元测试�? */
 class AuthServiceImplTest {
 
     /**
-     * 注册后的密码应使用 BCrypt 加密，不应明文存储。
-     */
+     * 注册后的密码应使�?BCrypt 加密，不应明文存储�?     */
     @Test
     void registerShouldPersistBcryptPassword() {
         TestFixture fixture = new TestFixture();
@@ -54,8 +57,7 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 同一个 refresh token 只能消费一次，重复使用应被拒绝。
-     */
+     * 同一�?refresh token 只能消费一次，重复使用应被拒绝�?     */
     @Test
     void refreshTokenShouldBeSingleUse() {
         TestFixture fixture = new TestFixture();
@@ -73,8 +75,7 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 命中黑名单后 refresh 会先返回 403，并主动吊销该用户全部 refresh 会话。
-     */
+     * 命中黑名单后 refresh 会先返回 403，并主动吊销该用户全�?refresh 会话�?     */
     @Test
     void refreshShouldRevokeAllSessionsWhenBlacklisted() {
         TestFixture fixture = new TestFixture();
@@ -92,7 +93,7 @@ class AuthServiceImplTest {
         assertEquals(ErrorCode.LOGIN_BLOCKED, blocked.errorCode());
         assertEquals(HttpStatus.FORBIDDEN, blocked.httpStatus());
 
-        // 解封后再次尝试旧 refresh token，验证此前已被 removeAll 吊销。
+        // After unblocking, the old refresh token should already be revoked.
         fixture.loginBlacklistStore.unblock("13800138002");
         BusinessException revoked = assertThrows(BusinessException.class,
                 () -> fixture.service.refreshToken(loginSession.tokens().refreshToken()));
@@ -101,8 +102,7 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 用户命中登录黑名单后，登录应被直接拒绝。
-     */
+     * 用户命中登录黑名单后，登录应被直接拒绝�?     */
     @Test
     void loginShouldBeBlockedByLoginBlacklist() {
         TestFixture fixture = new TestFixture();
@@ -117,8 +117,7 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 原子写入：同手机号重复写入必须被拒绝。
-     */
+     * 原子写入：同手机号重复写入必须被拒绝�?     */
     @Test
     void saveIfPhoneAbsentShouldRejectDuplicatePhone() {
         InMemoryAuthUserMapper mapper = new InMemoryAuthUserMapper();
@@ -130,26 +129,32 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 测试夹具：组装 AuthServiceImpl 依赖。
-     */
+     * 测试夹具：组�?AuthServiceImpl 依赖�?     */
     private static final class TestFixture {
         private final AuthUserMapper userMapper = new InMemoryAuthUserMapper();
         private final RefreshTokenStore refreshTokenStore = new InMemoryRefreshTokenStore();
         private final SetBasedLoginBlacklistStore loginBlacklistStore = new SetBasedLoginBlacklistStore();
         private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder(4);
         private final JwtService jwtService = new StubJwtService();
+        private final LoginFailureTracker failureTracker = new NoOpLoginFailureTracker();
+        private final CaptchaVerifier captchaVerifier = new AlwaysPassCaptchaVerifier();
+        private final SmsCodeVerifier smsCodeVerifier = new AlwaysPassSmsCodeVerifier();
+        private final AuditLogger auditLogger = new NoOpAuditLogger();
         private final AuthServiceImpl service = new AuthServiceImpl(
                 jwtService,
                 refreshTokenStore,
                 userMapper,
                 loginBlacklistStore,
-                passwordEncoder
+                passwordEncoder,
+                failureTracker,
+                captchaVerifier,
+                smsCodeVerifier,
+                auditLogger
         );
     }
 
     /**
-     * 简单黑名单存储测试桩。
-     */
+     * 简单黑名单存储测试桩�?     */
     private static final class SetBasedLoginBlacklistStore implements LoginBlacklistStore {
         private final Set<String> blocked = ConcurrentHashMap.newKeySet();
 
@@ -168,8 +173,7 @@ class AuthServiceImplTest {
     }
 
     /**
-     * JWT 服务测试桩。
-     */
+     * JWT 服务测试桩�?     */
     private static final class StubJwtService implements JwtService {
         private final Map<String, RefreshTokenClaims> refreshClaimsByToken = new ConcurrentHashMap<>();
 
@@ -193,5 +197,57 @@ class AuthServiceImplTest {
             }
             return claims;
         }
+    }
+    /**
+     * 登录失败追踪器测试桩（不触发任何限制）�?     */
+    private static final class NoOpLoginFailureTracker implements LoginFailureTracker {
+        @Override
+        public void recordFailure(String identifier) {}
+
+        @Override
+        public int getFailureCount(String identifier) {
+            return 0;
+        }
+
+        @Override
+        public boolean requiresCaptcha(String identifier) {
+            return false;
+        }
+
+        @Override
+        public boolean shouldBlock(String identifier) {
+            return false;
+        }
+
+        @Override
+        public void reset(String identifier) {}
+    }
+
+    /**
+     * 验证码验证器测试桩（总是通过）�?     */
+    private static final class AlwaysPassCaptchaVerifier implements CaptchaVerifier {
+        @Override
+        public boolean verify(String token) {
+            return true;
+        }
+    }
+
+    /**
+     * 短信验证码验证器测试桩（总是通过）�?     */
+    private static final class AlwaysPassSmsCodeVerifier implements SmsCodeVerifier {
+        @Override
+        public boolean verify(String phone, String code) {
+            return true;
+        }
+    }
+
+    /**
+     * 审计日志记录器测试桩（不记录）�?     */
+
+    /**
+     * 审计日志记录器测试桩（不记录）�?     */
+    private static final class NoOpAuditLogger implements AuditLogger {
+        @Override
+        public void log(AuditEvent event) {}
     }
 }

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"src/test/java/com/zhiguang/be/auth/service/impl/AuthServiceImplTest.java\":*)",
+      "Bash(mvn test:*)"
+    ]
+  }
+}
