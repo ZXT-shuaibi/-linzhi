@@ -5,8 +5,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Redis 登录黑名单实现。
- * 约定 key 结构：auth:blacklist:login:{identifier}。
+ * 基于 Redis 的登录黑名单实现。
+ * 通过固定前缀的 key 判断某个登录标识是否已被加入黑名单。
+ * 约定 key 结构：auth:blacklist:login:{identifier}
  */
 @Component
 @ConditionalOnProperty(name = "security.login-blacklist.enabled", havingValue = "true", matchIfMissing = true)
@@ -17,7 +18,7 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
     private final StringRedisTemplate redisTemplate;
 
     /**
-     * 构造函数：注入 Redis 模板。
+     * 构造 Redis 黑名单存储实现。
      *
      * @param redisTemplate Redis 字符串模板
      */
@@ -26,10 +27,10 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
     }
 
     /**
-     * 判断登录标识是否被加入黑名单。
+     * 判断登录标识是否存在对应的 Redis 黑名单 key。
      *
-     * @param identifier 登录标识（手机号）
-     * @return true 命中黑名单，false 未命中
+     * @param identifier 登录标识
+     * @return 命中黑名单返回 true，否则返回 false
      */
     @Override
     public boolean isBlocked(String identifier) {
@@ -41,7 +42,7 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
     }
 
     /**
-     * 生成登录黑名单 key。
+     * 生成指定登录标识对应的黑名单 key。
      *
      * @param identifier 登录标识
      * @return Redis key

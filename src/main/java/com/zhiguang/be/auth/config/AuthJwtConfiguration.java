@@ -27,17 +27,22 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 
+/**
+ * JWT 编解码配置类。
+ * 负责初始化 RSA 密钥材料、JWT 编码器以及不同用途的解码器。
+ */
 @Configuration
 @EnableConfigurationProperties(AuthJwtProperties.class)
-/**
- * JWT 编解码配置。
- */
 public class AuthJwtConfiguration {
 
-    @Bean
     /**
-     * 生成或加载 RSA 密钥材料。
+     * 初始化 RSA 密钥材料。
+     * 优先使用配置文件中的 PEM 公私钥；若缺失且明确允许，才会生成临时密钥对。
+     *
+     * @param properties JWT 配置属性
+     * @return RSA 密钥材料对象
      */
+    @Bean
     public RsaKeyMaterial rsaKeyMaterial(AuthJwtProperties properties) {
         try {
             String publicPem = properties.getPublicKey();
@@ -51,8 +56,7 @@ public class AuthJwtConfiguration {
             if (!properties.isAllowEphemeralKeys()) {
                 throw new IllegalStateException("JWT key material is missing and security.jwt.allow-ephemeral-keys=false");
             }
-
-            // 仅在显式允许时生成临时密钥，避免生产环境因重启导致令牌整体失效。
+// // 仅在显式允许时生成临时密钥，避免生产环境因重启导致令牌整体失效。
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
             KeyPair pair = generator.generateKeyPair();
@@ -62,10 +66,15 @@ public class AuthJwtConfiguration {
         }
     }
 
-    @Bean
     /**
-     * JWT 编码器。
+     * 创建 JWT 编码器。
+     * 编码器会使用 RSA 公私钥和 keyId 来签发令牌。
+     *
+     * @param keyMaterial RSA 密钥材料
+     * @param properties JWT 配置属性
+     * @return JWT 编码器
      */
+    @Bean
     public JwtEncoder jwtEncoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
         RSAKey rsaKey = new RSAKey.Builder(keyMaterial.publicKey())
                 .privateKey(keyMaterial.privateKey())
@@ -75,10 +84,15 @@ public class AuthJwtConfiguration {
         return new NimbusJwtEncoder(jwkSource);
     }
 
-    @Bean("accessJwtDecoder")
     /**
-     * Access Token 解码器，仅接受 token_type=access。
+     * 创建访问令牌专用解码器。
+     * 除基础 issuer 校验外，还会强制要求 {@code token_type=access}。
+     *
+     * @param keyMaterial RSA 密钥材料
+     * @param properties JWT 配置属性
+     * @return 访问令牌解码器
      */
+    @Bean("accessJwtDecoder")
     public JwtDecoder accessJwtDecoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(keyMaterial.publicKey()).build();
 
@@ -95,10 +109,15 @@ public class AuthJwtConfiguration {
         return decoder;
     }
 
-    @Bean("tokenJwtDecoder")
     /**
-     * 通用令牌解码器（用于 refresh 解析）。
+     * 创建通用令牌解码器。
+     * 该解码器主要用于刷新令牌解析，只做签发方等基础校验。
+     *
+     * @param keyMaterial RSA 密钥材料
+     * @param properties JWT 配置属性
+     * @return 通用令牌解码器
      */
+    @Bean("tokenJwtDecoder")
     public JwtDecoder tokenJwtDecoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(keyMaterial.publicKey()).build();
         decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(properties.getIssuer()));
@@ -106,7 +125,11 @@ public class AuthJwtConfiguration {
     }
 
     /**
-     * 解析 PEM 公钥。
+     * 将 PEM 公钥文本解析为 RSA 公钥对象。
+     *
+     * @param pem PEM 格式公钥文本
+     * @return RSA 公钥
+     * @throws Exception 密钥解析异常
      */
     private RSAPublicKey readPublicKey(String pem) throws Exception {
         String normalized = pem.replace("\\n", "\n")
@@ -119,7 +142,11 @@ public class AuthJwtConfiguration {
     }
 
     /**
-     * 解析 PEM 私钥。
+     * 将 PEM 私钥文本解析为 RSA 私钥对象。
+     *
+     * @param pem PEM 格式私钥文本
+     * @return RSA 私钥
+     * @throws Exception 密钥解析异常
      */
     private RSAPrivateKey readPrivateKey(String pem) throws Exception {
         String normalized = pem.replace("\\n", "\n")

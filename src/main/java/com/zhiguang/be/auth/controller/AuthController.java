@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 认证接口控制器。
- * 负责处理注册、登录、令牌刷新、登出和密码重置等认证相关请求。
+ * 对外暴露注册、登录、刷新令牌、登出和密码重置等认证相关接口。
  */
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -27,7 +27,7 @@ public class AuthController {
     private final AuthService authService;
 
     /**
-     * 构造函数：注入认证服务。
+     * 构造认证控制器并注入认证服务。
      *
      * @param authService 认证领域服务
      */
@@ -36,8 +36,8 @@ public class AuthController {
     }
 
     /**
-     * 用户注册接口。
-     * 作用：创建新用户并签发 Access/Refresh 双令牌，返回登录态会话信息。
+     * 处理用户注册请求。
+     * 注册成功后会直接返回用户 ID 和首发的双令牌信息。
      *
      * @param request 注册请求体
      * @return 标准响应包装的会话信息
@@ -48,8 +48,8 @@ public class AuthController {
     }
 
     /**
-     * 用户登录接口。
-     * 作用：校验账号凭证并签发 Access/Refresh 双令牌，返回登录态会话信息。
+     * 处理用户登录请求。
+     * 登录流程会在服务层执行风控、验证码和密码校验。
      *
      * @param request 登录请求体
      * @return 标准响应包装的会话信息
@@ -60,8 +60,7 @@ public class AuthController {
     }
 
     /**
-     * 刷新令牌接口。
-     * 作用：使用 Refresh Token 完成令牌轮换，返回新的 Access/Refresh 令牌对。
+     * 使用刷新令牌换发新的令牌对。
      *
      * @param request 刷新令牌请求体
      * @return 标准响应包装的新令牌对
@@ -72,11 +71,11 @@ public class AuthController {
     }
 
     /**
-     * 用户登出接口。
-     * 作用：撤销指定范围内的 Refresh Token（当前设备或全部设备），使会话失效。
+     * 执行用户登出操作。
+     * 支持只退出当前设备或退出全部设备。
      *
      * @param request 登出请求体
-     * @return 标准响应包装的登出结果
+     * @return 标准响应包装的操作结果
      */
     @PostMapping("/logout")
     public ApiResponse<ActionResult> logout(@Valid @RequestBody LogoutRequest request) {
@@ -84,11 +83,11 @@ public class AuthController {
     }
 
     /**
-     * 密码重置接口。
-     * 作用：校验重置请求并更新用户密码，返回重置处理结果。
+     * 重置用户密码。
+     * 重置成功后会清理已有刷新令牌，避免旧会话继续使用。
      *
-     * @param request 密码重置请求体
-     * @return 标准响应包装的重置结果
+     * @param request 重置密码请求体
+     * @return 标准响应包装的操作结果
      */
     @PostMapping("/password/reset")
     public ApiResponse<ActionResult> resetPassword(@Valid @RequestBody PasswordResetRequest request) {

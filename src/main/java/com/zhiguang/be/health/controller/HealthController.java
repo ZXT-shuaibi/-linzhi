@@ -9,17 +9,17 @@ import java.util.Map;
 
 /**
  * 健康检查控制器。
- * 提供服务可用性探针接口，用于网关与监控系统探活。
+ * 向网关、监控和部署系统提供最基础的服务存活探针接口。
  */
 @RestController
 @RequestMapping("/api/v1/_meta")
 public class HealthController {
 
     /**
-     * 服务存活检查接口。
-     * 作用：返回固定健康状态，用于负载均衡和监控系统快速判断服务是否可用。
+     * 返回固定的服务健康状态。
+     * 当应用能够正常处理请求时，该接口会返回 {@code status=ok}。
      *
-     * @return 标准响应包装的健康状态键值对
+     * @return 标准响应包装的健康状态信息
      */
     @GetMapping("/ping")
     public ApiResponse<Map<String, String>> ping() {

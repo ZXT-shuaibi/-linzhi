@@ -1,0 +1,89 @@
+package com.zhiguang.be.discover.controller;
+
+import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.discover.model.NearbySearchRequest;
+import com.zhiguang.be.discover.model.NearbySearchResponse;
+import com.zhiguang.be.discover.service.LbsDiscoverService;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 发现模块控制器。
+ * 对外暴露附近搜索和位置索引维护相关的 HTTP 接口。
+ */
+@RestController
+@RequestMapping("/api/v1/discover")
+public class DiscoverController {
+
+    private final LbsDiscoverService lbsDiscoverService;
+
+    /**
+     * 构造发现控制器并注入 LBS 服务。
+     *
+     * @param lbsDiscoverService 附近搜索与位置管理服务
+     */
+    public DiscoverController(LbsDiscoverService lbsDiscoverService) {
+        this.lbsDiscoverService = lbsDiscoverService;
+    }
+
+    /**
+     * 查询指定坐标附近的内容。
+     * 请求体中包含经纬度、搜索半径、分页参数和可选的类型过滤条件。
+     *
+     * @param request 附近搜索请求
+     * @return 标准响应包装的搜索结果
+     */
+    @PostMapping("/nearby")
+    public ApiResponse<NearbySearchResponse> searchNearby(@Valid @RequestBody NearbySearchRequest request) {
+        NearbySearchResponse response = lbsDiscoverService.searchNearby(request);
+        return ApiResponse.success(response);
+    }
+
+    /**
+     * 新增或更新某条内容的地理位置索引。
+     * 除坐标外，也支持同时写入标题、发布时间和点赞数等辅助元数据。
+     *
+     * @param id 内容唯一标识
+     * @param type 内容类型
+     * @param lat 纬度
+     * @param lng 经度
+     * @param title 内容标题
+     * @param publishTime 发布时间时间戳
+     * @param likeCount 点赞数
+     * @return 标准成功响应
+     */
+    @PostMapping("/location")
+    public ApiResponse<Void> addLocation(
+        @RequestParam String id,
+        @RequestParam String type,
+        @RequestParam Double lat,
+        @RequestParam Double lng,
+        @RequestParam(required = false) String title,
+        @RequestParam(required = false) Long publishTime,
+        @RequestParam(required = false) Integer likeCount
+    ) {
+        lbsDiscoverService.addLocation(id, type, lat, lng, title, publishTime, likeCount);
+        return ApiResponse.success(null);
+    }
+
+    /**
+     * 删除某条内容的地理位置索引及其附属元数据。
+     *
+     * @param id 内容唯一标识
+     * @param type 内容类型
+     * @return 标准成功响应
+     */
+    @DeleteMapping("/location")
+    public ApiResponse<Void> removeLocation(
+        @RequestParam String id,
+        @RequestParam String type
+    ) {
+        lbsDiscoverService.removeLocation(id, type);
+        return ApiResponse.success(null);
+    }
+}

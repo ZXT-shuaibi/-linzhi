@@ -1,7 +1,8 @@
 package com.zhiguang.be.common.exception;
 
 /**
- * 枚举说明。
+ * 系统统一错误码枚举。
+ * 定义服务层和接口层会使用到的标准错误编码及默认文案。
  */
 public enum ErrorCode {
     VALIDATION_ERROR("COMMON_400_VALIDATION", "Parameter validation failed"),
@@ -26,17 +27,20 @@ public enum ErrorCode {
     }
 
     /**
-     * 方法说明。
+     * 返回错误码字符串。
+     *
+     * @return 形如 {@code AUTH_401_UNAUTHORIZED} 的错误码
      */
     public String code() {
         return code;
     }
 
     /**
-     * 方法说明。
+     * 返回错误码对应的默认提示文案。
+     *
+     * @return 默认错误消息
      */
     public String defaultMessage() {
         return defaultMessage;
     }
 }
-

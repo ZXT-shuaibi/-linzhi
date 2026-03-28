@@ -11,20 +11,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * 基于 Redis 的刷新令牌白名单实现。
+ * 支持原子消费令牌和按用户批量撤销会话。
+ */
 @Component
 @ConditionalOnProperty(name = "security.refresh-store", havingValue = "redis", matchIfMissing = true)
-/**
- * Redis 刷新令牌白名单实现。
- */
 public class RedisRefreshTokenStore implements RefreshTokenStore {
 
     private static final String REFRESH_TOKEN_KEY_PREFIX = "auth:rt:";
     private static final String REFRESH_TOKEN_INDEX_PREFIX = "auth:rt:index:";
-
-    /**
-     * Redis Lua 脚本：原子校验并消费 refresh token。
-     * KEYS[1]=tokenKey, KEYS[2]=indexKey, ARGV[1]=jti
-     */
     private static final DefaultRedisScript<Long> CONSUME_SCRIPT = new DefaultRedisScript<>();
 
     static {
@@ -41,7 +37,7 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
     private final StringRedisTemplate redisTemplate;
 
     /**
-     * 构造函数。
+     * 构造 Redis 刷新令牌存储实现。
      *
      * @param redisTemplate Redis 字符串模板
      */
@@ -49,10 +45,14 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
         this.redisTemplate = redisTemplate;
     }
 
-    @Override
     /**
-     * 保存刷新令牌白名单记录。
+     * 保存刷新令牌并维护用户级索引集合。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @param expiresAt 过期时间
      */
+    @Override
     public void save(String userId, String jti, Instant expiresAt) {
         String tokenKey = tokenKey(userId, jti);
         String indexKey = indexKey(userId);
@@ -62,24 +62,31 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
         }
 
         redisTemplate.opsForValue().set(tokenKey, "1", ttl);
-        // 维护用户级索引，支持全设备登出。
         redisTemplate.opsForSet().add(indexKey, jti);
         redisTemplate.expire(indexKey, ttl);
     }
 
-    @Override
     /**
-     * 判断刷新令牌是否有效。
+     * 判断刷新令牌 key 是否仍然存在。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @return 存在返回 true，否则返回 false
      */
+    @Override
     public boolean isValid(String userId, String jti) {
         Boolean exists = redisTemplate.hasKey(tokenKey(userId, jti));
         return Boolean.TRUE.equals(exists);
     }
 
-    @Override
     /**
-     * 原子消费刷新令牌，防止并发重复换发。
+     * 使用 Lua 脚本原子消费刷新令牌并同步清理索引。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @return 消费成功返回 true，否则返回 false
      */
+    @Override
     public boolean consumeIfValid(String userId, String jti) {
         String tokenKey = tokenKey(userId, jti);
         String indexKey = indexKey(userId);
@@ -87,19 +94,24 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
         return Long.valueOf(1L).equals(result);
     }
 
-    @Override
     /**
-     * 撤销单个刷新令牌。
+     * 删除单个刷新令牌及其索引。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
      */
+    @Override
     public void remove(String userId, String jti) {
         redisTemplate.delete(tokenKey(userId, jti));
         redisTemplate.opsForSet().remove(indexKey(userId), jti);
     }
 
-    @Override
     /**
-     * 撤销用户全部刷新令牌。
+     * 删除指定用户的全部刷新令牌。
+     *
+     * @param userId 用户 ID
      */
+    @Override
     public void removeAll(String userId) {
         String indexKey = indexKey(userId);
         Set<String> jtis = redisTemplate.opsForSet().members(indexKey);
@@ -116,14 +128,21 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
     }
 
     /**
-     * 生成 refresh token 主键。
+     * 生成单个刷新令牌对应的 Redis key。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @return Redis key
      */
     private String tokenKey(String userId, String jti) {
         return REFRESH_TOKEN_KEY_PREFIX + userId + ":" + jti;
     }
 
     /**
-     * 生成 refresh token 索引键。
+     * 生成某个用户的刷新令牌索引 key。
+     *
+     * @param userId 用户 ID
+     * @return 索引 Redis key
      */
     private String indexKey(String userId) {
         return REFRESH_TOKEN_INDEX_PREFIX + userId;

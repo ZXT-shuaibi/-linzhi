@@ -5,31 +5,31 @@ import com.zhiguang.be.auth.model.AuthUserEntity;
 import java.util.Optional;
 
 /**
- * 用户认证数据访问接口。
+ * 认证用户数据访问接口。
+ * 对外定义用户注册、查询和更新所需的持久化能力。
  */
 public interface AuthUserMapper {
 
     /**
-     * 判断手机号是否已注册。
+     * 判断手机号是否已经存在。
      *
-     * @param phone 待校验手机号
-     * @return true 表示手机号已存在
+     * @param phone 手机号
+     * @return 已存在返回 true，否则返回 false
      */
     boolean existsByPhone(String phone);
 
     /**
-     * 保存新用户。
+     * 保存用户实体。
      *
-     * @param entity 待保存用户实体
+     * @param entity 用户实体
      */
     void save(AuthUserEntity entity);
 
     /**
-     * 按手机号原子写入新用户。
-     * 若手机号已存在则不写入并返回 false。
+     * 以手机号为唯一键尝试保存用户。
      *
-     * @param entity 待保存用户实体
-     * @return true 表示写入成功，false 表示手机号已存在
+     * @param entity 用户实体
+     * @return 保存成功返回 true，手机号已存在返回 false
      */
     boolean saveIfPhoneAbsent(AuthUserEntity entity);
 
@@ -37,7 +37,7 @@ public interface AuthUserMapper {
      * 按手机号查询用户。
      *
      * @param phone 手机号
-     * @return 用户存在时返回实体
+     * @return 命中时返回用户实体
      */
     Optional<AuthUserEntity> findByPhone(String phone);
 
@@ -45,14 +45,14 @@ public interface AuthUserMapper {
      * 按用户 ID 查询用户。
      *
      * @param userId 用户 ID
-     * @return 用户存在时返回实体
+     * @return 命中时返回用户实体
      */
     Optional<AuthUserEntity> findByUserId(String userId);
 
     /**
-     * 更新用户记录。
+     * 更新用户实体。
      *
-     * @param entity 含最新字段值的用户实体
+     * @param entity 含最新信息的用户实体
      */
     void update(AuthUserEntity entity);
 }

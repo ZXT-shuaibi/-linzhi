@@ -37,11 +37,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * AuthServiceImpl 单元测试�? */
+ * 认证服务单元测试。
+ * 重点验证密码加密、刷新令牌单次消费、黑名单拦截和原子写入等核心行为。
+ */
 class AuthServiceImplTest {
 
     /**
-     * 注册后的密码应使�?BCrypt 加密，不应明文存储�?     */
+     * 验证注册后持久化的密码是 BCrypt 哈希，而不是明文。
+     */
     @Test
     void registerShouldPersistBcryptPassword() {
         TestFixture fixture = new TestFixture();
@@ -57,7 +60,8 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 同一�?refresh token 只能消费一次，重复使用应被拒绝�?     */
+     * 验证同一个刷新令牌只能成功消费一次，重复使用会被拒绝。
+     */
     @Test
     void refreshTokenShouldBeSingleUse() {
         TestFixture fixture = new TestFixture();
@@ -75,7 +79,8 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 命中黑名单后 refresh 会先返回 403，并主动吊销该用户全�?refresh 会话�?     */
+     * 验证命中黑名单时刷新流程会撤销全部会话，并返回封禁错误。
+     */
     @Test
     void refreshShouldRevokeAllSessionsWhenBlacklisted() {
         TestFixture fixture = new TestFixture();
@@ -93,7 +98,6 @@ class AuthServiceImplTest {
         assertEquals(ErrorCode.LOGIN_BLOCKED, blocked.errorCode());
         assertEquals(HttpStatus.FORBIDDEN, blocked.httpStatus());
 
-        // After unblocking, the old refresh token should already be revoked.
         fixture.loginBlacklistStore.unblock("13800138002");
         BusinessException revoked = assertThrows(BusinessException.class,
                 () -> fixture.service.refreshToken(loginSession.tokens().refreshToken()));
@@ -102,7 +106,8 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 用户命中登录黑名单后，登录应被直接拒绝�?     */
+     * 验证登录标识进入黑名单后，登录请求会被直接拒绝。
+     */
     @Test
     void loginShouldBeBlockedByLoginBlacklist() {
         TestFixture fixture = new TestFixture();
@@ -117,7 +122,8 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 原子写入：同手机号重复写入必须被拒绝�?     */
+     * 验证手机号原子写入逻辑会拒绝重复注册。
+     */
     @Test
     void saveIfPhoneAbsentShouldRejectDuplicatePhone() {
         InMemoryAuthUserMapper mapper = new InMemoryAuthUserMapper();
@@ -129,7 +135,9 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 测试夹具：组�?AuthServiceImpl 依赖�?     */
+     * 测试夹具。
+     * 负责组装认证服务需要的依赖桩和待测对象。
+     */
     private static final class TestFixture {
         private final AuthUserMapper userMapper = new InMemoryAuthUserMapper();
         private final RefreshTokenStore refreshTokenStore = new InMemoryRefreshTokenStore();
@@ -154,29 +162,55 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 简单黑名单存储测试桩�?     */
+     * 基于集合的黑名单测试桩。
+     * 用于手动控制某个标识是否处于封禁状态。
+     */
     private static final class SetBasedLoginBlacklistStore implements LoginBlacklistStore {
         private final Set<String> blocked = ConcurrentHashMap.newKeySet();
 
+        /**
+         * 判断指定标识是否已被加入测试黑名单。
+         *
+         * @param identifier 登录标识
+         * @return 在集合中返回 true，否则返回 false
+         */
         @Override
         public boolean isBlocked(String identifier) {
             return blocked.contains(identifier);
         }
 
+        /**
+         * 将指定标识加入测试黑名单。
+         *
+         * @param identifier 登录标识
+         */
         private void block(String identifier) {
             blocked.add(identifier);
         }
 
+        /**
+         * 将指定标识从测试黑名单移除。
+         *
+         * @param identifier 登录标识
+         */
         private void unblock(String identifier) {
             blocked.remove(identifier);
         }
     }
 
     /**
-     * JWT 服务测试桩�?     */
+     * JWT 服务测试桩。
+     * 使用内存映射模拟刷新令牌签发和校验逻辑。
+     */
     private static final class StubJwtService implements JwtService {
         private final Map<String, RefreshTokenClaims> refreshClaimsByToken = new ConcurrentHashMap<>();
 
+        /**
+         * 为指定用户生成一组测试用令牌。
+         *
+         * @param userId 用户 ID
+         * @return 测试令牌对
+         */
         @Override
         public AuthTokens issueTokens(String userId) {
             Instant now = Instant.now();
@@ -189,6 +223,12 @@ class AuthServiceImplTest {
             return new AuthTokens(accessToken, accessExpiresAt, refreshToken, refreshExpiresAt, "Bearer");
         }
 
+        /**
+         * 校验测试刷新令牌是否存在且未过期。
+         *
+         * @param refreshToken 刷新令牌字符串
+         * @return 刷新令牌声明
+         */
         @Override
         public RefreshTokenClaims verifyRefreshToken(String refreshToken) {
             RefreshTokenClaims claims = refreshClaimsByToken.get(refreshToken);
@@ -198,34 +238,75 @@ class AuthServiceImplTest {
             return claims;
         }
     }
-    /**
-     * 登录失败追踪器测试桩（不触发任何限制）�?     */
-    private static final class NoOpLoginFailureTracker implements LoginFailureTracker {
-        @Override
-        public void recordFailure(String identifier) {}
 
+    /**
+     * 不做任何限制的登录失败跟踪器测试桩。
+     */
+    private static final class NoOpLoginFailureTracker implements LoginFailureTracker {
+
+        /**
+         * 忽略失败记录。
+         *
+         * @param identifier 登录标识
+         */
+        @Override
+        public void recordFailure(String identifier) {
+        }
+
+        /**
+         * 固定返回 0 次失败。
+         *
+         * @param identifier 登录标识
+         * @return 固定为 0
+         */
         @Override
         public int getFailureCount(String identifier) {
             return 0;
         }
 
+        /**
+         * 固定返回不需要验证码。
+         *
+         * @param identifier 登录标识
+         * @return 固定为 false
+         */
         @Override
         public boolean requiresCaptcha(String identifier) {
             return false;
         }
 
+        /**
+         * 固定返回不需要封禁。
+         *
+         * @param identifier 登录标识
+         * @return 固定为 false
+         */
         @Override
         public boolean shouldBlock(String identifier) {
             return false;
         }
 
+        /**
+         * 忽略重置操作。
+         *
+         * @param identifier 登录标识
+         */
         @Override
-        public void reset(String identifier) {}
+        public void reset(String identifier) {
+        }
     }
 
     /**
-     * 验证码验证器测试桩（总是通过）�?     */
+     * 总是通过的验证码校验器测试桩。
+     */
     private static final class AlwaysPassCaptchaVerifier implements CaptchaVerifier {
+
+        /**
+         * 始终返回验证码校验成功。
+         *
+         * @param token 验证码令牌
+         * @return 固定为 true
+         */
         @Override
         public boolean verify(String token) {
             return true;
@@ -233,8 +314,17 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 短信验证码验证器测试桩（总是通过）�?     */
+     * 总是通过的短信验证码校验器测试桩。
+     */
     private static final class AlwaysPassSmsCodeVerifier implements SmsCodeVerifier {
+
+        /**
+         * 始终返回短信验证码校验成功。
+         *
+         * @param phone 手机号
+         * @param code 验证码
+         * @return 固定为 true
+         */
         @Override
         public boolean verify(String phone, String code) {
             return true;
@@ -242,12 +332,17 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 审计日志记录器测试桩（不记录）�?     */
-
-    /**
-     * 审计日志记录器测试桩（不记录）�?     */
+     * 不输出任何内容的审计日志测试桩。
+     */
     private static final class NoOpAuditLogger implements AuditLogger {
+
+        /**
+         * 忽略审计日志记录。
+         *
+         * @param event 审计事件
+         */
         @Override
-        public void log(AuditEvent event) {}
+        public void log(AuditEvent event) {
+        }
     }
 }

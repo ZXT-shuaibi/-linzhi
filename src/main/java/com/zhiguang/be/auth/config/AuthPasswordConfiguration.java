@@ -7,14 +7,16 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 /**
  * 认证密码相关配置。
+ * 负责注册密码哈希组件，供注册、登录和重置密码流程复用。
  */
 @Configuration
 public class AuthPasswordConfiguration {
 
     /**
      * 提供密码加密器。
+     * 当前使用 BCrypt 算法并指定较高的强度参数。
      *
-     * @return BCrypt 密码加密器
+     * @return 密码加密器实例
      */
     @Bean
     public PasswordEncoder passwordEncoder() {

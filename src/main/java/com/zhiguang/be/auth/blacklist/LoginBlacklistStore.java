@@ -2,15 +2,15 @@ package com.zhiguang.be.auth.blacklist;
 
 /**
  * 登录黑名单存储接口。
- * 用于判断登录标识（如手机号）是否被风控系统拉黑。
+ * 用于判断某个登录标识是否已被风控系统阻断。
  */
 public interface LoginBlacklistStore {
 
     /**
-     * 判断登录标识是否命中黑名单。
+     * 判断指定标识是否已进入登录黑名单。
      *
-     * @param identifier 登录标识（当前实现为手机号）
-     * @return true 表示命中黑名单，false 表示未命中
+     * @param identifier 登录标识，当前通常为手机号
+     * @return 命中黑名单返回 true，否则返回 false
      */
     boolean isBlocked(String identifier);
 }

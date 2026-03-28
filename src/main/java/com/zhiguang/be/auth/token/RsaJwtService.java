@@ -21,25 +21,14 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
- * RSA JWT 服务。
- * 负责签发访问令牌与刷新令牌，并对刷新令牌进行校验解析。
+ * 基于 RSA 的 JWT 服务实现。
+ * 负责签发访问令牌和刷新令牌，并校验刷新令牌的合法性。
  */
 @Service
 public class RsaJwtService implements JwtService {
 
-    /**
-     * 访问令牌类型。
-     */
     private static final String ACCESS_TOKEN_TYPE = "access";
-
-    /**
-     * 刷新令牌类型。
-     */
     private static final String REFRESH_TOKEN_TYPE = "refresh";
-
-    /**
-     * 令牌类型声明字段。
-     */
     private static final String TOKEN_TYPE_CLAIM = "token_type";
 
     private final JwtEncoder jwtEncoder;
@@ -47,7 +36,11 @@ public class RsaJwtService implements JwtService {
     private final AuthJwtProperties properties;
 
     /**
-     * 构造函数。
+     * 构造 JWT 服务实现。
+     *
+     * @param jwtEncoder JWT 编码器
+     * @param tokenJwtDecoder 通用令牌解码器
+     * @param properties JWT 配置属性
      */
     public RsaJwtService(
             JwtEncoder jwtEncoder,
@@ -60,7 +53,11 @@ public class RsaJwtService implements JwtService {
     }
 
     /**
-     * 签发双令牌。
+     * 为指定用户签发访问令牌和刷新令牌。
+     * 两类令牌会分别生成不同的 jti 和过期时间。
+     *
+     * @param userId 用户 ID
+     * @return 包含双令牌的认证结果
      */
     @Override
     public AuthTokens issueTokens(String userId) {
@@ -78,7 +75,11 @@ public class RsaJwtService implements JwtService {
     }
 
     /**
-     * 校验并解析刷新令牌。
+     * 校验刷新令牌并解析出核心声明。
+     * 仅允许令牌类型为 refresh，缺失关键字段或校验失败都会抛出未授权异常。
+     *
+     * @param refreshToken 刷新令牌字符串
+     * @return 刷新令牌声明
      */
     @Override
     public RefreshTokenClaims verifyRefreshToken(String refreshToken) {
@@ -105,10 +106,17 @@ public class RsaJwtService implements JwtService {
     }
 
     /**
-     * 组装并签名 JWT。
+     * 组装并签发单个 JWT。
+     * 根据 tokenType 区分访问令牌和刷新令牌，统一写入标准声明和自定义声明。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @param tokenType 令牌类型
+     * @param issuedAt 签发时间
+     * @param expiresAt 过期时间
+     * @return 已签名的 JWT 字符串
      */
     private String encodeToken(String userId, String jti, String tokenType, Instant issuedAt, Instant expiresAt) {
-        // 通过令牌类型字段区分访问令牌与刷新令牌的校验路径。
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer(properties.getIssuer())
                 .subject(userId)
@@ -127,7 +135,9 @@ public class RsaJwtService implements JwtService {
     }
 
     /**
-     * 统一构造未授权异常。
+     * 构造统一的未授权业务异常。
+     *
+     * @return 未授权异常
      */
     private BusinessException unauthorizedException() {
         return new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);

@@ -11,19 +11,28 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.UUID;
 
-@Component
 /**
- * 类说明。
+ * 请求 ID 过滤器。
+ * 为每个 HTTP 请求补充或透传唯一请求标识，便于日志追踪和问题排查。
  */
+@Component
 public class RequestIdFilter extends OncePerRequestFilter {
 
     private static final String REQUEST_ID_HEADER = "X-Request-Id";
     private static final String MDC_KEY = "requestId";
 
+    /**
+     * 在请求进入业务链路前写入请求 ID，并在请求结束后清理上下文。
+     *
+     * @param request HTTP 请求对象
+     * @param response HTTP 响应对象
+     * @param filterChain 过滤器链
+     * @throws ServletException Servlet 处理异常
+     * @throws IOException IO 异常
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        // 若上游已传递请求标识则直接复用，保证链路追踪一致。
         String requestId = request.getHeader(REQUEST_ID_HEADER);
         if (requestId == null || requestId.isBlank()) {
             requestId = UUID.randomUUID().toString();

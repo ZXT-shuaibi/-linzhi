@@ -7,37 +7,39 @@ import java.time.Instant;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * 基于内存的刷新令牌白名单实现。
+ * 适合本地开发和单实例测试环境，不适合多节点生产部署。
+ */
 @Component
 @ConditionalOnProperty(name = "security.refresh-store", havingValue = "in-memory")
-/**
- * InMemory 刷新令牌白名单实现。
- */
 public class InMemoryRefreshTokenStore implements RefreshTokenStore {
 
-    /**
-     * key: userId:jti, value: expiresAt。
-     */
     private final ConcurrentHashMap<String, Instant> refreshKeyToExpiresAt = new ConcurrentHashMap<>();
-
-    /**
-     * key: userId, value: 该用户所有 refresh key 集合。
-     */
     private final ConcurrentHashMap<String, Set<String>> userToKeys = new ConcurrentHashMap<>();
 
-    @Override
     /**
-     * 保存刷新令牌白名单记录。
+     * 保存刷新令牌及其过期时间，并维护用户到令牌集合的索引。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @param expiresAt 过期时间
      */
+    @Override
     public void save(String userId, String jti, Instant expiresAt) {
         String key = toKey(userId, jti);
         refreshKeyToExpiresAt.put(key, expiresAt);
         userToKeys.computeIfAbsent(userId, ignored -> ConcurrentHashMap.newKeySet()).add(key);
     }
 
-    @Override
     /**
-     * 判断刷新令牌是否有效。
+     * 判断令牌是否存在且尚未过期。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @return 有效返回 true，否则返回 false
      */
+    @Override
     public boolean isValid(String userId, String jti) {
         String key = toKey(userId, jti);
         Instant expiresAt = refreshKeyToExpiresAt.get(key);
@@ -51,10 +53,14 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
         return true;
     }
 
-    @Override
     /**
-     * 原子消费刷新令牌，确保同一个 refresh token 只能使用一次。
+     * 消费刷新令牌，确保同一令牌只能成功使用一次。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @return 消费成功返回 true，否则返回 false
      */
+    @Override
     public boolean consumeIfValid(String userId, String jti) {
         String key = toKey(userId, jti);
         Instant expiresAt = refreshKeyToExpiresAt.remove(key);
@@ -66,20 +72,25 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
         return !Instant.now().isAfter(expiresAt);
     }
 
-    @Override
     /**
      * 撤销单个刷新令牌。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
      */
+    @Override
     public void remove(String userId, String jti) {
         String key = toKey(userId, jti);
         refreshKeyToExpiresAt.remove(key);
         removeUserIndex(userId, key);
     }
 
-    @Override
     /**
-     * 撤销用户全部刷新令牌。
+     * 撤销指定用户的全部刷新令牌。
+     *
+     * @param userId 用户 ID
      */
+    @Override
     public void removeAll(String userId) {
         Set<String> keys = userToKeys.remove(userId);
         if (keys == null) {
@@ -91,7 +102,10 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
     }
 
     /**
-     * 移除用户索引中的 refresh key。
+     * 从用户索引中移除指定令牌 key。
+     *
+     * @param userId 用户 ID
+     * @param key 令牌组合 key
      */
     private void removeUserIndex(String userId, String key) {
         Set<String> keys = userToKeys.get(userId);
@@ -104,7 +118,11 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
     }
 
     /**
-     * 拼装 refresh key。
+     * 生成内存存储使用的组合 key。
+     *
+     * @param userId 用户 ID
+     * @param jti 令牌唯一标识
+     * @return 组合 key
      */
     private String toKey(String userId, String jti) {
         return userId + ":" + jti;

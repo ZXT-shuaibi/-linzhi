@@ -20,15 +20,24 @@ import org.springframework.security.web.SecurityFilterChain;
 
 import java.util.List;
 
+/**
+ * Spring Security 配置类。
+ * 负责定义认证放行路径、JWT 资源服务器能力以及统一异常输出格式。
+ */
 @Configuration
 @EnableWebSecurity
-/**
- * Spring Security 配置。
- */
 public class SecurityConfiguration {
 
     /**
-     * 认证过滤链配置。
+     * 构建应用的安全过滤链。
+     * 当前配置启用了无状态会话、JWT 鉴权、请求 ID 过滤器以及统一的认证失败响应。
+     *
+     * @param http HttpSecurity 构建器
+     * @param accessJwtDecoder 访问令牌解码器
+     * @param requestIdFilter 请求 ID 过滤器
+     * @param objectMapper JSON 序列化组件
+     * @return 安全过滤链
+     * @throws Exception 安全配置构建异常
      */
     @Bean
     public SecurityFilterChain securityFilterChain(
@@ -70,7 +79,13 @@ public class SecurityConfiguration {
     }
 
     /**
-     * 输出统一错误响应。
+     * 输出统一 JSON 错误响应。
+     * 当序列化失败时会至少保证返回正确的 HTTP 状态码。
+     *
+     * @param response HTTP 响应对象
+     * @param status HTTP 状态码
+     * @param errorCode 业务错误码
+     * @param objectMapper JSON 序列化组件
      */
     private void writeError(HttpServletResponse response, int status, ErrorCode errorCode, ObjectMapper objectMapper) {
         try {
