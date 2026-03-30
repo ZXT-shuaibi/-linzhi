@@ -8,6 +8,7 @@ public enum ErrorCode {
     VALIDATION_ERROR("COMMON_400_VALIDATION", "Parameter validation failed"),
     BAD_REQUEST("COMMON_400_BAD_REQUEST", "Bad request"),
     UNAUTHORIZED("AUTH_401_UNAUTHORIZED", "Authentication failed"),
+    USER_NOT_REGISTERED("AUTH_401_NOT_REGISTERED", "您当前未注册"),
     LOGIN_BLOCKED("AUTH_403_LOGIN_BLOCKED", "Login is blocked due to account risk"),
     FORBIDDEN("COMMON_403_FORBIDDEN", "Access denied"),
     INVALID_REFRESH_TOKEN("AUTH_401_REFRESH_REPLAY", "Refresh token invalid or revoked"),

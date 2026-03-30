@@ -83,7 +83,7 @@ public class AuthServiceImpl implements AuthService {
 
     /**
      * 注册新用户并立即签发登录令牌。
-     * 该流程会先标准化手机号，再执行原子保存，避免并发注册造成重复账号。
+     * 该流程会先标准化手机号和用户名，再执行原子保存，避免并发注册造成重复账号。
      *
      * @param request 注册请求
      * @return 注册后的会话信息
@@ -91,13 +91,14 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public AuthSessionData register(RegisterRequest request) {
         String phone = normalizeIdentifier(request.phone());
+        String username = normalizeIdentifier(request.username());
 
         String userId = UUID.randomUUID().toString();
         String encodedPassword = passwordEncoder.encode(request.password());
-        AuthUserEntity account = new AuthUserEntity(userId, phone, request.nickname(), encodedPassword);
+        AuthUserEntity account = new AuthUserEntity(userId, phone, username, request.nickname(), encodedPassword);
 
         if (!authUserMapper.saveIfPhoneAbsent(account)) {
-            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "Phone already exists"));
+            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "Phone or username already exists"));
             throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
         }
 
@@ -108,7 +109,8 @@ public class AuthServiceImpl implements AuthService {
 
     /**
      * 执行登录流程。
-     * 依次处理封禁判断、黑名单判断、验证码校验、密码校验以及成功后的令牌签发。
+     * 依次处理封禁判断、验证码校验、用户查找、黑名单判断、密码校验以及成功后的令牌签发。
+     * 使用常量时间比较防止时序攻击。
      *
      * @param request 登录请求
      * @return 登录成功后的会话信息
@@ -117,16 +119,13 @@ public class AuthServiceImpl implements AuthService {
     public AuthSessionData login(LoginRequest request) {
         String identifier = normalizeIdentifier(request.identifier());
 
+        // 检查是否因失败次数过多而被临时封禁
         if (failureTracker.shouldBlock(identifier)) {
             auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Too many failed attempts"));
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        if (loginBlacklistStore.isBlocked(identifier)) {
-            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Account blacklisted"));
-            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
-        }
-
+        // 验证码校验（如果需要）
         if (failureTracker.requiresCaptcha(identifier)) {
             if (request.captchaToken() == null || request.captchaToken().isBlank()) {
                 auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Captcha required"));
@@ -139,13 +138,32 @@ public class AuthServiceImpl implements AuthService {
             }
         }
 
-        AuthUserEntity account = authUserMapper.findByPhone(identifier).orElse(null);
-        if (account == null || !passwordEncoder.matches(request.password(), account.passwordHash())) {
+        // 支持手机号或用户名登录
+        AuthUserEntity account = authUserMapper.findByPhoneOrUsername(identifier).orElse(null);
+
+        // 用户不存在时返回专用错误
+        if (account == null) {
+            // 仍然执行密码比较以防止时序攻击
+            passwordEncoder.matches(request.password(), "$2a$12$dummyHashToPreventTimingAttack1234567890123456789012");
             failureTracker.recordFailure(identifier);
-            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid credentials"));
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "User not registered"));
+            throw new BusinessException(ErrorCode.USER_NOT_REGISTERED, HttpStatus.UNAUTHORIZED);
+        }
+
+        // 检查用户是否在黑名单中（基于userId而不是identifier）
+        if (loginBlacklistStore.isBlocked(account.userId())) {
+            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Account blacklisted"));
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+
+        // 验证密码
+        if (!passwordEncoder.matches(request.password(), account.passwordHash())) {
+            failureTracker.recordFailure(identifier);
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid password"));
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
         }
 
+        // 登录成功，清除失败计数并签发令牌
         failureTracker.reset(identifier);
         AuthTokens tokens = issueAndStoreTokens(account.userId());
         auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "User logged in"));

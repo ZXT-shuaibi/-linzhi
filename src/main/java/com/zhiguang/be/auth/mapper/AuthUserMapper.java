@@ -42,6 +42,23 @@ public interface AuthUserMapper {
     Optional<AuthUserEntity> findByPhone(String phone);
 
     /**
+     * 按用户名查询用户。
+     *
+     * @param username 用户名
+     * @return 命中时返回用户实体
+     */
+    Optional<AuthUserEntity> findByUsername(String username);
+
+    /**
+     * 按手机号或用户名查询用户。
+     * 先尝试按手机号查找，如果找不到再按用户名查找。
+     *
+     * @param identifier 手机号或用户名
+     * @return 命中时返回用户实体
+     */
+    Optional<AuthUserEntity> findByPhoneOrUsername(String identifier);
+
+    /**
      * 按用户 ID 查询用户。
      *
      * @param userId 用户 ID
