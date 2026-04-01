@@ -8,7 +8,10 @@ import com.zhiguang.be.auth.model.LogoutRequest;
 import com.zhiguang.be.auth.model.PasswordResetRequest;
 import com.zhiguang.be.auth.model.RefreshTokenRequest;
 import com.zhiguang.be.auth.model.RegisterRequest;
+import com.zhiguang.be.auth.model.SendCodeRequest;
+import com.zhiguang.be.auth.model.SendCodeResult;
 import com.zhiguang.be.auth.service.AuthService;
+import com.zhiguang.be.auth.service.VerificationCodeService;
 import com.zhiguang.be.common.api.ApiResponse;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -25,14 +28,29 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final VerificationCodeService verificationCodeService;
 
     /**
      * 构造认证控制器并注入认证服务。
      *
      * @param authService 认证领域服务
+     * @param verificationCodeService 验证码服务
      */
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, VerificationCodeService verificationCodeService) {
         this.authService = authService;
+        this.verificationCodeService = verificationCodeService;
+    }
+
+    /**
+     * 发送验证码。
+     * 支持注册、登录、重置密码三种场景。
+     *
+     * @param request 发送验证码请求体
+     * @return 标准响应包装的发送结果
+     */
+    @PostMapping("/code/send")
+    public ApiResponse<SendCodeResult> sendCode(@Valid @RequestBody SendCodeRequest request) {
+        return ApiResponse.success(verificationCodeService.send(request.phone(), request.scene()));
     }
 
     /**

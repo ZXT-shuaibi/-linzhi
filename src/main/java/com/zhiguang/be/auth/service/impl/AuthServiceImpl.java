@@ -11,20 +11,20 @@ import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.model.LoginRequest;
 import com.zhiguang.be.auth.model.PasswordResetRequest;
 import com.zhiguang.be.auth.model.RegisterRequest;
+import com.zhiguang.be.auth.model.CodeScene;
 import com.zhiguang.be.auth.security.CaptchaVerifier;
 import com.zhiguang.be.auth.security.LoginFailureTracker;
-import com.zhiguang.be.auth.security.SmsCodeVerifier;
 import com.zhiguang.be.auth.service.AuthService;
+import com.zhiguang.be.auth.service.VerificationCodeService;
 import com.zhiguang.be.auth.token.JwtService;
 import com.zhiguang.be.auth.token.RefreshTokenClaims;
 import com.zhiguang.be.auth.token.RefreshTokenStore;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.common.util.SnowflakeIdGenerator;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-
-import java.util.UUID;
 
 /**
  * 认证服务实现。
@@ -43,8 +43,9 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final LoginFailureTracker failureTracker;
     private final CaptchaVerifier captchaVerifier;
-    private final SmsCodeVerifier smsCodeVerifier;
+    private final VerificationCodeService verificationCodeService;
     private final AuditLogger auditLogger;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     /**
      * 构造认证服务实现并注入所有流程依赖。
@@ -56,8 +57,9 @@ public class AuthServiceImpl implements AuthService {
      * @param passwordEncoder 密码编码器
      * @param failureTracker 登录失败跟踪器
      * @param captchaVerifier 验证码校验器
-     * @param smsCodeVerifier 短信验证码校验器
+     * @param verificationCodeService 验证码服务
      * @param auditLogger 审计日志组件
+     * @param snowflakeIdGenerator 雪花算法ID生成器
      */
     public AuthServiceImpl(
             JwtService jwtService,
@@ -67,8 +69,9 @@ public class AuthServiceImpl implements AuthService {
             PasswordEncoder passwordEncoder,
             LoginFailureTracker failureTracker,
             CaptchaVerifier captchaVerifier,
-            SmsCodeVerifier smsCodeVerifier,
-            AuditLogger auditLogger
+            VerificationCodeService verificationCodeService,
+            AuditLogger auditLogger,
+            SnowflakeIdGenerator snowflakeIdGenerator
     ) {
         this.jwtService = jwtService;
         this.refreshTokenStore = refreshTokenStore;
@@ -77,13 +80,14 @@ public class AuthServiceImpl implements AuthService {
         this.passwordEncoder = passwordEncoder;
         this.failureTracker = failureTracker;
         this.captchaVerifier = captchaVerifier;
-        this.smsCodeVerifier = smsCodeVerifier;
+        this.verificationCodeService = verificationCodeService;
         this.auditLogger = auditLogger;
+        this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     /**
      * 注册新用户并立即签发登录令牌。
-     * 该流程会先标准化手机号和用户名，再执行原子保存，避免并发注册造成重复账号。
+     * 该流程会先校验短信验证码，再标准化手机号和用户名，最后执行原子保存，避免并发注册造成重复账号。
      *
      * @param request 注册请求
      * @return 注册后的会话信息
@@ -93,7 +97,13 @@ public class AuthServiceImpl implements AuthService {
         String phone = normalizeIdentifier(request.phone());
         String username = normalizeIdentifier(request.username());
 
-        String userId = UUID.randomUUID().toString();
+        // 校验短信验证码
+        if (!verificationCodeService.verify(phone, CodeScene.REGISTER, request.smsCode())) {
+            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "Invalid SMS code"));
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
+        }
+
+        String userId = String.valueOf(snowflakeIdGenerator.nextId());
         String encodedPassword = passwordEncoder.encode(request.password());
         AuthUserEntity account = new AuthUserEntity(userId, phone, username, request.nickname(), encodedPassword);
 
@@ -109,8 +119,7 @@ public class AuthServiceImpl implements AuthService {
 
     /**
      * 执行登录流程。
-     * 依次处理封禁判断、验证码校验、用户查找、黑名单判断、密码校验以及成功后的令牌签发。
-     * 使用常量时间比较防止时序攻击。
+     * 支持密码登录和验证码登录两种方式。
      *
      * @param request 登录请求
      * @return 登录成功后的会话信息
@@ -119,13 +128,60 @@ public class AuthServiceImpl implements AuthService {
     public AuthSessionData login(LoginRequest request) {
         String identifier = normalizeIdentifier(request.identifier());
 
+        // 判断登录方式
+        boolean isSmsLogin = request.smsCode() != null && !request.smsCode().isBlank();
+        boolean isPasswordLogin = request.password() != null && !request.password().isBlank();
+
+        if (!isSmsLogin && !isPasswordLogin) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "密码或验证码必须提供其一");
+        }
+
+        // 验证码登录
+        if (isSmsLogin) {
+            return loginWithSmsCode(identifier, request.smsCode());
+        }
+
+        // 密码登录
+        return loginWithPassword(identifier, request);
+    }
+
+    /**
+     * 验证码登录。
+     */
+    private AuthSessionData loginWithSmsCode(String identifier, String smsCode) {
+        // 验证验证码
+        if (!verificationCodeService.verify(identifier, CodeScene.LOGIN, smsCode)) {
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid SMS code"));
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
+        }
+
+        // 查找用户
+        AuthUserEntity account = authUserMapper.findByPhone(identifier)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_REGISTERED, HttpStatus.UNAUTHORIZED));
+
+        // 检查黑名单
+        if (loginBlacklistStore.isBlocked(account.userId())) {
+            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Account blacklisted"));
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+
+        // 登录成功
+        AuthTokens tokens = issueAndStoreTokens(account.userId());
+        auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "User logged in with SMS"));
+        return new AuthSessionData(account.userId(), tokens);
+    }
+
+    /**
+     * 密码登录。
+     */
+    private AuthSessionData loginWithPassword(String identifier, LoginRequest request) {
         // 检查是否因失败次数过多而被临时封禁
         if (failureTracker.shouldBlock(identifier)) {
             auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Too many failed attempts"));
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        // 验证码校验（如果需要）
+        // 图形验证码校验（如果需要）
         if (failureTracker.requiresCaptcha(identifier)) {
             if (request.captchaToken() == null || request.captchaToken().isBlank()) {
                 auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Captcha required"));
@@ -138,19 +194,17 @@ public class AuthServiceImpl implements AuthService {
             }
         }
 
-        // 支持手机号或用户名登录
+        // 查找用户
         AuthUserEntity account = authUserMapper.findByPhoneOrUsername(identifier).orElse(null);
 
-        // 用户不存在时返回专用错误
         if (account == null) {
-            // 仍然执行密码比较以防止时序攻击
-            passwordEncoder.matches(request.password(), "$2a$12$dummyHashToPreventTimingAttack1234567890123456789012");
+            passwordEncoder.matches(request.password(), "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy");
             failureTracker.recordFailure(identifier);
             auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "User not registered"));
             throw new BusinessException(ErrorCode.USER_NOT_REGISTERED, HttpStatus.UNAUTHORIZED);
         }
 
-        // 检查用户是否在黑名单中（基于userId而不是identifier）
+        // 检查黑名单
         if (loginBlacklistStore.isBlocked(account.userId())) {
             auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Account blacklisted"));
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
@@ -163,10 +217,10 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
         }
 
-        // 登录成功，清除失败计数并签发令牌
+        // 登录成功
         failureTracker.reset(identifier);
         AuthTokens tokens = issueAndStoreTokens(account.userId());
-        auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "User logged in"));
+        auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "User logged in with password"));
         return new AuthSessionData(account.userId(), tokens);
     }
 
@@ -184,7 +238,7 @@ public class AuthServiceImpl implements AuthService {
         AuthUserEntity account = authUserMapper.findByUserId(claims.userId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_REFRESH_TOKEN, HttpStatus.UNAUTHORIZED));
 
-        if (loginBlacklistStore.isBlocked(account.phone())) {
+        if (loginBlacklistStore.isBlocked(account.userId())) {
             refreshTokenStore.removeAll(claims.userId());
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
@@ -228,7 +282,7 @@ public class AuthServiceImpl implements AuthService {
     public ActionResult resetPassword(PasswordResetRequest request) {
         String phone = normalizeIdentifier(request.phone());
 
-        if (!smsCodeVerifier.verify(phone, request.smsCode())) {
+        if (!verificationCodeService.verify(phone, CodeScene.RESET_PASSWORD, request.smsCode())) {
             auditLogger.log(AuditEvent.of("PASSWORD_RESET_FAILED", phone, false, "Invalid SMS code"));
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
         }
