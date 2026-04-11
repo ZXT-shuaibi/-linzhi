@@ -89,6 +89,38 @@ x-internal-events:
     idempotencyKey: orderId+expireAt
     compensation: 关单补偿、库存回补
 paths:
+  /auth/send-code:
+    post:
+      tags: [Auth]
+      summary: 发送验证码
+      operationId: sendCode
+      security: []
+      x-maturity: 已实现
+      x-source: 文档对齐新增
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendCodeRequest'
+      responses:
+        '200':
+          description: 发送成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SendCodeResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
   /auth/register:
     post:
       tags: [Auth]
@@ -114,7 +146,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/AuthSessionData'
+                        $ref: '#/components/schemas/RegisterResult'
         '400':
           $ref: '#/components/responses/ValidationError'
         '409':
@@ -151,6 +183,8 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
         '429':
           $ref: '#/components/responses/TooManyRequestsError'
   /auth/token/refresh:
@@ -1268,11 +1302,47 @@ components:
           type: string
         tokens:
           $ref: '#/components/schemas/AuthTokens'
-    RegisterRequest:
+    RegisterResult:
       type: object
-      required: [phone, password, nickname, smsCode]
+      properties:
+        userId:
+          type: string
+        phone:
+          type: string
+        account:
+          type: string
+        nextAction:
+          type: string
+        status:
+          type: string
+    SendCodeRequest:
+      type: object
+      required: [identifier, scene]
+      properties:
+        identifier:
+          type: string
+        scene:
+          type: string
+          enum: [register, login, password_reset]
+    SendCodeResponse:
+      type: object
       properties:
         phone:
+          type: string
+        scene:
+          type: string
+          enum: [register, login, password_reset]
+        code:
+          type: string
+        expireSeconds:
+          type: integer
+    RegisterRequest:
+      type: object
+      required: [phone, account, password, nickname, smsCode]
+      properties:
+        phone:
+          type: string
+        account:
           type: string
         password:
           type: string
@@ -1290,7 +1360,7 @@ components:
           type: string
         channel:
           type: string
-        captchaToken:
+        captchaCode:
           type: string
     RefreshTokenRequest:
       type: object

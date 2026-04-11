@@ -5,12 +5,11 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.time.Instant;
 
 /**
  * 基于 Redis 的登录黑名单实现。
- * 使用 Hash 结构存储黑名单元数据，支持永久和临时封禁。
- * 约定 key 结构：auth:blacklist:login:{userId}
+ * 通过固定前缀的 key 判断某个登录标识是否已经被加入黑名单。
+ * 约定 key 结构：auth:blacklist:login:{identifier}
  */
 @Component
 @ConditionalOnProperty(name = "security.login-blacklist.enabled", havingValue = "true", matchIfMissing = true)
@@ -21,7 +20,7 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
     private final StringRedisTemplate redisTemplate;
 
     /**
-     * 构造 Redis 黑名单存储实现。
+     * 构造 Redis 登录黑名单实现。
      *
      * @param redisTemplate Redis 字符串模板
      */
@@ -30,60 +29,59 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
     }
 
     /**
-     * 判断用户是否存在对应的 Redis 黑名单 key。
+     * 判断登录标识是否存在对应的 Redis 黑名单 key。
      *
-     * @param userId 用户 ID
+     * @param identifier 登录标识
      * @return 命中黑名单返回 true，否则返回 false
      */
     @Override
-    public boolean isBlocked(String userId) {
-        if (userId == null || userId.isBlank()) {
+    public boolean isBlocked(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
             return false;
         }
-        Boolean exists = redisTemplate.hasKey(toKey(userId));
+        Boolean exists = redisTemplate.hasKey(toKey(identifier));
         return Boolean.TRUE.equals(exists);
     }
 
     /**
-     * 将用户加入黑名单并存储元数据。
+     * 把指定标识写入 Redis 登录黑名单。
      *
-     * @param userId 用户 ID
-     * @param reason 封禁原因
-     * @param ttl 过期时间，null 表示永久封禁
+     * @param identifier 登录标识
+     * @param ttl 黑名单有效时长，为空或非正数时不设置过期
      */
     @Override
-    public void block(String userId, String reason, Duration ttl) {
-        if (userId == null || userId.isBlank()) {
+    public void block(String identifier, Duration ttl) {
+        if (identifier == null || identifier.isBlank()) {
             return;
         }
-        String key = toKey(userId);
-        redisTemplate.opsForHash().put(key, "reason", reason != null ? reason : "");
-        redisTemplate.opsForHash().put(key, "blockedAt", Instant.now().toString());
-        if (ttl != null) {
-            redisTemplate.expire(key, ttl);
+        String key = toKey(identifier);
+        if (ttl == null || ttl.isNegative() || ttl.isZero()) {
+            redisTemplate.opsForValue().set(key, "1");
+            return;
         }
+        redisTemplate.opsForValue().set(key, "1", ttl);
     }
 
     /**
-     * 将用户从黑名单中移除。
+     * 从 Redis 登录黑名单中移除指定标识。
      *
-     * @param userId 用户 ID
+     * @param identifier 登录标识
      */
     @Override
-    public void unblock(String userId) {
-        if (userId == null || userId.isBlank()) {
+    public void unblock(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
             return;
         }
-        redisTemplate.delete(toKey(userId));
+        redisTemplate.delete(toKey(identifier));
     }
 
     /**
-     * 生成指定用户对应的黑名单 key。
+     * 生成指定登录标识对应的黑名单 key。
      *
-     * @param userId 用户 ID
+     * @param identifier 登录标识
      * @return Redis key
      */
-    private String toKey(String userId) {
-        return LOGIN_BLACKLIST_KEY_PREFIX + userId;
+    private String toKey(String identifier) {
+        return LOGIN_BLACKLIST_KEY_PREFIX + identifier;
     }
 }

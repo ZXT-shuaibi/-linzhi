@@ -3,8 +3,6 @@ package com.zhiguang.be.auth.security;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
-
 /**
  * 基于 Redis 的登录失败跟踪器。
  * 使用带过期时间的计数器记录失败次数，支持验证码和封禁阈值判断。
@@ -13,19 +11,19 @@ import java.time.Duration;
 public class RedisLoginFailureTracker implements LoginFailureTracker {
 
     private static final String FAILURE_KEY_PREFIX = "auth:login:failure:";
-    private static final int CAPTCHA_THRESHOLD = 3;
-    private static final int BLOCK_THRESHOLD = 10;
-    private static final Duration FAILURE_TTL = Duration.ofMinutes(30);
 
     private final StringRedisTemplate redisTemplate;
+    private final LoginRiskProperties properties;
 
     /**
      * 构造 Redis 登录失败跟踪器。
      *
      * @param redisTemplate Redis 字符串模板
+     * @param properties 登录风控配置
      */
-    public RedisLoginFailureTracker(StringRedisTemplate redisTemplate) {
+    public RedisLoginFailureTracker(StringRedisTemplate redisTemplate, LoginRiskProperties properties) {
         this.redisTemplate = redisTemplate;
+        this.properties = properties;
     }
 
     /**
@@ -38,7 +36,7 @@ public class RedisLoginFailureTracker implements LoginFailureTracker {
         String key = toKey(identifier);
         Long count = redisTemplate.opsForValue().increment(key);
         if (count != null && count == 1) {
-            redisTemplate.expire(key, FAILURE_TTL);
+            redisTemplate.expire(key, properties.getFailureTtl());
         }
     }
 
@@ -51,7 +49,15 @@ public class RedisLoginFailureTracker implements LoginFailureTracker {
     @Override
     public int getFailureCount(String identifier) {
         String value = redisTemplate.opsForValue().get(toKey(identifier));
-        return value != null ? Integer.parseInt(value) : 0;
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ex) {
+            redisTemplate.delete(toKey(identifier));
+            return 0;
+        }
     }
 
     /**
@@ -62,7 +68,7 @@ public class RedisLoginFailureTracker implements LoginFailureTracker {
      */
     @Override
     public boolean requiresCaptcha(String identifier) {
-        return getFailureCount(identifier) >= CAPTCHA_THRESHOLD;
+        return getFailureCount(identifier) >= properties.getCaptchaThreshold();
     }
 
     /**
@@ -73,7 +79,7 @@ public class RedisLoginFailureTracker implements LoginFailureTracker {
      */
     @Override
     public boolean shouldBlock(String identifier) {
-        return getFailureCount(identifier) >= BLOCK_THRESHOLD;
+        return getFailureCount(identifier) >= properties.getBlockThreshold();
     }
 
     /**

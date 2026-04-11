@@ -2,33 +2,46 @@ package com.zhiguang.be.auth.service.impl;
 
 import com.zhiguang.be.auth.audit.AuditEvent;
 import com.zhiguang.be.auth.audit.AuditLogger;
+import com.zhiguang.be.auth.audit.LoginLogService;
+import com.zhiguang.be.auth.blacklist.AuthBlocklistService;
 import com.zhiguang.be.auth.blacklist.LoginBlacklistStore;
+import com.zhiguang.be.auth.config.AuthJwtProperties;
 import com.zhiguang.be.auth.mapper.AuthUserMapper;
 import com.zhiguang.be.auth.model.ActionResult;
 import com.zhiguang.be.auth.model.AuthSessionData;
 import com.zhiguang.be.auth.model.AuthTokens;
 import com.zhiguang.be.auth.model.AuthUserEntity;
+import com.zhiguang.be.auth.model.AuthUserResponse;
+import com.zhiguang.be.auth.model.ClientInfo;
 import com.zhiguang.be.auth.model.LoginRequest;
 import com.zhiguang.be.auth.model.PasswordResetRequest;
 import com.zhiguang.be.auth.model.RegisterRequest;
-import com.zhiguang.be.auth.model.CodeScene;
-import com.zhiguang.be.auth.security.CaptchaVerifier;
+import com.zhiguang.be.auth.model.RegisterResult;
+import com.zhiguang.be.auth.model.SendCodeRequest;
+import com.zhiguang.be.auth.model.SendCodeResponse;
+import com.zhiguang.be.auth.security.IdentifierValidator;
 import com.zhiguang.be.auth.security.LoginFailureTracker;
 import com.zhiguang.be.auth.service.AuthService;
-import com.zhiguang.be.auth.service.VerificationCodeService;
 import com.zhiguang.be.auth.token.JwtService;
 import com.zhiguang.be.auth.token.RefreshTokenClaims;
 import com.zhiguang.be.auth.token.RefreshTokenStore;
+import com.zhiguang.be.auth.verification.VerificationScene;
+import com.zhiguang.be.auth.verification.VerificationService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
-import com.zhiguang.be.common.util.SnowflakeIdGenerator;
+import com.zhiguang.be.common.id.SnowflakeIdGenerator;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import java.time.Duration;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * 认证服务实现。
- * 负责串联用户注册、登录、令牌刷新、登出和密码重置等完整认证流程。
+ * 负责串联验证码、注册、登录、刷新令牌、登出、重置密码和 /me 查询。
  */
 @Service
 public class AuthServiceImpl implements AuthService {
@@ -40,221 +53,199 @@ public class AuthServiceImpl implements AuthService {
     private final RefreshTokenStore refreshTokenStore;
     private final AuthUserMapper authUserMapper;
     private final LoginBlacklistStore loginBlacklistStore;
+    private final AuthBlocklistService blocklistService;
     private final PasswordEncoder passwordEncoder;
     private final LoginFailureTracker failureTracker;
-    private final CaptchaVerifier captchaVerifier;
-    private final VerificationCodeService verificationCodeService;
+    private final VerificationService verificationService;
     private final AuditLogger auditLogger;
+    private final LoginLogService loginLogService;
+    private final AuthJwtProperties authJwtProperties;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     /**
-     * 构造认证服务实现并注入所有流程依赖。
+     * 构造认证服务实现。
      *
      * @param jwtService JWT 服务
      * @param refreshTokenStore 刷新令牌存储
-     * @param authUserMapper 用户数据访问组件
+     * @param authUserMapper 认证用户持久层
      * @param loginBlacklistStore 登录黑名单存储
+     * @param blocklistService 认证黑名单写入服务
      * @param passwordEncoder 密码编码器
      * @param failureTracker 登录失败跟踪器
-     * @param captchaVerifier 验证码校验器
-     * @param verificationCodeService 验证码服务
+     * @param verificationService 验证码服务
      * @param auditLogger 审计日志组件
-     * @param snowflakeIdGenerator 雪花算法ID生成器
+     * @param loginLogService 登录日志服务
+     * @param authJwtProperties JWT 配置
+     * @param snowflakeIdGenerator 雪花算法 ID 生成器
      */
     public AuthServiceImpl(
             JwtService jwtService,
             RefreshTokenStore refreshTokenStore,
             AuthUserMapper authUserMapper,
             LoginBlacklistStore loginBlacklistStore,
+            AuthBlocklistService blocklistService,
             PasswordEncoder passwordEncoder,
             LoginFailureTracker failureTracker,
-            CaptchaVerifier captchaVerifier,
-            VerificationCodeService verificationCodeService,
+            VerificationService verificationService,
             AuditLogger auditLogger,
+            LoginLogService loginLogService,
+            AuthJwtProperties authJwtProperties,
             SnowflakeIdGenerator snowflakeIdGenerator
     ) {
         this.jwtService = jwtService;
         this.refreshTokenStore = refreshTokenStore;
         this.authUserMapper = authUserMapper;
         this.loginBlacklistStore = loginBlacklistStore;
+        this.blocklistService = blocklistService;
         this.passwordEncoder = passwordEncoder;
         this.failureTracker = failureTracker;
-        this.captchaVerifier = captchaVerifier;
-        this.verificationCodeService = verificationCodeService;
+        this.verificationService = verificationService;
         this.auditLogger = auditLogger;
+        this.loginLogService = loginLogService;
+        this.authJwtProperties = authJwtProperties;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
     }
 
     /**
-     * 注册新用户并立即签发登录令牌。
-     * 该流程会先校验短信验证码，再标准化手机号和用户名，最后执行原子保存，避免并发注册造成重复账号。
+     * 发送开发态验证码。
+     * 注册场景要求手机号未注册，登录和重置密码场景要求目标账号已存在。
      *
-     * @param request 注册请求
-     * @return 注册后的会话信息
+     * @param request 发送验证码请求
+     * @return 发送结果
      */
     @Override
-    public AuthSessionData register(RegisterRequest request) {
-        String phone = normalizeIdentifier(request.phone());
-        String username = normalizeIdentifier(request.username());
+    public SendCodeResponse sendCode(SendCodeRequest request) {
+        String identifier = normalizeIdentifier(request.identifier());
+        VerificationScene scene = request.scene();
+        validateSendCodeIdentifier(scene, identifier);
+        String phone = resolveSendCodePhone(scene, identifier);
 
-        // 校验短信验证码
-        if (!verificationCodeService.verify(phone, CodeScene.REGISTER, request.smsCode())) {
-            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "Invalid SMS code"));
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
-        }
+        SendCodeResponse response = verificationService.sendCode(scene, phone);
+        auditLogger.log(AuditEvent.of("SEND_CODE_SUCCESS", identifier, true, "验证码发送成功，scene=" + scene.value()));
+        return response;
+    }
+
+    /**
+     * 注册新用户。
+     * 仅完成验证码校验、账号创建和密码加密落库，不自动登录。
+     *
+     * @param request 注册请求
+     * @param clientInfo 客户端信息
+     * @return 注册结果
+     */
+    @Override
+    public RegisterResult register(RegisterRequest request, ClientInfo clientInfo) {
+        String phone = normalizeIdentifier(request.phone());
+        String accountName = normalizeAccount(request.account());
+        validateRegisterInput(phone, accountName);
+        verificationService.verifyOrThrow(VerificationScene.REGISTER, phone, request.smsCode());
+
+        ensureRegisterTargetAvailable(phone, accountName);
 
         String userId = String.valueOf(snowflakeIdGenerator.nextId());
         String encodedPassword = passwordEncoder.encode(request.password());
-        AuthUserEntity account = new AuthUserEntity(userId, phone, username, request.nickname(), encodedPassword);
+        AuthUserEntity account = new AuthUserEntity(userId, phone, accountName, request.nickname(), encodedPassword);
 
-        if (!authUserMapper.saveIfPhoneAbsent(account)) {
-            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "Phone or username already exists"));
-            throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
+        if (!authUserMapper.saveIfAbsent(account)) {
+            throw resolveRegisterConflict(phone, accountName);
         }
 
-        AuthTokens tokens = issueAndStoreTokens(userId);
-        auditLogger.log(AuditEvent.of("REGISTER_SUCCESS", phone, true, "User registered"));
-        return new AuthSessionData(userId, tokens);
+        auditLogger.log(AuditEvent.of("REGISTER_SUCCESS", phone, true, "用户注册成功，等待登录"));
+        loginLogService.record(userId, phone, "REGISTER", safeIp(clientInfo), safeUserAgent(clientInfo), "SUCCESS", "注册成功");
+        return new RegisterResult(userId, phone, accountName, "login", "registered");
     }
 
     /**
      * 执行登录流程。
-     * 支持密码登录和验证码登录两种方式。
+     * 依次处理风控、黑名单、验证码挑战、密码校验和双令牌签发。
      *
      * @param request 登录请求
+     * @param clientInfo 客户端信息
      * @return 登录成功后的会话信息
      */
     @Override
-    public AuthSessionData login(LoginRequest request) {
+    public AuthSessionData login(LoginRequest request, ClientInfo clientInfo) {
         String identifier = normalizeIdentifier(request.identifier());
+        String channel = resolveLoginLogChannel(request);
+        validateLoginIdentifier(identifier);
 
-        // 判断登录方式
-        boolean isSmsLogin = request.smsCode() != null && !request.smsCode().isBlank();
-        boolean isPasswordLogin = request.password() != null && !request.password().isBlank();
-
-        if (!isSmsLogin && !isPasswordLogin) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "密码或验证码必须提供其一");
-        }
-
-        // 验证码登录
-        if (isSmsLogin) {
-            return loginWithSmsCode(identifier, request.smsCode());
-        }
-
-        // 密码登录
-        return loginWithPassword(identifier, request);
-    }
-
-    /**
-     * 验证码登录。
-     */
-    private AuthSessionData loginWithSmsCode(String identifier, String smsCode) {
-        // 验证验证码
-        if (!verificationCodeService.verify(identifier, CodeScene.LOGIN, smsCode)) {
-            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid SMS code"));
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
-        }
-
-        // 查找用户
-        AuthUserEntity account = authUserMapper.findByPhone(identifier)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_REGISTERED, HttpStatus.UNAUTHORIZED));
-
-        // 检查黑名单
-        if (loginBlacklistStore.isBlocked(account.userId())) {
-            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Account blacklisted"));
-            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
-        }
-
-        // 登录成功
-        AuthTokens tokens = issueAndStoreTokens(account.userId());
-        auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "User logged in with SMS"));
-        return new AuthSessionData(account.userId(), tokens);
-    }
-
-    /**
-     * 密码登录。
-     */
-    private AuthSessionData loginWithPassword(String identifier, LoginRequest request) {
-        // 检查是否因失败次数过多而被临时封禁
-        if (failureTracker.shouldBlock(identifier)) {
-            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Too many failed attempts"));
-            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
-        }
-
-        // 图形验证码校验（如果需要）
-        if (failureTracker.requiresCaptcha(identifier)) {
-            if (request.captchaToken() == null || request.captchaToken().isBlank()) {
-                auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Captcha required"));
-                throw new BusinessException(ErrorCode.CAPTCHA_REQUIRED, HttpStatus.BAD_REQUEST);
+        try {
+            ensureIdentifierNotBlocked(identifier);
+        } catch (BusinessException ex) {
+            if (ex.errorCode() == ErrorCode.LOGIN_BLOCKED) {
+                loginLogService.record(null, identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "BLOCKED", ex.getMessage());
             }
-            if (!captchaVerifier.verify(request.captchaToken())) {
-                failureTracker.recordFailure(identifier);
-                auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid captcha"));
-                throw new BusinessException(ErrorCode.INVALID_CAPTCHA, HttpStatus.BAD_REQUEST);
-            }
+            throw ex;
         }
 
-        // 查找用户
-        AuthUserEntity account = authUserMapper.findByPhoneOrUsername(identifier).orElse(null);
-
+        AuthUserEntity account = authUserMapper.findByIdentifier(identifier).orElse(null);
         if (account == null) {
-            passwordEncoder.matches(request.password(), "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy");
-            failureTracker.recordFailure(identifier);
-            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "User not registered"));
-            throw new BusinessException(ErrorCode.USER_NOT_REGISTERED, HttpStatus.UNAUTHORIZED);
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "账号未注册"));
+            loginLogService.record(null, identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "FAILED", "账号未注册");
+            throw new BusinessException(ErrorCode.ACCOUNT_NOT_FOUND, HttpStatus.NOT_FOUND);
         }
 
-        // 检查黑名单
-        if (loginBlacklistStore.isBlocked(account.userId())) {
-            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "Account blacklisted"));
-            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        try {
+            ensureAccountNotBlocked(account, identifier);
+            validateCaptchaWhenRequired(identifier, account, request.captchaCode());
+        } catch (BusinessException ex) {
+            if (ex.errorCode() == ErrorCode.LOGIN_BLOCKED) {
+                loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "BLOCKED", ex.getMessage());
+            } else if (ex.errorCode() == ErrorCode.CAPTCHA_REQUIRED || ex.errorCode() == ErrorCode.INVALID_CAPTCHA) {
+                loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "FAILED", ex.getMessage());
+            }
+            throw ex;
         }
 
-        // 验证密码
         if (!passwordEncoder.matches(request.password(), account.passwordHash())) {
-            failureTracker.recordFailure(identifier);
-            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "Invalid password"));
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
+            recordFailure(identifier, account);
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "密码错误"));
+            loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "FAILED", "密码错误");
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "密码错误");
         }
 
-        // 登录成功
-        failureTracker.reset(identifier);
+        resetFailures(identifier, account);
         AuthTokens tokens = issueAndStoreTokens(account.userId());
-        auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "User logged in with password"));
+        auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "用户登录成功"));
+        loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "SUCCESS", "登录成功");
         return new AuthSessionData(account.userId(), tokens);
     }
 
     /**
      * 使用刷新令牌换发新令牌。
-     * 刷新前会检查黑名单状态，并通过白名单存储保证刷新令牌只能消费一次。
+     * 删除旧 refresh 和写入新 refresh 由存储层原子完成。
      *
-     * @param refreshToken 刷新令牌字符串
-     * @return 新签发的令牌对
+     * @param refreshToken 刷新令牌
+     * @return 新的令牌对
      */
     @Override
     public AuthTokens refreshToken(String refreshToken) {
         RefreshTokenClaims claims = jwtService.verifyRefreshToken(refreshToken);
-
         AuthUserEntity account = authUserMapper.findByUserId(claims.userId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_REFRESH_TOKEN, HttpStatus.UNAUTHORIZED));
 
-        if (loginBlacklistStore.isBlocked(account.userId())) {
-            refreshTokenStore.removeAll(claims.userId());
+        if (isRefreshBlocked(account)) {
+            revokeAllSessionsAndBlockAccessTokens(claims.userId());
+            auditLogger.log(AuditEvent.of("REFRESH_FAILED", account.phone(), false, "命中登录黑名单"));
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        if (!refreshTokenStore.consumeIfValid(claims.userId(), claims.jti())) {
+        AuthTokens tokens = jwtService.issueTokens(claims.userId());
+        RefreshTokenClaims newClaims = jwtService.verifyRefreshToken(tokens.refreshToken());
+        if (!refreshTokenStore.rotate(claims.userId(), claims.jti(), newClaims.jti(), newClaims.expiresAt())) {
+            auditLogger.log(AuditEvent.of("REFRESH_FAILED", account.phone(), false, "刷新令牌已失效"));
             throw new BusinessException(ErrorCode.INVALID_REFRESH_TOKEN, HttpStatus.UNAUTHORIZED);
         }
 
-        return issueAndStoreTokens(claims.userId());
+        auditLogger.log(AuditEvent.of("REFRESH_SUCCESS", account.phone(), true, "刷新令牌成功"));
+        return tokens;
     }
 
     /**
-     * 执行登出操作。
-     * 根据登出范围选择只撤销当前刷新令牌，或撤销用户全部刷新令牌。
+     * 执行登出。
+     * 会撤销 refresh token，并记录一个按时间点生效的 access token 失效标记。
      *
-     * @param refreshToken 当前刷新令牌
+     * @param refreshToken 当前 refresh token
      * @param logoutScope 登出范围
      * @return 操作结果
      */
@@ -264,16 +255,19 @@ public class AuthServiceImpl implements AuthService {
         String scope = normalizeScope(logoutScope);
 
         if (ALL_DEVICES.equals(scope)) {
-            refreshTokenStore.removeAll(claims.userId());
+            revokeAllSessionsAndBlockAccessTokens(claims.userId());
         } else {
             refreshTokenStore.remove(claims.userId(), claims.jti());
+            blockAccessTokens(claims.userId());
         }
+
+        auditLogger.log(AuditEvent.of("LOGOUT_SUCCESS", claims.userId(), true, "用户登出成功"));
         return new ActionResult(true, "logout", claims.userId(), "done");
     }
 
     /**
-     * 重置用户密码并清理已有刷新令牌。
-     * 该流程会先校验短信验证码，再更新密码哈希并使历史会话失效。
+     * 重置密码。
+     * 校验验证码后更新密码哈希，并使旧会话和旧 access token 立即失效。
      *
      * @param request 重置密码请求
      * @return 操作结果
@@ -281,26 +275,341 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public ActionResult resetPassword(PasswordResetRequest request) {
         String phone = normalizeIdentifier(request.phone());
-
-        if (!verificationCodeService.verify(phone, CodeScene.RESET_PASSWORD, request.smsCode())) {
-            auditLogger.log(AuditEvent.of("PASSWORD_RESET_FAILED", phone, false, "Invalid SMS code"));
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED);
-        }
+        validatePhone(phone, "重置密码");
+        verificationService.verifyOrThrow(VerificationScene.PASSWORD_RESET, phone, request.smsCode());
 
         AuthUserEntity account = authUserMapper.findByPhone(phone)
-                .orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Phone not registered"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "手机号未注册"));
 
         String encodedPassword = passwordEncoder.encode(request.newPassword());
-        AuthUserEntity updated = account.withPasswordHash(encodedPassword);
-        authUserMapper.update(updated);
+        authUserMapper.update(account.withPasswordHash(encodedPassword));
+        resetFailures(phone, account);
+        revokeAllSessionsAndBlockAccessTokens(account.userId());
 
-        refreshTokenStore.removeAll(account.userId());
-        auditLogger.log(AuditEvent.of("PASSWORD_RESET_SUCCESS", phone, true, "Password reset completed"));
+        auditLogger.log(AuditEvent.of("PASSWORD_RESET_SUCCESS", phone, true, "密码重置成功"));
         return new ActionResult(true, "password_reset", account.userId(), "done");
     }
 
     /**
-     * 签发并持久化刷新令牌白名单。
+     * 查询当前用户信息。
+     *
+     * @param userId 当前登录用户 ID
+     * @return 认证域可见的最小用户信息
+     */
+    @Override
+    public AuthUserResponse me(String userId) {
+        AuthUserEntity account = authUserMapper.findByUserId(userId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "用户不存在"));
+        return new AuthUserResponse(account.userId(), account.phone(), account.account(), account.nickname());
+    }
+
+    /**
+     * 解析 send-code 的目标手机号。
+     *
+     * @param scene 验证码场景
+     * @param identifier 发送目标
+     * @return 实际保存验证码的手机号
+     */
+    private String resolveSendCodePhone(VerificationScene scene, String identifier) {
+        if (scene == VerificationScene.REGISTER) {
+            if (authUserMapper.existsByPhone(identifier)) {
+                auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "注册场景手机号已存在"));
+                throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
+            }
+            return identifier;
+        }
+
+        AuthUserEntity account = authUserMapper.findByIdentifier(identifier).orElse(null);
+        if (account == null) {
+            auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标未注册"));
+            throw new BusinessException(ErrorCode.ACCOUNT_NOT_FOUND, HttpStatus.NOT_FOUND);
+        }
+        return account.phone();
+    }
+
+    /**
+     * 校验 send-code 入口标识格式。
+     *
+     * @param scene 验证码场景
+     * @param identifier 发送目标
+     */
+    private void validateSendCodeIdentifier(VerificationScene scene, String identifier) {
+        if (scene == VerificationScene.REGISTER) {
+            if (!IdentifierValidator.isValidPhone(identifier)) {
+                auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "注册场景手机号格式不正确"));
+                throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "注册场景必须传合法手机号");
+            }
+            return;
+        }
+
+        if (!IdentifierValidator.isValidPhoneOrAccount(identifier)) {
+            auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标格式不正确"));
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "发送目标必须为手机号或账号");
+        }
+    }
+
+    /**
+     * 校验注册输入格式。
+     *
+     * @param phone 注册手机号
+     * @param account 注册账号
+     */
+    private void validateRegisterInput(String phone, String account) {
+        validatePhone(phone, "注册");
+        validateAccount(account, "注册账号");
+    }
+
+    /**
+     * 校验登录标识格式。
+     *
+     * @param identifier 登录标识
+     */
+    private void validateLoginIdentifier(String identifier) {
+        if (!IdentifierValidator.isValidPhoneOrAccount(identifier)) {
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "登录标识格式不正确"));
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "登录标识必须为手机号或账号");
+        }
+    }
+
+    /**
+     * 校验手机号格式。
+     *
+     * @param phone 手机号
+     * @param scene 场景说明
+     */
+    private void validatePhone(String phone, String scene) {
+        if (!IdentifierValidator.isValidPhone(phone)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, scene + "手机号格式不正确");
+        }
+    }
+
+    /**
+     * 校验账号格式。
+     *
+     * @param account 账号
+     * @param scene 场景说明
+     */
+    private void validateAccount(String account, String scene) {
+        if (!IdentifierValidator.isValidAccount(account)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, scene + "格式不正确");
+        }
+    }
+
+    /**
+     * 检查注册目标是否可用。
+     *
+     * @param phone 手机号
+     * @param account 账号
+     */
+    private void ensureRegisterTargetAvailable(String phone, String account) {
+        if (authUserMapper.existsByPhone(phone)) {
+            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "手机号已注册"));
+            throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
+        }
+
+        if (authUserMapper.existsByAccount(account)) {
+            auditLogger.log(AuditEvent.of("REGISTER_FAILED", account, false, "账号已存在"));
+            throw new BusinessException(ErrorCode.ACCOUNT_EXISTS, HttpStatus.CONFLICT);
+        }
+    }
+
+    /**
+     * 解析并发注册时的最终冲突原因。
+     *
+     * @param phone 手机号
+     * @param account 账号
+     * @return 对应业务异常
+     */
+    private BusinessException resolveRegisterConflict(String phone, String account) {
+        if (authUserMapper.existsByPhone(phone)) {
+            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "手机号已注册"));
+            return new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
+        }
+        if (authUserMapper.existsByAccount(account)) {
+            auditLogger.log(AuditEvent.of("REGISTER_FAILED", account, false, "账号已存在"));
+            return new BusinessException(ErrorCode.ACCOUNT_EXISTS, HttpStatus.CONFLICT);
+        }
+        return new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.CONFLICT, "注册信息提交失败");
+    }
+
+    /**
+     * 在查出账号前，先按原始标识检查失败次数和黑名单。
+     *
+     * @param identifier 登录标识
+     */
+    private void ensureIdentifierNotBlocked(String identifier) {
+        if (failureTracker.shouldBlock(identifier)) {
+            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "登录失败次数过多"));
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+
+        if (loginBlacklistStore.isBlocked(identifier)) {
+            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", identifier, false, "命中登录黑名单"));
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+    }
+
+    /**
+     * 在查出账号后，检查用户 ID、手机号和账号名是否命中黑名单或失败阈值。
+     *
+     * @param account 用户实体
+     * @param identifier 原始登录标识
+     */
+    private void ensureAccountNotBlocked(AuthUserEntity account, String identifier) {
+        ensureUserIdNotBlocked(account.userId());
+
+        Set<String> identifiers = relatedIdentifiers(identifier, account);
+        identifiers.remove(identifier);
+        for (String relatedIdentifier : identifiers) {
+            if (failureTracker.shouldBlock(relatedIdentifier)) {
+                auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", relatedIdentifier, false, "登录失败次数过多"));
+                throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+            }
+            if (loginBlacklistStore.isBlocked(relatedIdentifier)) {
+                auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", relatedIdentifier, false, "命中登录黑名单"));
+                throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+            }
+        }
+    }
+
+    /**
+     * 检查用户 ID 是否命中登录黑名单。
+     *
+     * @param userId 用户 ID
+     */
+    private void ensureUserIdNotBlocked(String userId) {
+        if (loginBlacklistStore.isBlocked(userId)) {
+            auditLogger.log(AuditEvent.of("LOGIN_BLOCKED", userId, false, "命中用户黑名单"));
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+    }
+
+    /**
+     * 命中风控阈值后，要求并校验登录验证码。
+     *
+     * @param identifier 原始登录标识
+     * @param account 用户实体
+     * @param captchaCode 登录验证码
+     */
+    private void validateCaptchaWhenRequired(String identifier, AuthUserEntity account, String captchaCode) {
+        boolean captchaRequired = relatedIdentifiers(identifier, account)
+                .stream()
+                .anyMatch(failureTracker::requiresCaptcha);
+        if (!captchaRequired) {
+            return;
+        }
+
+        if (!StringUtils.hasText(captchaCode)) {
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "缺少登录验证码"));
+            throw new BusinessException(ErrorCode.CAPTCHA_REQUIRED, HttpStatus.BAD_REQUEST);
+        }
+
+        try {
+            verificationService.verifyOrThrow(VerificationScene.LOGIN, account.phone(), captchaCode);
+        } catch (BusinessException ex) {
+            if (ex.errorCode() == ErrorCode.INVALID_SMS_CODE
+                    || ex.errorCode() == ErrorCode.VERIFICATION_MISMATCH
+                    || ex.errorCode() == ErrorCode.VERIFICATION_NOT_FOUND
+                    || ex.errorCode() == ErrorCode.VERIFICATION_EXPIRED) {
+                recordFailure(identifier, account);
+                auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "登录验证码校验失败"));
+                throw mapCaptchaVerificationException(ex);
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * 把验证码异常映射成登录接口语义。
+     *
+     * @param ex 验证码异常
+     * @return 映射后的登录异常
+     */
+    private BusinessException mapCaptchaVerificationException(BusinessException ex) {
+        if (ex.errorCode() == ErrorCode.VERIFICATION_MISMATCH) {
+            return new BusinessException(ErrorCode.INVALID_CAPTCHA, HttpStatus.BAD_REQUEST, "登录验证码错误");
+        }
+        if (ex.errorCode() == ErrorCode.VERIFICATION_EXPIRED) {
+            return new BusinessException(ErrorCode.INVALID_CAPTCHA, HttpStatus.BAD_REQUEST, "登录验证码已过期");
+        }
+        if (ex.errorCode() == ErrorCode.VERIFICATION_NOT_FOUND) {
+            return new BusinessException(ErrorCode.INVALID_CAPTCHA, HttpStatus.BAD_REQUEST, "登录验证码不存在或已失效");
+        }
+        return new BusinessException(ErrorCode.INVALID_CAPTCHA, HttpStatus.BAD_REQUEST, "登录验证码错误或已过期");
+    }
+
+    /**
+     * 同步累计同一账号相关标识的失败次数。
+     *
+     * @param identifier 原始登录标识
+     * @param account 用户实体
+     */
+    private void recordFailure(String identifier, AuthUserEntity account) {
+        for (String relatedIdentifier : relatedIdentifiers(identifier, account)) {
+            failureTracker.recordFailure(relatedIdentifier);
+        }
+    }
+
+    /**
+     * 登录成功或重置密码后，清理账号相关标识上的失败次数。
+     *
+     * @param identifier 原始登录标识
+     * @param account 用户实体
+     */
+    private void resetFailures(String identifier, AuthUserEntity account) {
+        for (String relatedIdentifier : relatedIdentifiers(identifier, account)) {
+            failureTracker.reset(relatedIdentifier);
+        }
+    }
+
+    /**
+     * 汇总同一账号相关的登录标识。
+     *
+     * @param identifier 原始登录标识
+     * @param account 用户实体
+     * @return 关联标识集合
+     */
+    private Set<String> relatedIdentifiers(String identifier, AuthUserEntity account) {
+        LinkedHashSet<String> identifiers = new LinkedHashSet<>();
+        if (StringUtils.hasText(identifier)) {
+            identifiers.add(identifier);
+        }
+        if (account != null && StringUtils.hasText(account.phone())) {
+            identifiers.add(account.phone());
+        }
+        if (account != null && StringUtils.hasText(account.account())) {
+            identifiers.add(account.account());
+        }
+        return identifiers;
+    }
+
+    /**
+     * 判断任意标识是否命中登录黑名单。
+     *
+     * @param identifiers 标识集合
+     * @return 命中返回 true，否则返回 false
+     */
+    private boolean isAnyBlocked(Set<String> identifiers) {
+        for (String identifier : identifiers) {
+            if (loginBlacklistStore.isBlocked(identifier)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 判断 refresh 流程是否命中黑名单。
+     *
+     * @param account 用户实体
+     * @return 命中返回 true，否则返回 false
+     */
+    private boolean isRefreshBlocked(AuthUserEntity account) {
+        return loginBlacklistStore.isBlocked(account.userId()) || isAnyBlocked(relatedIdentifiers(null, account));
+    }
+
+    /**
+     * 签发并落库 refresh token 白名单。
      *
      * @param userId 用户 ID
      * @return 双令牌结果
@@ -313,14 +622,13 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 规范化登出范围参数。
-     * 非法值会回退为只退出当前设备。
+     * 规范化登出范围。
      *
-     * @param logoutScope 原始登出范围
+     * @param logoutScope 原始范围
      * @return 规范化后的范围值
      */
     private String normalizeScope(String logoutScope) {
-        if (logoutScope == null || logoutScope.isBlank()) {
+        if (!StringUtils.hasText(logoutScope)) {
             return CURRENT_DEVICE;
         }
         if (ALL_DEVICES.equals(logoutScope) || CURRENT_DEVICE.equals(logoutScope)) {
@@ -330,15 +638,85 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 对登录标识做最基础的标准化处理。
+     * 规范化标识文本。
      *
      * @param identifier 原始标识
-     * @return 去除首尾空白后的标识，空值时返回空字符串
+     * @return 去除前后空白后的结果
      */
     private String normalizeIdentifier(String identifier) {
-        if (identifier == null) {
-            return "";
+        return identifier == null ? "" : identifier.trim();
+    }
+
+    /**
+     * 规范化账号文本。
+     *
+     * @param account 原始账号
+     * @return 规范化结果
+     */
+    private String normalizeAccount(String account) {
+        return normalizeIdentifier(account);
+    }
+
+    /**
+     * 解析登录日志中的认证方式。
+     * 参考 zhiguang，记录 PASSWORD/CODE，而不是前端平台来源。
+     *
+     * @param request 登录请求
+     * @return 认证方式
+     */
+    private String resolveLoginLogChannel(LoginRequest request) {
+        if (StringUtils.hasText(request.password())) {
+            return "PASSWORD";
         }
-        return identifier.trim();
+        return "CODE";
+    }
+
+    /**
+     * 计算 access token 失效黑名单的保留时长。
+     *
+     * @return 黑名单 TTL
+     */
+    private Duration accessTokenBlocklistTtl() {
+        long minutes = Math.max(authJwtProperties.getAccessTokenTtlMinutes(), 1L);
+        return Duration.ofMinutes(minutes);
+    }
+
+    /**
+     * 记录 access token 失效时间点。
+     * 这样旧 token 会立刻失效，但之后重新登录签发的新 token 不会被连带阻塞。
+     *
+     * @param userId 用户 ID
+     */
+    private void blockAccessTokens(String userId) {
+        blocklistService.blockAccessTokens(userId, accessTokenBlocklistTtl());
+    }
+
+    /**
+     * 撤销全部 refresh token，并同步记录 access token 失效时间点。
+     *
+     * @param userId 用户 ID
+     */
+    private void revokeAllSessionsAndBlockAccessTokens(String userId) {
+        blocklistService.revokeAllSessionsAndBlockAccessTokens(userId, accessTokenBlocklistTtl());
+    }
+
+    /**
+     * 安全读取客户端 IP。
+     *
+     * @param clientInfo 客户端信息
+     * @return 客户端 IP
+     */
+    private String safeIp(ClientInfo clientInfo) {
+        return clientInfo == null ? null : clientInfo.ip();
+    }
+
+    /**
+     * 安全读取客户端 User-Agent。
+     *
+     * @param clientInfo 客户端信息
+     * @return 客户端 User-Agent
+     */
+    private String safeUserAgent(ClientInfo clientInfo) {
+        return clientInfo == null ? null : clientInfo.userAgent();
     }
 }

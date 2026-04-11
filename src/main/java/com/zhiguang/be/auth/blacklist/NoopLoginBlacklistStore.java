@@ -16,33 +16,19 @@ public class NoopLoginBlacklistStore implements LoginBlacklistStore {
     /**
      * 始终返回未命中黑名单。
      *
-     * @param userId 用户 ID
+     * @param identifier 登录标识
      * @return 固定返回 false
      */
     @Override
-    public boolean isBlocked(String userId) {
+    public boolean isBlocked(String identifier) {
         return false;
     }
 
-    /**
-     * 空操作，不执行任何封禁逻辑。
-     *
-     * @param userId 用户 ID
-     * @param reason 封禁原因
-     * @param ttl 过期时间
-     */
     @Override
-    public void block(String userId, String reason, Duration ttl) {
-        // 空实现，不执行任何操作
+    public void block(String identifier, Duration ttl) {
     }
 
-    /**
-     * 空操作，不执行任何解封逻辑。
-     *
-     * @param userId 用户 ID
-     */
     @Override
-    public void unblock(String userId) {
-        // 空实现，不执行任何操作
+    public void unblock(String identifier) {
     }
 }

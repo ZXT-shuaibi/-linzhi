@@ -1,6 +1,7 @@
 package com.zhiguang.be.auth.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.auth.security.ProtectedApiBlacklistFilter;
 import com.zhiguang.be.common.api.ErrorResponse;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.web.filter.RequestIdFilter;
@@ -44,6 +45,7 @@ public class SecurityConfiguration {
             HttpSecurity http,
             @Qualifier("accessJwtDecoder") JwtDecoder accessJwtDecoder,
             RequestIdFilter requestIdFilter,
+            ProtectedApiBlacklistFilter protectedApiBlacklistFilter,
             ObjectMapper objectMapper
     ) throws Exception {
         http
@@ -51,9 +53,11 @@ public class SecurityConfiguration {
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
+                                "/api/v1/auth/send-code",
                                 "/api/v1/auth/login",
                                 "/api/v1/auth/register",
                                 "/api/v1/auth/token/refresh",
+                                "/api/v1/auth/logout",
                                 "/api/v1/auth/password/reset",
                                 "/api/v1/_meta/ping",
                                 "/actuator/health",
@@ -63,6 +67,7 @@ public class SecurityConfiguration {
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(accessJwtDecoder)))
                 .addFilterBefore(requestIdFilter, BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(protectedApiBlacklistFilter, BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) ->
                                 writeError(response, HttpServletResponse.SC_UNAUTHORIZED, ErrorCode.UNAUTHORIZED, objectMapper))
