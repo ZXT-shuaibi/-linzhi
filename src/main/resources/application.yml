@@ -1,10 +1,18 @@
 spring:
   application:
     name: zhiguang-be
+  datasource:
+    url: jdbc:h2:file:./data/linli-auth;MODE=MySQL;DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
   data:
     redis:
       host: localhost
       port: 6379
+  sql:
+    init:
+      mode: always
 
 server:
   port: 8080
@@ -16,9 +24,20 @@ management:
         include: health,info
 
 security:
+  user-store: jdbc
   refresh-store: redis
   login-blacklist:
     enabled: true
+  login-risk:
+    captcha-threshold: 3
+    block-threshold: 10
+    failure-ttl-minutes: 30
+  verification:
+    code-ttl-minutes: 10
+    code-length: 6
+    max-attempts: 5
+    send-interval-seconds: 60
+    daily-limit: 10
   jwt:
     issuer: zhiguang-be
     key-id: zhiguang-rsa
@@ -26,4 +45,4 @@ security:
     refresh-token-ttl-days: 7
     public-key: ""
     private-key: ""
-    allow-ephemeral-keys: false
+    allow-ephemeral-keys: true

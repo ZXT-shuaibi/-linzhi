@@ -35,7 +35,12 @@
 
 ### 分层架构
 
-项目采用 12 模块分层架构，每个模块遵循统一的目录规范：
+项目采用“领域模块化单体 + 统一分层”的架构模式，模块分为两大类：
+
+- **核心业务模块**：面向用户直接感知的业务场景，如认证、发现、内容、Feed、社交、交易、AI 问答
+- **基础支持模块**：为业务模块提供通用能力，如线程池、防护、一致性、数据访问规范、平台治理
+
+每个模块遵循统一的目录规范：
 
 ```
 模块名/
@@ -54,6 +59,8 @@
 4. 公共工具统一放 `common`，不得放业务逻辑
 
 ## 核心模块
+
+### 核心业务模块
 
 ### 1. auth - 认证模块 ✅
 **状态**：已完成
@@ -203,6 +210,8 @@ feed:segment:{geo_hash}:{timestamp}
 2. 下单防重：用户维度分布式锁
 3. 订单表 `version` 乐观锁字段
 4. 数据回写：库存最终状态同步 Redis 与 ES
+
+### 基础支持模块
 
 ### 8. threadpool - 线程池模块
 **功能**：异步任务编排
@@ -367,6 +376,170 @@ graph TD
     AUTH & SECKILL -.-> REDIS["限流"]
     ALL[所有写操作] -.-> CONSIST
     CONSIST -.-> REDIS & ES & FEED
+```
+
+### 认证模块流程
+
+```mermaid
+flowchart TD
+    Start([认证模块入口])
+
+    Start --> Choice{选择操作}
+
+    Choice -->|1| SendCode[发送验证码]
+    Choice -->|2| Register[用户注册]
+    Choice -->|3| PwdLogin[密码登录]
+    Choice -->|4| SmsLogin[验证码登录]
+    Choice -->|5| Refresh[刷新令牌]
+    Choice -->|6| Logout[用户登出]
+    Choice -->|7| ResetPwd[重置密码]
+
+    %% 流程1: 发送验证码
+    SendCode --> SC1{检查发送间隔<br/>60秒}
+    SC1 -->|未满60秒| SC_Fail1[返回429: 请等待]
+    SC1 -->|已满60秒| SC2{检查每日上限<br/>10次}
+    SC2 -->|已达上限| SC_Fail2[返回429: 今日已达上限]
+    SC2 -->|未达上限| SC3[生成6位验证码]
+    SC3 --> SC4[Redis HSET<br/>auth:code:scene:phone<br/>code/maxAttempts:5/attempts:0]
+    SC4 --> SC5[设置过期时间 5分钟]
+    SC5 --> SC6[Redis SET interval key<br/>过期60秒]
+    SC6 --> SC7[Redis INCR daily key]
+    SC7 --> SC_Success[返回200: 验证码已发送]
+
+    %% 流程2: 用户注册
+    Register --> R1[验证码校验<br/>Lua脚本原子操作]
+    R1 --> R2{验证码是否有效}
+    R2 -->|无效/过期/超限| R_Fail1[审计日志<br/>返回401: 验证码错误]
+    R2 -->|有效| R3[生成雪花ID]
+    R3 --> R4[BCrypt加密密码]
+    R4 --> R5[MySQL saveIfPhoneAbsent]
+    R5 --> R6{手机号是否存在}
+    R6 -->|已存在| R_Fail2[审计日志<br/>返回409: 手机号已注册]
+    R6 -->|不存在| R7[签发JWT双令牌<br/>Access 15min + Refresh 7days]
+    R7 --> R8[解析Refresh Token<br/>获取jti和expiresAt]
+    R8 --> R9[Redis SADD<br/>auth:refresh:userId jti]
+    R9 --> R10[审计日志: 注册成功]
+    R10 --> R_Success[返回200: userId + tokens]
+
+    %% 流程3: 密码登录
+    PwdLogin --> PL1{检查失败次数<br/>是否>=10次}
+    PL1 -->|是| PL_Fail1[审计日志<br/>返回403: 账号锁定30分钟]
+    PL1 -->|否| PL2{失败次数>=3次}
+    PL2 -->|是| PL3{是否提供<br/>图形验证码}
+    PL3 -->|否| PL_Fail2[审计日志<br/>返回400: 需要验证码]
+    PL3 -->|是| PL4{验证码是否正确}
+    PL4 -->|否| PL5[记录失败次数]
+    PL5 --> PL_Fail3[审计日志<br/>返回400: 验证码错误]
+    PL2 -->|否| PL6[查询用户<br/>findByPhoneOrUsername]
+    PL4 -->|是| PL6
+    PL6 --> PL7{用户是否存在}
+    PL7 -->|否| PL8[执行dummy hash<br/>防止时序攻击]
+    PL8 --> PL9[记录失败次数]
+    PL9 --> PL_Fail4[审计日志<br/>返回401: 用户不存在]
+    PL7 -->|是| PL10{检查黑名单<br/>Redis SISMEMBER}
+    PL10 -->|在黑名单| PL_Fail5[审计日志<br/>返回403: 账号已封禁]
+    PL10 -->|不在| PL11{验证密码<br/>BCrypt matches}
+    PL11 -->|错误| PL12[记录失败次数]
+    PL12 --> PL_Fail6[审计日志<br/>返回401: 密码错误]
+    PL11 -->|正确| PL13[重置失败计数]
+    PL13 --> PL14[签发JWT双令牌]
+    PL14 --> PL15[Redis SADD保存jti]
+    PL15 --> PL16[审计日志: 登录成功]
+    PL16 --> PL_Success[返回200: userId + tokens]
+
+    %% 流程4: 验证码登录
+    SmsLogin --> SL1[验证码校验<br/>Lua脚本原子操作]
+    SL1 --> SL2{验证码是否有效}
+    SL2 -->|无效| SL_Fail1[审计日志<br/>返回401: 验证码错误]
+    SL2 -->|有效| SL3[查询用户 findByPhone]
+    SL3 --> SL4{用户是否存在}
+    SL4 -->|否| SL_Fail2[返回401: 用户未注册]
+    SL4 -->|是| SL5{检查黑名单}
+    SL5 -->|在黑名单| SL_Fail3[审计日志<br/>返回403: 账号已封禁]
+    SL5 -->|不在| SL6[签发JWT双令牌]
+    SL6 --> SL7[Redis SADD保存jti]
+    SL7 --> SL8[审计日志: 登录成功]
+    SL8 --> SL_Success[返回200: userId + tokens]
+
+    %% 流程5: 刷新令牌
+    Refresh --> RF1[JWT验证Refresh Token]
+    RF1 --> RF2{令牌是否有效}
+    RF2 -->|无效/过期| RF_Fail1[返回401: 令牌无效]
+    RF2 -->|有效| RF3[解析userId/jti/expiresAt]
+    RF3 --> RF4[查询用户 findByUserId]
+    RF4 --> RF5{用户是否存在}
+    RF5 -->|否| RF_Fail2[返回401: 用户不存在]
+    RF5 -->|是| RF6{检查黑名单}
+    RF6 -->|在黑名单| RF7[清空所有refresh token<br/>Redis DEL]
+    RF7 --> RF_Fail3[返回403: 账号已封禁]
+    RF6 -->|不在| RF8[消费刷新令牌<br/>Redis SREM jti]
+    RF8 --> RF9{jti是否在白名单}
+    RF9 -->|否| RF_Fail4[返回401: 令牌已失效]
+    RF9 -->|是| RF10[签发新JWT双令牌]
+    RF10 --> RF11[Redis SADD保存新jti]
+    RF11 --> RF_Success[返回200: 新tokens]
+
+    %% 流程6: 用户登出
+    Logout --> LO1[JWT验证Refresh Token]
+    LO1 --> LO2[解析userId和jti]
+    LO2 --> LO3{登出范围}
+    LO3 -->|all_devices| LO4[Redis DEL<br/>auth:refresh:userId]
+    LO4 --> LO_Success1[返回200: 已登出所有设备]
+    LO3 -->|current_device| LO5[Redis SREM<br/>移除当前jti]
+    LO5 --> LO_Success2[返回200: 已登出当前设备]
+
+    %% 流程7: 重置密码
+    ResetPwd --> RP1[验证码校验<br/>Lua脚本原子操作]
+    RP1 --> RP2{验证码是否有效}
+    RP2 -->|无效| RP_Fail1[审计日志<br/>返回401: 验证码错误]
+    RP2 -->|有效| RP3[查询用户 findByPhone]
+    RP3 --> RP4{用户是否存在}
+    RP4 -->|否| RP_Fail2[返回400: 手机号未注册]
+    RP4 -->|是| RP5[BCrypt加密新密码]
+    RP5 --> RP6[MySQL更新密码]
+    RP6 --> RP7[清空所有refresh token<br/>Redis DEL]
+    RP7 --> RP8[审计日志: 密码重置成功]
+    RP8 --> RP_Success[返回200: 密码重置成功]
+
+    %% 结束节点
+    SC_Fail1 --> End([流程结束])
+    SC_Fail2 --> End
+    SC_Success --> End
+    R_Fail1 --> End
+    R_Fail2 --> End
+    R_Success --> End
+    PL_Fail1 --> End
+    PL_Fail2 --> End
+    PL_Fail3 --> End
+    PL_Fail4 --> End
+    PL_Fail5 --> End
+    PL_Fail6 --> End
+    PL_Success --> End
+    SL_Fail1 --> End
+    SL_Fail2 --> End
+    SL_Fail3 --> End
+    SL_Success --> End
+    RF_Fail1 --> End
+    RF_Fail2 --> End
+    RF_Fail3 --> End
+    RF_Fail4 --> End
+    RF_Success --> End
+    LO_Success1 --> End
+    LO_Success2 --> End
+    RP_Fail1 --> End
+    RP_Fail2 --> End
+    RP_Success --> End
+
+    %% 样式定义
+    classDef successStyle fill:#d4edda,stroke:#28a745,stroke-width:2px
+    classDef failStyle fill:#f8d7da,stroke:#dc3545,stroke-width:2px
+    classDef processStyle fill:#d1ecf1,stroke:#17a2b8,stroke-width:2px
+    classDef decisionStyle fill:#fff3cd,stroke:#ffc107,stroke-width:2px
+
+    class SC_Success,R_Success,PL_Success,SL_Success,RF_Success,LO_Success1,LO_Success2,RP_Success successStyle
+    class SC_Fail1,SC_Fail2,R_Fail1,R_Fail2,PL_Fail1,PL_Fail2,PL_Fail3,PL_Fail4,PL_Fail5,PL_Fail6,SL_Fail1,SL_Fail2,SL_Fail3,RF_Fail1,RF_Fail2,RF_Fail3,RF_Fail4,RP_Fail1,RP_Fail2 failStyle
+    class SendCode,Register,PwdLogin,SmsLogin,Refresh,Logout,ResetPwd,SC3,SC4,SC5,SC6,SC7,R3,R4,R5,R7,R8,R9,R10,PL6,PL8,PL9,PL13,PL14,PL15,PL16,SL1,SL3,SL6,SL7,SL8,RF1,RF3,RF4,RF8,RF10,RF11,LO1,LO2,LO4,LO5,RP3,RP5,RP6,RP7,RP8 processStyle
+    class Choice,SC1,SC2,R2,R6,PL1,PL2,PL3,PL4,PL7,PL10,PL11,SL2,SL4,SL5,RF2,RF5,RF6,RF9,LO3,RP2,RP4 decisionStyle
 ```
 
 ### 知识发布流程

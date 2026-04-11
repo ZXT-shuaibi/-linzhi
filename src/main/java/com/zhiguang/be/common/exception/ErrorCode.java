@@ -5,18 +5,25 @@ package com.zhiguang.be.common.exception;
  * 定义服务层和接口层会使用到的标准错误编码及默认文案。
  */
 public enum ErrorCode {
-    VALIDATION_ERROR("COMMON_400_VALIDATION", "Parameter validation failed"),
-    BAD_REQUEST("COMMON_400_BAD_REQUEST", "Bad request"),
-    UNAUTHORIZED("AUTH_401_UNAUTHORIZED", "Authentication failed"),
-    LOGIN_BLOCKED("AUTH_403_LOGIN_BLOCKED", "Login is blocked due to account risk"),
-    FORBIDDEN("COMMON_403_FORBIDDEN", "Access denied"),
-    INVALID_REFRESH_TOKEN("AUTH_401_REFRESH_REPLAY", "Refresh token invalid or revoked"),
-    PHONE_EXISTS("AUTH_409_PHONE_EXISTS", "Phone already registered"),
-    CAPTCHA_REQUIRED("AUTH_400_CAPTCHA_REQUIRED", "Captcha verification required"),
-    INVALID_CAPTCHA("AUTH_400_INVALID_CAPTCHA", "Captcha verification failed"),
-    NOT_FOUND("COMMON_404_NOT_FOUND", "Resource not found"),
-    RATE_LIMITED("COMMON_429_RATE_LIMIT", "Too many requests"),
-    INTERNAL_ERROR("COMMON_500_INTERNAL", "Internal server error");
+    VALIDATION_ERROR("COMMON_400_VALIDATION", "参数校验失败"),
+    BAD_REQUEST("COMMON_400_BAD_REQUEST", "请求参数错误"),
+    UNAUTHORIZED("AUTH_401_UNAUTHORIZED", "认证失败"),
+    LOGIN_BLOCKED("AUTH_403_LOGIN_BLOCKED", "当前账号登录受限"),
+    FORBIDDEN("COMMON_403_FORBIDDEN", "访问被拒绝"),
+    INVALID_REFRESH_TOKEN("AUTH_401_REFRESH_REPLAY", "刷新令牌已失效"),
+    PHONE_EXISTS("AUTH_409_PHONE_EXISTS", "手机号已注册"),
+    ACCOUNT_EXISTS("AUTH_409_ACCOUNT_EXISTS", "账号已存在"),
+    ACCOUNT_NOT_FOUND("AUTH_404_ACCOUNT_NOT_FOUND", "账号未注册"),
+    CAPTCHA_REQUIRED("AUTH_400_CAPTCHA_REQUIRED", "需要完成人机验证"),
+    INVALID_CAPTCHA("AUTH_400_INVALID_CAPTCHA", "人机验证失败"),
+    INVALID_SMS_CODE("AUTH_400_SMS_INVALID", "验证码错误或已过期"),
+    VERIFICATION_NOT_FOUND("AUTH_404_VERIFICATION_NOT_FOUND", "验证码不存在"),
+    VERIFICATION_EXPIRED("AUTH_400_VERIFICATION_EXPIRED", "验证码已过期"),
+    VERIFICATION_MISMATCH("AUTH_400_VERIFICATION_MISMATCH", "验证码错误"),
+    VERIFICATION_TOO_MANY_ATTEMPTS("AUTH_429_VERIFICATION_ATTEMPTS", "验证码尝试次数过多"),
+    NOT_FOUND("COMMON_404_NOT_FOUND", "资源不存在"),
+    RATE_LIMITED("AUTH_429_RATE_LIMIT", "操作过于频繁"),
+    INTERNAL_ERROR("COMMON_500_INTERNAL", "系统内部错误");
 
     private final String code;
     private final String defaultMessage;

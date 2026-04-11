@@ -1,6 +1,7 @@
 package com.zhiguang.be.auth.mapper;
 
 import com.zhiguang.be.auth.model.AuthUserEntity;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
@@ -11,9 +12,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * 主要用于开发调试或轻量测试场景，不依赖外部数据库。
  */
 @Repository
+@ConditionalOnProperty(name = "security.user-store", havingValue = "in-memory")
 public class InMemoryAuthUserMapper implements AuthUserMapper {
 
     private final ConcurrentHashMap<String, AuthUserEntity> usersByPhone = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AuthUserEntity> usersByAccount = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AuthUserEntity> usersByUserId = new ConcurrentHashMap<>();
 
     /**
@@ -28,6 +31,17 @@ public class InMemoryAuthUserMapper implements AuthUserMapper {
     }
 
     /**
+     * 判断账号是否已经注册。
+     *
+     * @param account 登录账号
+     * @return 已存在返回 true，否则返回 false
+     */
+    @Override
+    public boolean existsByAccount(String account) {
+        return usersByAccount.containsKey(account);
+    }
+
+    /**
      * 直接保存用户实体到两个索引表中。
      *
      * @param entity 用户实体
@@ -35,6 +49,7 @@ public class InMemoryAuthUserMapper implements AuthUserMapper {
     @Override
     public void save(AuthUserEntity entity) {
         usersByPhone.put(entity.phone(), entity);
+        usersByAccount.put(entity.account(), entity);
         usersByUserId.put(entity.userId(), entity);
     }
 
@@ -45,17 +60,14 @@ public class InMemoryAuthUserMapper implements AuthUserMapper {
      * @return 保存成功返回 true，否则返回 false
      */
     @Override
-    public boolean saveIfPhoneAbsent(AuthUserEntity entity) {
-        AuthUserEntity existed = usersByPhone.putIfAbsent(entity.phone(), entity);
-        if (existed != null) {
+    public synchronized boolean saveIfAbsent(AuthUserEntity entity) {
+        if (usersByPhone.containsKey(entity.phone()) || usersByAccount.containsKey(entity.account())
+                || usersByUserId.containsKey(entity.userId())) {
             return false;
         }
-
-        AuthUserEntity userIdConflict = usersByUserId.putIfAbsent(entity.userId(), entity);
-        if (userIdConflict != null) {
-            usersByPhone.remove(entity.phone(), entity);
-            return false;
-        }
+        usersByPhone.put(entity.phone(), entity);
+        usersByAccount.put(entity.account(), entity);
+        usersByUserId.put(entity.userId(), entity);
         return true;
     }
 
@@ -68,6 +80,17 @@ public class InMemoryAuthUserMapper implements AuthUserMapper {
     @Override
     public Optional<AuthUserEntity> findByPhone(String phone) {
         return Optional.ofNullable(usersByPhone.get(phone));
+    }
+
+    /**
+     * 按账号查找用户。
+     *
+     * @param account 登录账号
+     * @return 用户实体可选值
+     */
+    @Override
+    public Optional<AuthUserEntity> findByAccount(String account) {
+        return Optional.ofNullable(usersByAccount.get(account));
     }
 
     /**
@@ -89,6 +112,7 @@ public class InMemoryAuthUserMapper implements AuthUserMapper {
     @Override
     public void update(AuthUserEntity entity) {
         usersByPhone.put(entity.phone(), entity);
+        usersByAccount.put(entity.account(), entity);
         usersByUserId.put(entity.userId(), entity);
     }
 }

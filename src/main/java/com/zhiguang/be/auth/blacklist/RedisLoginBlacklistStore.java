@@ -4,9 +4,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+
 /**
  * 基于 Redis 的登录黑名单实现。
- * 通过固定前缀的 key 判断某个登录标识是否已被加入黑名单。
+ * 通过固定前缀的 key 判断某个登录标识是否已经被加入黑名单。
  * 约定 key 结构：auth:blacklist:login:{identifier}
  */
 @Component
@@ -18,7 +20,7 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
     private final StringRedisTemplate redisTemplate;
 
     /**
-     * 构造 Redis 黑名单存储实现。
+     * 构造 Redis 登录黑名单实现。
      *
      * @param redisTemplate Redis 字符串模板
      */
@@ -39,6 +41,38 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
         }
         Boolean exists = redisTemplate.hasKey(toKey(identifier));
         return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * 把指定标识写入 Redis 登录黑名单。
+     *
+     * @param identifier 登录标识
+     * @param ttl 黑名单有效时长，为空或非正数时不设置过期
+     */
+    @Override
+    public void block(String identifier, Duration ttl) {
+        if (identifier == null || identifier.isBlank()) {
+            return;
+        }
+        String key = toKey(identifier);
+        if (ttl == null || ttl.isNegative() || ttl.isZero()) {
+            redisTemplate.opsForValue().set(key, "1");
+            return;
+        }
+        redisTemplate.opsForValue().set(key, "1", ttl);
+    }
+
+    /**
+     * 从 Redis 登录黑名单中移除指定标识。
+     *
+     * @param identifier 登录标识
+     */
+    @Override
+    public void unblock(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
+            return;
+        }
+        redisTemplate.delete(toKey(identifier));
     }
 
     /**

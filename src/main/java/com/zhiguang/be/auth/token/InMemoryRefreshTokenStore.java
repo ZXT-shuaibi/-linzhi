@@ -73,6 +73,34 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
     }
 
     /**
+     * 原子轮换刷新令牌。
+     * 仅当旧令牌存在且未过期时，才会删除旧令牌并写入新的刷新令牌。
+     *
+     * @param userId 用户 ID
+     * @param oldJti 旧令牌唯一标识
+     * @param newJti 新令牌唯一标识
+     * @param newExpiresAt 新令牌过期时间
+     * @return 轮换成功返回 true，否则返回 false
+     */
+    @Override
+    public synchronized boolean rotate(String userId, String oldJti, String newJti, Instant newExpiresAt) {
+        String oldKey = toKey(userId, oldJti);
+        Instant oldExpiresAt = refreshKeyToExpiresAt.get(oldKey);
+        if (oldExpiresAt == null || Instant.now().isAfter(oldExpiresAt)) {
+            remove(userId, oldJti);
+            return false;
+        }
+
+        refreshKeyToExpiresAt.remove(oldKey);
+        removeUserIndex(userId, oldKey);
+
+        String newKey = toKey(userId, newJti);
+        refreshKeyToExpiresAt.put(newKey, newExpiresAt);
+        userToKeys.computeIfAbsent(userId, ignored -> ConcurrentHashMap.newKeySet()).add(newKey);
+        return true;
+    }
+
+    /**
      * 撤销单个刷新令牌。
      *
      * @param userId 用户 ID

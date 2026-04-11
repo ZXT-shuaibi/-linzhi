@@ -7,9 +7,8 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 基于 Redis 的刷新令牌白名单实现。
@@ -22,6 +21,8 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
     private static final String REFRESH_TOKEN_KEY_PREFIX = "auth:rt:";
     private static final String REFRESH_TOKEN_INDEX_PREFIX = "auth:rt:index:";
     private static final DefaultRedisScript<Long> CONSUME_SCRIPT = new DefaultRedisScript<>();
+    private static final DefaultRedisScript<Long> ROTATE_SCRIPT = new DefaultRedisScript<>();
+    private static final DefaultRedisScript<Long> REMOVE_ALL_SCRIPT = new DefaultRedisScript<>();
 
     static {
         CONSUME_SCRIPT.setResultType(Long.class);
@@ -31,6 +32,30 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
                         "redis.call('SREM', KEYS[2], ARGV[1]); " +
                         "return 1 " +
                         "else return 0 end"
+        );
+        ROTATE_SCRIPT.setResultType(Long.class);
+        ROTATE_SCRIPT.setScriptText(
+                "if redis.call('EXISTS', KEYS[1]) == 0 then " +
+                        "return 0 " +
+                        "end " +
+                        "redis.call('DEL', KEYS[1]); " +
+                        "redis.call('SREM', KEYS[3], ARGV[1]); " +
+                        "redis.call('SET', KEYS[2], '1', 'PX', ARGV[3]); " +
+                        "redis.call('SADD', KEYS[3], ARGV[2]); " +
+                        "local currentTtl = redis.call('PTTL', KEYS[3]); " +
+                        "if currentTtl < tonumber(ARGV[3]) then " +
+                        "redis.call('PEXPIRE', KEYS[3], ARGV[3]); " +
+                        "end " +
+                        "return 1"
+        );
+        REMOVE_ALL_SCRIPT.setResultType(Long.class);
+        REMOVE_ALL_SCRIPT.setScriptText(
+                "local members = redis.call('SMEMBERS', KEYS[1]); " +
+                        "for i = 1, #members do " +
+                        "redis.call('DEL', ARGV[1] .. members[i]); " +
+                        "end; " +
+                        "redis.call('DEL', KEYS[1]); " +
+                        "return #members"
         );
     }
 
@@ -63,7 +88,11 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
 
         redisTemplate.opsForValue().set(tokenKey, "1", ttl);
         redisTemplate.opsForSet().add(indexKey, jti);
-        redisTemplate.expire(indexKey, ttl);
+        Long currentIndexTtl = redisTemplate.getExpire(indexKey, TimeUnit.MILLISECONDS);
+        long ttlMillis = ttl.toMillis();
+        if (currentIndexTtl == null || currentIndexTtl < ttlMillis) {
+            redisTemplate.expire(indexKey, ttl);
+        }
     }
 
     /**
@@ -95,6 +124,35 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
     }
 
     /**
+     * 使用 Lua 脚本原子完成刷新令牌轮换。
+     *
+     * @param userId 用户 ID
+     * @param oldJti 旧令牌唯一标识
+     * @param newJti 新令牌唯一标识
+     * @param newExpiresAt 新令牌过期时间
+     * @return 轮换成功返回 true，否则返回 false
+     */
+    @Override
+    public boolean rotate(String userId, String oldJti, String newJti, Instant newExpiresAt) {
+        Duration ttl = Duration.between(Instant.now(), newExpiresAt);
+        if (ttl.isNegative() || ttl.isZero()) {
+            ttl = Duration.ofSeconds(1);
+        }
+
+        String oldTokenKey = tokenKey(userId, oldJti);
+        String newTokenKey = tokenKey(userId, newJti);
+        String indexKey = indexKey(userId);
+        Long result = redisTemplate.execute(
+                ROTATE_SCRIPT,
+                List.of(oldTokenKey, newTokenKey, indexKey),
+                oldJti,
+                newJti,
+                String.valueOf(ttl.toMillis())
+        );
+        return Long.valueOf(1L).equals(result);
+    }
+
+    /**
      * 删除单个刷新令牌及其索引。
      *
      * @param userId 用户 ID
@@ -114,17 +172,8 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
     @Override
     public void removeAll(String userId) {
         String indexKey = indexKey(userId);
-        Set<String> jtis = redisTemplate.opsForSet().members(indexKey);
-
-        if (jtis != null && !jtis.isEmpty()) {
-            List<String> keys = new ArrayList<>();
-            for (String jti : jtis) {
-                keys.add(tokenKey(userId, jti));
-            }
-            redisTemplate.delete(keys);
-        }
-
-        redisTemplate.delete(indexKey);
+        String tokenKeyPrefix = REFRESH_TOKEN_KEY_PREFIX + userId + ":";
+        redisTemplate.execute(REMOVE_ALL_SCRIPT, List.of(indexKey), tokenKeyPrefix);
     }
 
     /**

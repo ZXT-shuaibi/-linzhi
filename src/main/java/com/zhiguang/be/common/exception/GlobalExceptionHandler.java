@@ -9,6 +9,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 
 import java.util.List;
 
@@ -64,6 +65,19 @@ public class GlobalExceptionHandler {
                 .map(v -> new ApiFieldError(v.getPropertyPath().toString(), v.getMessage()))
                 .toList();
         ErrorResponse body = ErrorResponse.of(ErrorCode.VALIDATION_ERROR.code(), ErrorCode.VALIDATION_ERROR.defaultMessage(), errors);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    /**
+     * 处理请求体反序列化异常。
+     * 主要覆盖非法枚举值、字段类型错误和 JSON 结构不合法等场景。
+     *
+     * @param ex 请求体解析异常
+     * @return HTTP 400 错误响应
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadableException(HttpMessageNotReadableException ex) {
+        ErrorResponse body = ErrorResponse.of(ErrorCode.VALIDATION_ERROR.code(), "请求体格式不正确", List.of());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
