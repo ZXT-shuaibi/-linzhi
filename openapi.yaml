@@ -437,6 +437,8 @@ paths:
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
   /posts/{postId}/publish:
     post:
       tags: [Posts]
@@ -470,7 +472,137 @@ paths:
           $ref: '#/components/responses/UnauthorizedError'
         '409':
           $ref: '#/components/responses/ConflictError'
+  /posts/{postId}/top:
+    patch:
+      tags: [Posts]
+      summary: 更新文章置顶状态
+      operationId: updatePostTop
+      x-maturity: 已实现
+      x-source: 基于代码实现
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTopRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+  /posts/{postId}/visibility:
+    patch:
+      tags: [Posts]
+      summary: 更新文章可见性
+      operationId: updatePostVisibility
+      x-maturity: 已实现
+      x-source: 基于代码实现
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateVisibilityRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
   /posts/{postId}:
+    patch:
+      tags: [Posts]
+      summary: 按 zhiguang 风格更新文章元数据
+      operationId: patchPostMetadata
+      x-maturity: 已实现
+      x-source: 基于代码实现
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePostMetadataRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostDetail'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+    delete:
+      tags: [Posts]
+      summary: 软删除文章
+      operationId: deletePost
+      x-maturity: 已实现
+      x-source: 基于代码实现
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        nullable: true
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
     get:
       tags: [Posts]
       summary: 查询文章详情
@@ -1506,9 +1638,19 @@ components:
           type: array
           items:
             type: string
+        imageUrls:
+          type: array
+          items:
+            type: string
+            format: uri
         coverUrl:
           type: string
           format: uri
+        visibility:
+          type: string
+          enum: [public, followers, private]
+        isTop:
+          type: boolean
         location:
           $ref: '#/components/schemas/Location'
     PublishPostRequest:
@@ -1520,6 +1662,19 @@ components:
         publishAt:
           type: string
           format: date-time
+    UpdateTopRequest:
+      type: object
+      required: [isTop]
+      properties:
+        isTop:
+          type: boolean
+    UpdateVisibilityRequest:
+      type: object
+      required: [visibility]
+      properties:
+        visibility:
+          type: string
+          enum: [public, followers, private]
     InteractionCounters:
       type: object
       properties:
@@ -1548,15 +1703,30 @@ components:
         coverUrl:
           type: string
           format: uri
+        imageUrls:
+          type: array
+          items:
+            type: string
+            format: uri
         tags:
           type: array
           items:
             type: string
         location:
           $ref: '#/components/schemas/Location'
-        interactionCounters:
-          $ref: '#/components/schemas/InteractionCounters'
+        visibility:
+          type: string
+        type:
+          type: string
+        isTop:
+          type: boolean
         publishedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
           type: string
           format: date-time
     SearchResultItem:

@@ -105,21 +105,22 @@ ES Index: knowledge_geo, merchant_geo
 **核心能力**：
 - OSS 预签名直传（避免服务端流量）
 - 元数据结构化存储
+- 草稿、正文确认、发布、置顶、可见性、删除等内容管理动作
 - 异步摘要生成
 - 内容审核预留接口
 
 **技术实现**：
 - 客户端通过预签名 URL 直传 OSS
-- 服务端只存储元数据（标题、位置、URL）
-- Kafka 异步触发摘要生成任务
+- 服务端负责草稿、正文确认、元数据更新和发布状态流转
+- 发布时同事务写入 MySQL + Outbox 事件
 - MySQL 存储结构化数据，ES 存储全文索引
 
 **发布流程**：
 1. 客户端请求预签名 URL
 2. 客户端直传文件到 OSS
-3. 客户端提交元数据到服务端
-4. 服务端写入 MySQL + 发送 Kafka 事件
-5. 消费者生成摘要并更新 ES 索引
+3. 客户端确认正文上传并提交元数据
+4. 服务端发布内容并写入 MySQL + Outbox 事件
+5. 下游消费者后续生成摘要并更新索引
 
 ### 4. rag - RAG 问答模块
 **功能**：本地化智能问答
@@ -564,7 +565,7 @@ sequenceDiagram
 
     Client->>Content: 7. 提交元数据（标题、位置、URL）
     Content->>MySQL: 8. 写入知识表
-    Content->>Kafka: 9. 发送 content_published 事件
+    Content->>Kafka: 9. 发送 post-published 事件
     Content-->>Client: 10. 返回成功
 
     Kafka->>Consumer: 11. 消费事件

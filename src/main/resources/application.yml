@@ -23,6 +23,11 @@ management:
       exposure:
         include: health,info
 
+storage:
+  mock-upload-base-url: https://mock-oss.local/upload
+  public-base-url: https://mock-oss.local/public
+  presign-expire-seconds: 600
+
 security:
   user-store: jdbc
   refresh-store: redis
