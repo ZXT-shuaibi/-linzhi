@@ -8,6 +8,7 @@ import com.zhiguang.be.content.ContentModels.ConfirmContentRequest;
 import com.zhiguang.be.content.ContentModels.CreateDraftRequest;
 import com.zhiguang.be.content.ContentModels.DraftData;
 import com.zhiguang.be.content.ContentModels.PostDetail;
+import com.zhiguang.be.content.ContentModels.PostPageData;
 import com.zhiguang.be.content.ContentModels.PublishPostRequest;
 import com.zhiguang.be.content.ContentModels.StoragePresignData;
 import com.zhiguang.be.content.ContentModels.StoragePresignRequest;
@@ -28,11 +29,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 内容模块控制器。
- * 统一暴露草稿、上传、元数据更新、发布和内容管理接口。
+ * 对齐 zhiguang 的主链路，同时保留 linli 现有的 /posts 路由风格。
  */
 @RestController
 @Validated
@@ -115,7 +117,7 @@ public class ContentController {
     }
 
     /**
-     * 按 zhiguang 风格兼容 PATCH 更新元数据。
+     * 兼容 zhiguang 风格的 PATCH 元数据更新。
      *
      * @param postId 文章 ID
      * @param request 元数据请求
@@ -183,7 +185,7 @@ public class ContentController {
     }
 
     /**
-     * 软删除文章。
+     * 删除文章。
      *
      * @param postId 文章 ID
      * @param jwt 当前访问令牌
@@ -196,6 +198,38 @@ public class ContentController {
     ) {
         contentService.delete(requireUserId(jwt), String.valueOf(postId));
         return ApiResponse.success(null);
+    }
+
+    /**
+     * 查询公开内容流。
+     *
+     * @param page 页码
+     * @param size 每页大小
+     * @return 公开内容分页结果
+     */
+    @GetMapping("/posts/feed")
+    public ApiResponse<PostPageData> feed(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        return ApiResponse.success(contentService.getPublicFeed(page, size));
+    }
+
+    /**
+     * 查询当前用户的已发布内容列表。
+     *
+     * @param page 页码
+     * @param size 每页大小
+     * @param jwt 当前访问令牌
+     * @return 我的内容分页结果
+     */
+    @GetMapping("/posts/mine")
+    public ApiResponse<PostPageData> mine(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return ApiResponse.success(contentService.getMyPublished(requireUserId(jwt), page, size));
     }
 
     /**
@@ -214,7 +248,7 @@ public class ContentController {
      * 提取当前登录用户 ID。
      *
      * @param jwt 当前访问令牌
-     * @return 当前用户 ID
+     * @return 用户 ID
      */
     private String requireUserId(Jwt jwt) {
         if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {

@@ -542,6 +542,52 @@ paths:
           $ref: '#/components/responses/NotFoundError'
         '409':
           $ref: '#/components/responses/ConflictError'
+  /posts/feed:
+    get:
+      tags: [Posts]
+      summary: 查询公开内容流
+      operationId: getPostFeed
+      x-maturity: 已实现
+      x-source: 基于代码实现
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostPageData'
+  /posts/mine:
+    get:
+      tags: [Posts]
+      summary: 查询我的已发布内容
+      operationId: getMyPosts
+      x-maturity: 已实现
+      x-source: 基于代码实现
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostPageData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /posts/{postId}:
     patch:
       tags: [Posts]
@@ -1567,11 +1613,7 @@ components:
           $ref: '#/components/schemas/PageMeta'
     CreateDraftRequest:
       type: object
-      properties:
-        contentType:
-          type: string
-        sourceType:
-          type: string
+      description: 当前版本草稿类型固定为 image_text，无需额外字段
     DraftData:
       type: object
       properties:
@@ -1643,9 +1685,6 @@ components:
           items:
             type: string
             format: uri
-        coverUrl:
-          type: string
-          format: uri
         visibility:
           type: string
           enum: [public, followers, private]
@@ -1700,9 +1739,6 @@ components:
         contentUrl:
           type: string
           format: uri
-        coverUrl:
-          type: string
-          format: uri
         imageUrls:
           type: array
           items:
@@ -1729,6 +1765,45 @@ components:
         updatedAt:
           type: string
           format: date-time
+    PostCard:
+      type: object
+      properties:
+        postId:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        coverUrl:
+          type: string
+          format: uri
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        author:
+          $ref: '#/components/schemas/UserProfileBrief'
+        visibility:
+          type: string
+        isTop:
+          type: boolean
+        publishedAt:
+          type: string
+          format: date-time
+    PostPageData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PostCard'
+        page:
+          type: integer
+        size:
+          type: integer
+        hasMore:
+          type: boolean
     SearchResultItem:
       type: object
       properties:

@@ -12,11 +12,14 @@ import com.zhiguang.be.content.ContentModels.CreateDraftRequest;
 import com.zhiguang.be.content.ContentModels.DraftData;
 import com.zhiguang.be.content.ContentModels.KnowPostDetailRow;
 import com.zhiguang.be.content.ContentModels.KnowPostEntity;
+import com.zhiguang.be.content.ContentModels.KnowPostFeedRow;
 import com.zhiguang.be.content.ContentModels.OutboxEventEntity;
 import com.zhiguang.be.content.ContentModels.PostAuthor;
+import com.zhiguang.be.content.ContentModels.PostCard;
 import com.zhiguang.be.content.ContentModels.PostDetail;
 import com.zhiguang.be.content.ContentModels.PostLocation;
-import com.zhiguang.be.content.ContentModels.PostPublishedPayload;
+import com.zhiguang.be.content.ContentModels.PostPageData;
+import com.zhiguang.be.content.ContentModels.PostSyncPayload;
 import com.zhiguang.be.content.ContentModels.PublishPostRequest;
 import com.zhiguang.be.content.ContentModels.StoragePresignData;
 import com.zhiguang.be.content.ContentModels.StoragePresignRequest;
@@ -24,8 +27,12 @@ import com.zhiguang.be.content.ContentModels.UpdatePostMetadataRequest;
 import com.zhiguang.be.content.ContentModels.UpdateTopRequest;
 import com.zhiguang.be.content.ContentModels.UpdateVisibilityRequest;
 import com.zhiguang.be.content.mapper.JdbcKnowPostMapper;
+import com.zhiguang.be.discover.service.LbsDiscoverService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,41 +44,37 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/**
- * 内容模块核心服务。
- * 参考 zhiguang 的 knowpost + storage 主链路，收成单个服务实现。
- */
 @Service
 public class ContentServiceImpl {
+
+    private static final Logger log = LoggerFactory.getLogger(ContentServiceImpl.class);
 
     private static final String STATUS_DRAFT = "draft";
     private static final String STATUS_CONTENT_CONFIRMED = "content_confirmed";
     private static final String STATUS_METADATA_COMPLETED = "metadata_completed";
     private static final String STATUS_PUBLISHED = "published";
     private static final String STATUS_DELETED = "deleted";
+
     private static final String DEFAULT_TYPE = "image_text";
     private static final String DEFAULT_VISIBILITY = "public";
+
     private static final String POST_PUBLISHED = "POST_PUBLISHED";
+    private static final String POST_VISIBILITY_CHANGED = "POST_VISIBILITY_CHANGED";
+    private static final String POST_DELETED = "POST_DELETED";
+
+    private static final String DISCOVER_TYPE = "knowledge";
 
     private final JdbcKnowPostMapper knowPostMapper;
+    private final LbsDiscoverService lbsDiscoverService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final ObjectMapper objectMapper;
     private final String mockUploadBaseUrl;
     private final String publicBaseUrl;
     private final long presignExpireSeconds;
 
-    /**
-     * 构造内容服务。
-     *
-     * @param knowPostMapper 文章持久化实现
-     * @param snowflakeIdGenerator 雪花算法 ID 生成器
-     * @param objectMapper JSON 序列化组件
-     * @param mockUploadBaseUrl mock 上传地址前缀
-     * @param publicBaseUrl mock 公网访问地址前缀
-     * @param presignExpireSeconds 预签名有效期秒数
-     */
     public ContentServiceImpl(
             JdbcKnowPostMapper knowPostMapper,
+            LbsDiscoverService lbsDiscoverService,
             SnowflakeIdGenerator snowflakeIdGenerator,
             ObjectMapper objectMapper,
             @Value("${storage.mock-upload-base-url:https://mock-oss.local/upload}") String mockUploadBaseUrl,
@@ -79,6 +82,7 @@ public class ContentServiceImpl {
             @Value("${storage.presign-expire-seconds:600}") long presignExpireSeconds
     ) {
         this.knowPostMapper = knowPostMapper;
+        this.lbsDiscoverService = lbsDiscoverService;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.objectMapper = objectMapper;
         this.mockUploadBaseUrl = mockUploadBaseUrl;
@@ -86,36 +90,35 @@ public class ContentServiceImpl {
         this.presignExpireSeconds = presignExpireSeconds;
     }
 
-    /**
-     * 创建文章草稿。
-     *
-     * @param creatorId 作者 ID
-     * @param request 草稿请求
-     * @return 草稿结果
-     */
     @Transactional
     public DraftData createDraft(String creatorId, CreateDraftRequest request) {
         Instant now = Instant.now();
         String postId = String.valueOf(snowflakeIdGenerator.nextId());
-        String rawType = request == null ? null : request.contentType();
-        String type = rawType == null || rawType.isBlank() ? DEFAULT_TYPE : rawType.trim();
-
         knowPostMapper.insert(new KnowPostEntity(
                 postId, creatorId, null, null, null, null,
                 null, null, null, null, null, null,
-                null, null, null, Boolean.FALSE, type, DEFAULT_VISIBILITY,
+                null, null, null, Boolean.FALSE, DEFAULT_TYPE, DEFAULT_VISIBILITY,
                 null, null, STATUS_DRAFT, now, now, null
         ));
         return new DraftData(postId, STATUS_DRAFT, now);
     }
 
-    /**
-     * 申请 mock 预签名上传地址。
-     *
-     * @param creatorId 作者 ID
-     * @param request 预签名请求
-     * @return 预签名结果
-     */
+    public PostPageData getPublicFeed(int page, int size) {
+        int safeSize = normalizePageSize(size);
+        int safePage = normalizePage(page);
+        int offset = (safePage - 1) * safeSize;
+        List<KnowPostFeedRow> rows = knowPostMapper.listFeedPublic(safeSize + 1, offset);
+        return toPageData(rows, safePage, safeSize);
+    }
+
+    public PostPageData getMyPublished(String creatorId, int page, int size) {
+        int safeSize = normalizePageSize(size);
+        int safePage = normalizePage(page);
+        int offset = (safePage - 1) * safeSize;
+        List<KnowPostFeedRow> rows = knowPostMapper.listMyPublished(creatorId, safeSize + 1, offset);
+        return toPageData(rows, safePage, safeSize);
+    }
+
     public StoragePresignData createPresign(String creatorId, StoragePresignRequest request) {
         KnowPostEntity entity = loadOwnedPost(request.postId(), creatorId);
         assertMutable(entity);
@@ -127,19 +130,13 @@ public class ContentServiceImpl {
                 .trim()
                 .replaceAll("[^a-zA-Z0-9._-]", "_");
         String folder = "content".equals(request.purpose()) ? "content" : "images";
-        String objectKey = "posts/" + request.postId() + "/" + folder + "/" + UUID.randomUUID().toString().replace("-", "") + "-" + safeFilename;
-        String uploadUrl = normalizeBaseUrl(mockUploadBaseUrl) + "/" + URLEncoder.encode(objectKey, StandardCharsets.UTF_8);
+        String objectKey = "posts/" + request.postId() + "/" + folder + "/"
+                + UUID.randomUUID().toString().replace("-", "") + "-" + safeFilename;
+        String uploadUrl = normalizeBaseUrl(mockUploadBaseUrl) + "/"
+                + URLEncoder.encode(objectKey, StandardCharsets.UTF_8);
         return new StoragePresignData(uploadUrl, objectKey, expireAt);
     }
 
-    /**
-     * 确认正文上传。
-     *
-     * @param creatorId 作者 ID
-     * @param postId 文章 ID
-     * @param request 正文确认请求
-     * @return 确认结果
-     */
     @Transactional
     public ConfirmContentData confirmContent(String creatorId, String postId, ConfirmContentRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
@@ -166,15 +163,6 @@ public class ContentServiceImpl {
         return new ConfirmContentData(postId, nextStatus, request.objectKey());
     }
 
-    /**
-     * 更新文章元数据。
-     * 这一层同时支持标题、摘要、标签、图片、位置、可见性和置顶状态。
-     *
-     * @param creatorId 作者 ID
-     * @param postId 文章 ID
-     * @param request 元数据请求
-     * @return 最新文章详情
-     */
     @Transactional
     public PostDetail updateMetadata(String creatorId, String postId, UpdatePostMetadataRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
@@ -205,16 +193,19 @@ public class ContentServiceImpl {
                 }
             }
             imgUrlsJson = toJson(normalizedImageUrls);
-        } else if (request.coverUrl() != null) {
-            String coverUrl = normalizeOwnedImageUrl(postId, request.coverUrl());
-            imgUrlsJson = toJson(coverUrl == null ? List.of() : List.of(coverUrl));
         }
 
-        PostLocation location = request.location();
-        Double latitude = location == null ? entity.latitude() : location.lat();
-        Double longitude = location == null ? entity.longitude() : location.lng();
-        String geoHash = location == null ? entity.geoHash() : normalizeNullableText(location.geoHash());
-        String address = location == null ? entity.address() : normalizeNullableText(location.address());
+        Double latitude = entity.latitude();
+        Double longitude = entity.longitude();
+        String geoHash = entity.geoHash();
+        String address = entity.address();
+        if (request.location() != null) {
+            latitude = request.location().lat();
+            longitude = request.location().lng();
+            geoHash = normalizeNullableText(request.location().geoHash());
+            address = normalizeNullableText(request.location().address());
+        }
+
         String visibility = request.visibility() == null
                 ? (hasText(entity.visible()) ? entity.visible() : DEFAULT_VISIBILITY)
                 : request.visibility().trim();
@@ -246,14 +237,6 @@ public class ContentServiceImpl {
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 发布文章并写入 outbox。
-     *
-     * @param creatorId 作者 ID
-     * @param postId 文章 ID
-     * @param request 发布请求
-     * @return 发布后的文章详情
-     */
     @Transactional
     public PostDetail publish(String creatorId, String postId, PublishPostRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
@@ -276,46 +259,15 @@ public class ContentServiceImpl {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章发布失败，请刷新后重试");
         }
 
-        String eventId = String.valueOf(snowflakeIdGenerator.nextId());
-        knowPostMapper.insertOutbox(new OutboxEventEntity(
-                eventId,
-                "post",
-                postId,
-                POST_PUBLISHED,
-                toJson(new PostPublishedPayload(
-                        eventId,
-                        POST_PUBLISHED,
-                        postId,
-                        creatorId,
-                        visibility,
-                        new PostLocation(entity.latitude(), entity.longitude(), entity.geoHash(), entity.address()),
-                        publishTime
-                )),
-                "pending",
-                0,
-                now
-        ));
+        enqueuePostSyncEvent(postId, POST_PUBLISHED, now);
+        syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 更新文章置顶状态。
-     *
-     * @param creatorId 作者 ID
-     * @param postId 文章 ID
-     * @param request 置顶请求
-     * @return 最新文章详情
-     */
     @Transactional
     public PostDetail updateTop(String creatorId, String postId, UpdateTopRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
-        if (STATUS_DELETED.equals(entity.status())) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
-        }
-        if (!STATUS_PUBLISHED.equals(entity.status())) {
-            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "仅已发布文章支持调整置顶");
-        }
-
+        assertPublished(entity);
         int updated = knowPostMapper.updateTop(postId, creatorId, request.isTop(), Instant.now());
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章置顶状态更新失败，请刷新后重试");
@@ -323,37 +275,23 @@ public class ContentServiceImpl {
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 更新文章可见性。
-     *
-     * @param creatorId 作者 ID
-     * @param postId 文章 ID
-     * @param request 可见性请求
-     * @return 最新文章详情
-     */
     @Transactional
     public PostDetail updateVisibility(String creatorId, String postId, UpdateVisibilityRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
-        if (STATUS_DELETED.equals(entity.status())) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
-        }
-        if (!STATUS_PUBLISHED.equals(entity.status())) {
-            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "仅已发布文章支持调整可见性");
-        }
+        assertPublished(entity);
 
-        int updated = knowPostMapper.updateVisibility(postId, creatorId, request.visibility().trim(), Instant.now());
+        String visibility = request.visibility().trim();
+        Instant now = Instant.now();
+        int updated = knowPostMapper.updateVisibility(postId, creatorId, visibility, now);
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章可见性更新失败，请刷新后重试");
         }
+
+        enqueuePostSyncEvent(postId, POST_VISIBILITY_CHANGED, now);
+        syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, entity.publishTime());
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 软删除文章。
-     *
-     * @param creatorId 作者 ID
-     * @param postId 文章 ID
-     */
     @Transactional
     public void delete(String creatorId, String postId) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
@@ -361,19 +299,16 @@ public class ContentServiceImpl {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
         }
 
-        int updated = knowPostMapper.softDelete(postId, creatorId, Instant.now());
+        Instant now = Instant.now();
+        int updated = knowPostMapper.softDelete(postId, creatorId, now);
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章删除失败，请刷新后重试");
         }
+
+        enqueuePostSyncEvent(postId, POST_DELETED, now);
+        removeFromDiscover(postId);
     }
 
-    /**
-     * 查询文章详情。
-     *
-     * @param postId 文章 ID
-     * @param viewerId 当前查看者 ID，可为空
-     * @return 文章详情
-     */
     public PostDetail getDetail(String postId, String viewerId) {
         KnowPostDetailRow row = knowPostMapper.findDetailById(postId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在"));
@@ -395,7 +330,6 @@ public class ContentServiceImpl {
                 row.title(),
                 row.description(),
                 row.contentUrl(),
-                imageUrls.isEmpty() ? null : imageUrls.get(0),
                 imageUrls,
                 parseStringList(row.tagsJson()),
                 new PostLocation(row.latitude(), row.longitude(), row.geoHash(), row.address()),
@@ -408,13 +342,20 @@ public class ContentServiceImpl {
         );
     }
 
-    /**
-     * 加载当前用户拥有的文章。
-     *
-     * @param postId 文章 ID
-     * @param creatorId 作者 ID
-     * @return 文章实体
-     */
+    @Scheduled(fixedDelayString = "${content.outbox-reconcile-delay-ms:10000}")
+    public void reconcileDiscoverOutbox() {
+        List<OutboxEventEntity> events = knowPostMapper.listPendingOutbox(20);
+        for (OutboxEventEntity event : events) {
+            try {
+                reconcileDiscoverState(event.aggregateId());
+                knowPostMapper.markOutboxPublished(event.id(), Instant.now());
+            } catch (Exception ex) {
+                knowPostMapper.markOutboxFailed(event.id(), abbreviateError(ex.getMessage()));
+                log.warn("Failed to reconcile outbox event {} for post {}: {}", event.id(), event.aggregateId(), ex.getMessage());
+            }
+        }
+    }
+
     private KnowPostEntity loadOwnedPost(String postId, String creatorId) {
         KnowPostEntity entity = knowPostMapper.findById(postId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在"));
@@ -424,11 +365,6 @@ public class ContentServiceImpl {
         return entity;
     }
 
-    /**
-     * 校验文章是否仍可继续编辑。
-     *
-     * @param entity 文章实体
-     */
     private void assertMutable(KnowPostEntity entity) {
         if (STATUS_PUBLISHED.equals(entity.status())) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章已发布，当前阶段不支持再次编辑");
@@ -438,12 +374,134 @@ public class ContentServiceImpl {
         }
     }
 
-    /**
-     * 序列化为 JSON 字符串。
-     *
-     * @param value 待序列化对象
-     * @return JSON 字符串
-     */
+    private void assertPublished(KnowPostEntity entity) {
+        if (STATUS_DELETED.equals(entity.status())) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
+        }
+        if (!STATUS_PUBLISHED.equals(entity.status())) {
+            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "仅已发布文章支持当前操作");
+        }
+    }
+
+    private void enqueuePostSyncEvent(String postId, String eventType, Instant occurredAt) {
+        String eventId = String.valueOf(snowflakeIdGenerator.nextId());
+        knowPostMapper.insertOutbox(new OutboxEventEntity(
+                eventId,
+                "post",
+                postId,
+                eventType,
+                toJson(new PostSyncPayload(eventId, eventType, postId, occurredAt)),
+                "pending",
+                0,
+                occurredAt
+        ));
+    }
+
+    private void reconcileDiscoverState(String postId) {
+        KnowPostEntity entity = knowPostMapper.findById(postId).orElse(null);
+        if (entity == null || STATUS_DELETED.equals(entity.status())) {
+            removeFromDiscoverStrict(postId);
+            return;
+        }
+        if (!STATUS_PUBLISHED.equals(entity.status())
+                || !DEFAULT_VISIBILITY.equals(entity.visible())
+                || !hasLocation(entity.latitude(), entity.longitude())) {
+            removeFromDiscoverStrict(postId);
+            return;
+        }
+        syncDiscoverIndexStrict(
+                postId,
+                entity.title(),
+                entity.latitude(),
+                entity.longitude(),
+                entity.visible(),
+                entity.publishTime()
+        );
+    }
+
+    private void syncDiscoverIndex(
+            String postId,
+            String title,
+            Double latitude,
+            Double longitude,
+            String visibility,
+            Instant publishTime
+    ) {
+        try {
+            syncDiscoverIndexStrict(postId, title, latitude, longitude, visibility, publishTime);
+        } catch (Exception ex) {
+            log.warn("Failed to sync post {} to discover index: {}", postId, ex.getMessage());
+        }
+    }
+
+    private void removeFromDiscover(String postId) {
+        try {
+            removeFromDiscoverStrict(postId);
+        } catch (Exception ex) {
+            log.warn("Failed to remove post {} from discover index: {}", postId, ex.getMessage());
+        }
+    }
+
+    private void syncDiscoverIndexStrict(
+            String postId,
+            String title,
+            Double latitude,
+            Double longitude,
+            String visibility,
+            Instant publishTime
+    ) {
+        if (!hasLocation(latitude, longitude) || !DEFAULT_VISIBILITY.equals(visibility)) {
+            removeFromDiscoverStrict(postId);
+            return;
+        }
+        lbsDiscoverService.addLocation(
+                postId,
+                DISCOVER_TYPE,
+                latitude,
+                longitude,
+                title,
+                publishTime == null ? null : publishTime.toEpochMilli(),
+                0
+        );
+    }
+
+    private void removeFromDiscoverStrict(String postId) {
+        lbsDiscoverService.removeLocation(postId, DISCOVER_TYPE);
+    }
+
+    private PostPageData toPageData(List<KnowPostFeedRow> rows, int page, int size) {
+        boolean hasMore = rows.size() > size;
+        List<KnowPostFeedRow> pageRows = hasMore ? rows.subList(0, size) : rows;
+        List<PostCard> items = new ArrayList<>(pageRows.size());
+        for (KnowPostFeedRow row : pageRows) {
+            List<String> imageUrls = parseStringList(row.imgUrlsJson());
+            items.add(new PostCard(
+                    row.postId(),
+                    row.title(),
+                    row.description(),
+                    imageUrls.isEmpty() ? null : imageUrls.get(0),
+                    parseStringList(row.tagsJson()),
+                    new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar()),
+                    row.visibility(),
+                    row.isTop(),
+                    row.publishTime()
+            ));
+        }
+        return new PostPageData(items, page, size, hasMore);
+    }
+
+    private int normalizePage(int page) {
+        return Math.max(page, 1);
+    }
+
+    private int normalizePageSize(int size) {
+        return Math.min(Math.max(size, 1), 50);
+    }
+
+    private boolean hasLocation(Double latitude, Double longitude) {
+        return latitude != null && longitude != null;
+    }
+
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -452,12 +510,6 @@ public class ContentServiceImpl {
         }
     }
 
-    /**
-     * 解析字符串数组 JSON。
-     *
-     * @param json JSON 字符串
-     * @return 解析后的字符串列表
-     */
     private List<String> parseStringList(String json) {
         if (!hasText(json)) {
             return List.of();
@@ -470,23 +522,10 @@ public class ContentServiceImpl {
         }
     }
 
-    /**
-     * 判断文本是否非空白。
-     *
-     * @param value 待判断文本
-     * @return 非空白返回 true
-     */
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
 
-    /**
-     * 规范化并校验图片地址是否归属当前文章。
-     *
-     * @param postId 文章 ID
-     * @param rawValue 原始图片地址或对象 Key
-     * @return 规范化后的公网地址
-     */
     private String normalizeOwnedImageUrl(String postId, String rawValue) {
         String normalized = normalizeNullableText(rawValue);
         if (normalized == null) {
@@ -503,37 +542,26 @@ public class ContentServiceImpl {
         throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "图片资源与当前文章不匹配");
     }
 
-    /**
-     * 根据对象 Key 生成 mock 公网访问地址。
-     *
-     * @param objectKey 对象 Key
-     * @return 公网访问地址
-     */
     private String buildPublicUrl(String objectKey) {
         return normalizeBaseUrl(publicBaseUrl) + "/" + objectKey;
     }
 
-    /**
-     * 规整基础地址，避免尾部多余斜杠。
-     *
-     * @param baseUrl 原始地址
-     * @return 去除尾部斜杠后的地址
-     */
     private String normalizeBaseUrl(String baseUrl) {
         return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     }
 
-    /**
-     * 规范化可空文本。
-     *
-     * @param value 原始文本
-     * @return 去空白后的文本，空白时返回 null
-     */
     private String normalizeNullableText(String value) {
         if (value == null) {
             return null;
         }
         String normalized = value.trim();
         return normalized.isEmpty() ? null : normalized;
+    }
+
+    private String abbreviateError(String errorMessage) {
+        if (errorMessage == null || errorMessage.isBlank()) {
+            return "unknown";
+        }
+        return errorMessage.length() > 512 ? errorMessage.substring(0, 512) : errorMessage;
     }
 }

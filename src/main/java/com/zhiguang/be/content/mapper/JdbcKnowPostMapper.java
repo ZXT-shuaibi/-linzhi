@@ -2,6 +2,7 @@ package com.zhiguang.be.content.mapper;
 
 import com.zhiguang.be.content.ContentModels.KnowPostDetailRow;
 import com.zhiguang.be.content.ContentModels.KnowPostEntity;
+import com.zhiguang.be.content.ContentModels.KnowPostFeedRow;
 import com.zhiguang.be.content.ContentModels.OutboxEventEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -66,6 +68,31 @@ public class JdbcKnowPostMapper {
             toInstant(rs.getTimestamp("publish_time")),
             toInstant(rs.getTimestamp("created_at")),
             toInstant(rs.getTimestamp("updated_at"))
+    );
+
+    private static final RowMapper<KnowPostFeedRow> FEED_ROW_MAPPER = (rs, rowNum) -> new KnowPostFeedRow(
+            String.valueOf(rs.getLong("id")),
+            String.valueOf(rs.getLong("creator_id")),
+            rs.getString("author_nickname"),
+            rs.getString("author_avatar"),
+            rs.getString("title"),
+            rs.getString("description"),
+            rs.getString("img_urls"),
+            rs.getString("tags"),
+            rs.getString("visible"),
+            toInstant(rs.getTimestamp("publish_time")),
+            rs.getObject("is_top", Boolean.class)
+    );
+
+    private static final RowMapper<OutboxEventEntity> OUTBOX_ROW_MAPPER = (rs, rowNum) -> new OutboxEventEntity(
+            String.valueOf(rs.getLong("id")),
+            rs.getString("aggregate_type"),
+            String.valueOf(rs.getLong("aggregate_id")),
+            rs.getString("event_type"),
+            rs.getString("payload"),
+            rs.getString("status"),
+            rs.getInt("retry_count"),
+            toInstant(rs.getTimestamp("created_at"))
     );
 
     private final JdbcTemplate jdbcTemplate;
@@ -161,6 +188,61 @@ public class JdbcKnowPostMapper {
                 DETAIL_ROW_MAPPER,
                 Long.parseLong(postId)
         ).stream().findFirst();
+    }
+
+    public List<KnowPostFeedRow> listFeedPublic(int limit, int offset) {
+        return jdbcTemplate.query(
+                """
+                select p.id,
+                       p.creator_id,
+                       u.nickname as author_nickname,
+                       u.avatar as author_avatar,
+                       p.title,
+                       p.description,
+                       p.img_urls,
+                       p.tags,
+                       p.visible,
+                       p.publish_time,
+                       p.is_top
+                  from know_posts p
+                  join users u on u.id = p.creator_id
+                 where p.status = 'published'
+                   and p.visible = 'public'
+                 order by p.is_top desc, p.publish_time desc, p.id desc
+                 limit ? offset ?
+                """,
+                FEED_ROW_MAPPER,
+                limit,
+                offset
+        );
+    }
+
+    public List<KnowPostFeedRow> listMyPublished(String creatorId, int limit, int offset) {
+        return jdbcTemplate.query(
+                """
+                select p.id,
+                       p.creator_id,
+                       u.nickname as author_nickname,
+                       u.avatar as author_avatar,
+                       p.title,
+                       p.description,
+                       p.img_urls,
+                       p.tags,
+                       p.visible,
+                       p.publish_time,
+                       p.is_top
+                  from know_posts p
+                  join users u on u.id = p.creator_id
+                 where p.creator_id = ?
+                   and p.status = 'published'
+                 order by p.is_top desc, p.publish_time desc, p.id desc
+                 limit ? offset ?
+                """,
+                FEED_ROW_MAPPER,
+                Long.parseLong(creatorId),
+                limit,
+                offset
+        );
     }
 
     public int updateContent(
@@ -346,6 +428,51 @@ public class JdbcKnowPostMapper {
                 entity.retryCount(),
                 toTimestamp(entity.createdAt()),
                 null
+        );
+    }
+
+    public List<OutboxEventEntity> listPendingOutbox(int limit) {
+        return jdbcTemplate.query(
+                """
+                select id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, created_at
+                  from outbox
+                 where aggregate_type = 'post'
+                   and status in ('pending', 'failed')
+                 order by created_at asc, id asc
+                 limit ?
+                """,
+                OUTBOX_ROW_MAPPER,
+                limit
+        );
+    }
+
+    public int markOutboxPublished(String eventId, Instant publishedAt) {
+        return jdbcTemplate.update(
+                """
+                update outbox
+                   set status = 'published',
+                       published_at = ?,
+                       last_error = null
+                 where id = ?
+                   and status in ('pending', 'failed')
+                """,
+                toTimestamp(publishedAt),
+                Long.parseLong(eventId)
+        );
+    }
+
+    public int markOutboxFailed(String eventId, String lastError) {
+        return jdbcTemplate.update(
+                """
+                update outbox
+                   set status = 'failed',
+                       retry_count = retry_count + 1,
+                       last_error = ?
+                 where id = ?
+                   and status in ('pending', 'failed')
+                """,
+                lastError,
+                Long.parseLong(eventId)
         );
     }
 

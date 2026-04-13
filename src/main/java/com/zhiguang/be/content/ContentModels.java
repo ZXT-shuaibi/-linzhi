@@ -12,7 +12,7 @@ import java.util.List;
 
 /**
  * 内容模块模型集合。
- * 将对外 DTO 与内部简单数据对象集中放在一个文件中，减少文件数量。
+ * 为了减少文件数量，将 DTO、实体和简单查询行对象集中放在一个文件中。
  */
 public final class ContentModels {
 
@@ -21,11 +21,9 @@ public final class ContentModels {
 
     /**
      * 创建草稿请求。
+     * 当前版本对齐 zhiguang，草稿类型固定为 image_text，因此不再暴露多余字段。
      */
-    public record CreateDraftRequest(
-            String contentType,
-            String sourceType
-    ) {
+    public record CreateDraftRequest() {
     }
 
     /**
@@ -51,7 +49,7 @@ public final class ContentModels {
             String etag,
 
             @NotBlank(message = "sha256 不能为空")
-            @Size(min = 64, max = 64, message = "sha256 必须为 64 位")
+            @Size(min = 64, max = 64, message = "sha256 必须是 64 位")
             String sha256,
 
             @NotNull(message = "size 不能为空")
@@ -71,7 +69,7 @@ public final class ContentModels {
     }
 
     /**
-     * 位置对象。
+     * 文章位置对象。
      */
     public record PostLocation(
             Double lat,
@@ -82,7 +80,8 @@ public final class ContentModels {
     }
 
     /**
-     * 更新元数据请求。
+     * 更新文章元数据请求。
+     * 对齐 zhiguang，只保留 images，不再把 coverUrl 作为独立存储字段。
      */
     public record UpdatePostMetadataRequest(
             @Size(max = 256, message = "标题长度不能超过 256")
@@ -95,12 +94,9 @@ public final class ContentModels {
 
             List<@Size(max = 512, message = "图片地址长度不能超过 512") String> imageUrls,
 
-            @Size(max = 512, message = "封面地址长度不能超过 512")
-            String coverUrl,
-
             @Pattern(
                     regexp = "^(public|followers|private)$",
-                    message = "visibility 只能为 public、followers、private"
+                    message = "visibility 只能是 public、followers、private"
             )
             String visibility,
 
@@ -117,7 +113,7 @@ public final class ContentModels {
     public record PublishPostRequest(
             @Pattern(
                     regexp = "^(public|followers|private)$",
-                    message = "visibility 只能为 public、followers、private"
+                    message = "visibility 只能是 public、followers、private"
             )
             String visibility,
 
@@ -141,14 +137,14 @@ public final class ContentModels {
             @NotBlank(message = "visibility 不能为空")
             @Pattern(
                     regexp = "^(public|followers|private)$",
-                    message = "visibility 只能为 public、followers、private"
+                    message = "visibility 只能是 public、followers、private"
             )
             String visibility
     ) {
     }
 
     /**
-     * 作者概要信息。
+     * 作者信息。
      */
     public record PostAuthor(
             String userId,
@@ -159,6 +155,7 @@ public final class ContentModels {
 
     /**
      * 文章详情。
+     * 封面图由前端或读模型从 imageUrls 首图推导，不再单独存储 coverUrl。
      */
     public record PostDetail(
             String postId,
@@ -167,7 +164,6 @@ public final class ContentModels {
             String title,
             String summary,
             String contentUrl,
-            String coverUrl,
             List<String> imageUrls,
             List<String> tags,
             PostLocation location,
@@ -181,7 +177,35 @@ public final class ContentModels {
     }
 
     /**
-     * 预签名请求。
+     * 文章卡片。
+     * 这里保留 coverUrl 作为读模型字段，方便 feed/mine 直接展示封面。
+     */
+    public record PostCard(
+            String postId,
+            String title,
+            String summary,
+            String coverUrl,
+            List<String> tags,
+            PostAuthor author,
+            String visibility,
+            Boolean isTop,
+            Instant publishedAt
+    ) {
+    }
+
+    /**
+     * 内容分页结果。
+     */
+    public record PostPageData(
+            List<PostCard> items,
+            int page,
+            int size,
+            boolean hasMore
+    ) {
+    }
+
+    /**
+     * 申请预签名请求。
      */
     public record StoragePresignRequest(
             @NotBlank(message = "postId 不能为空")
@@ -197,7 +221,7 @@ public final class ContentModels {
             String contentType,
 
             @NotBlank(message = "purpose 不能为空")
-            @Pattern(regexp = "^(content|cover|image)$", message = "purpose 只能为 content、cover、image")
+            @Pattern(regexp = "^(content|cover|image)$", message = "purpose 只能是 content、cover、image")
             String purpose
     ) {
     }
@@ -271,6 +295,24 @@ public final class ContentModels {
     }
 
     /**
+     * feed/mine 查询行对象。
+     */
+    public record KnowPostFeedRow(
+            String postId,
+            String creatorId,
+            String authorNickname,
+            String authorAvatar,
+            String title,
+            String description,
+            String imgUrlsJson,
+            String tagsJson,
+            String visibility,
+            Instant publishTime,
+            Boolean isTop
+    ) {
+    }
+
+    /**
      * outbox 事件实体。
      */
     public record OutboxEventEntity(
@@ -286,15 +328,13 @@ public final class ContentModels {
     }
 
     /**
-     * 文章发布事件载荷。
+     * 内容到 discover 的同步事件载荷。
+     * 当前只保留最小字段，补偿任务按 postId 查询最新状态做最终一致性处理。
      */
-    public record PostPublishedPayload(
+    public record PostSyncPayload(
             String eventId,
             String eventType,
             String postId,
-            String authorId,
-            String visibility,
-            PostLocation location,
             Instant occurredAt
     ) {
     }
