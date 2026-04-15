@@ -2,12 +2,14 @@ package com.zhiguang.be;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 智光后端应用启动入口。
  * 负责初始化 Spring Boot 容器并装配整个业务系统的运行环境。
  */
 @SpringBootApplication
+@EnableScheduling
 public class ZhiguangBeApplication {
 
     /**

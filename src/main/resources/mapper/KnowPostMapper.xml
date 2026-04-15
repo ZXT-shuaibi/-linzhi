@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zhiguang.be.content.mapper.KnowPostMapper">
+
+    <resultMap id="KnowPostEntityMap" type="com.zhiguang.be.content.model.KnowPostEntity">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="creator_id" javaType="java.lang.String"/>
+            <arg column="tag_id" javaType="java.lang.Long"/>
+            <arg column="tags" javaType="java.lang.String"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="description" javaType="java.lang.String"/>
+            <arg column="latitude" javaType="java.lang.Double"/>
+            <arg column="longitude" javaType="java.lang.Double"/>
+            <arg column="geo_hash" javaType="java.lang.String"/>
+            <arg column="address" javaType="java.lang.String"/>
+            <arg column="content_url" javaType="java.lang.String"/>
+            <arg column="content_object_key" javaType="java.lang.String"/>
+            <arg column="content_etag" javaType="java.lang.String"/>
+            <arg column="content_size" javaType="java.lang.Long"/>
+            <arg column="content_sha256" javaType="java.lang.String"/>
+            <arg column="is_top" javaType="java.lang.Boolean"/>
+            <arg column="type" javaType="java.lang.String"/>
+            <arg column="visible" javaType="java.lang.String"/>
+            <arg column="img_urls" javaType="java.lang.String"/>
+            <arg column="video_url" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="updated_at" javaType="java.time.Instant"/>
+            <arg column="publish_time" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="KnowPostDetailRowMap" type="com.zhiguang.be.content.model.KnowPostDetailRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="creator_id" javaType="java.lang.String"/>
+            <arg column="author_nickname" javaType="java.lang.String"/>
+            <arg column="author_avatar" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="description" javaType="java.lang.String"/>
+            <arg column="content_url" javaType="java.lang.String"/>
+            <arg column="img_urls" javaType="java.lang.String"/>
+            <arg column="tags" javaType="java.lang.String"/>
+            <arg column="visible" javaType="java.lang.String"/>
+            <arg column="type" javaType="java.lang.String"/>
+            <arg column="is_top" javaType="java.lang.Boolean"/>
+            <arg column="latitude" javaType="java.lang.Double"/>
+            <arg column="longitude" javaType="java.lang.Double"/>
+            <arg column="geo_hash" javaType="java.lang.String"/>
+            <arg column="address" javaType="java.lang.String"/>
+            <arg column="publish_time" javaType="java.time.Instant"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+            <arg column="updated_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="KnowPostFeedRowMap" type="com.zhiguang.be.content.model.KnowPostFeedRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="creator_id" javaType="java.lang.String"/>
+            <arg column="author_nickname" javaType="java.lang.String"/>
+            <arg column="author_avatar" javaType="java.lang.String"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="description" javaType="java.lang.String"/>
+            <arg column="img_urls" javaType="java.lang.String"/>
+            <arg column="tags" javaType="java.lang.String"/>
+            <arg column="visible" javaType="java.lang.String"/>
+            <arg column="publish_time" javaType="java.time.Instant"/>
+            <arg column="is_top" javaType="java.lang.Boolean"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="OutboxEventMap" type="com.zhiguang.be.content.model.OutboxEventEntity">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="aggregate_type" javaType="java.lang.String"/>
+            <arg column="aggregate_id" javaType="java.lang.String"/>
+            <arg column="event_type" javaType="java.lang.String"/>
+            <arg column="payload" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="retry_count" javaType="int"/>
+            <arg column="created_at" javaType="java.time.Instant"/>
+        </constructor>
+    </resultMap>
+
+    <insert id="insert" parameterType="com.zhiguang.be.content.model.KnowPostEntity">
+        insert into know_posts(
+            id, tag_id, tags, title, description, latitude, longitude, geo_hash, address,
+            content_url, content_object_key, content_etag, content_size, content_sha256,
+            creator_id, is_top, type, visible, img_urls, video_url, status,
+            created_at, updated_at, publish_time
+        ) values (
+            cast(#{postId} as bigint),
+            #{tagId},
+            #{tagsJson},
+            #{title},
+            #{description},
+            #{latitude},
+            #{longitude},
+            #{geoHash},
+            #{address},
+            #{contentUrl},
+            #{contentObjectKey},
+            #{contentEtag},
+            #{contentSize},
+            #{contentSha256},
+            cast(#{creatorId} as bigint),
+            #{isTop},
+            #{type},
+            #{visible},
+            #{imgUrlsJson},
+            #{videoUrl},
+            #{status},
+            #{createdAt},
+            #{updatedAt},
+            #{publishTime}
+        )
+    </insert>
+
+    <select id="findById" resultMap="KnowPostEntityMap">
+        select id, tag_id, tags, title, description, latitude, longitude, geo_hash, address,
+               content_url, content_object_key, content_etag, content_size, content_sha256,
+               creator_id, is_top, type, visible, img_urls, video_url, status,
+               created_at, updated_at, publish_time
+          from know_posts
+         where id = cast(#{postId} as bigint)
+    </select>
+
+    <select id="findDetailById" resultMap="KnowPostDetailRowMap">
+        select p.id,
+               p.creator_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               p.status,
+               p.title,
+               p.description,
+               p.content_url,
+               p.img_urls,
+               p.tags,
+               p.visible,
+               p.type,
+               p.is_top,
+               p.latitude,
+               p.longitude,
+               p.geo_hash,
+               p.address,
+               p.publish_time,
+               p.created_at,
+               p.updated_at
+          from know_posts p
+          join users u on u.id = p.creator_id
+         where p.id = cast(#{postId} as bigint)
+    </select>
+
+    <select id="listFeedPublic" resultMap="KnowPostFeedRowMap">
+        select p.id,
+               p.creator_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               p.title,
+               p.description,
+               p.img_urls,
+               p.tags,
+               p.visible,
+               p.publish_time,
+               p.is_top
+          from know_posts p
+          join users u on u.id = p.creator_id
+         where p.status = 'published'
+           and p.visible = 'public'
+         order by p.is_top desc, p.publish_time desc, p.id desc
+         limit #{limit} offset #{offset}
+    </select>
+
+    <select id="listMyPublished" resultMap="KnowPostFeedRowMap">
+        select p.id,
+               p.creator_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               p.title,
+               p.description,
+               p.img_urls,
+               p.tags,
+               p.visible,
+               p.publish_time,
+               p.is_top
+          from know_posts p
+          join users u on u.id = p.creator_id
+         where p.creator_id = cast(#{creatorId} as bigint)
+           and p.status = 'published'
+         order by p.is_top desc, p.publish_time desc, p.id desc
+         limit #{limit} offset #{offset}
+    </select>
+
+    <select id="existsFollowingRelation" resultType="boolean">
+        select exists(
+            select 1
+              from following
+             where from_user_id = cast(#{viewerId} as bigint)
+               and to_user_id = cast(#{creatorId} as bigint)
+               and rel_status = 1
+        )
+    </select>
+
+    <update id="updateContent">
+        update know_posts
+           set status = #{status},
+               content_url = #{contentUrl},
+               content_object_key = #{objectKey},
+               content_etag = #{etag},
+               content_size = #{size},
+               content_sha256 = #{sha256},
+               updated_at = #{updatedAt}
+         where id = cast(#{postId} as bigint)
+           and creator_id = cast(#{creatorId} as bigint)
+           and status in ('draft', 'content_confirmed', 'metadata_completed')
+    </update>
+
+    <update id="updateMetadata">
+        update know_posts
+           set status = #{status},
+               title = #{title},
+               description = #{description},
+               tags = #{tagsJson},
+               img_urls = #{imgUrlsJson},
+               is_top = #{isTop},
+               visible = #{visible},
+               latitude = #{latitude},
+               longitude = #{longitude},
+               geo_hash = #{geoHash},
+               address = #{address},
+               updated_at = #{updatedAt}
+         where id = cast(#{postId} as bigint)
+           and creator_id = cast(#{creatorId} as bigint)
+           and status in ('draft', 'content_confirmed', 'metadata_completed')
+    </update>
+
+    <update id="publish">
+        update know_posts
+           set visible = #{visibility},
+               status = #{status},
+               publish_time = #{publishTime},
+               updated_at = #{updatedAt}
+         where id = cast(#{postId} as bigint)
+           and creator_id = cast(#{creatorId} as bigint)
+           and status in ('draft', 'content_confirmed', 'metadata_completed')
+    </update>
+
+    <update id="updateTop">
+        update know_posts
+           set is_top = #{isTop},
+               updated_at = #{updatedAt}
+         where id = cast(#{postId} as bigint)
+           and creator_id = cast(#{creatorId} as bigint)
+           and status = 'published'
+    </update>
+
+    <update id="updateVisibility">
+        update know_posts
+           set visible = #{visible},
+               updated_at = #{updatedAt}
+         where id = cast(#{postId} as bigint)
+           and creator_id = cast(#{creatorId} as bigint)
+           and status = 'published'
+    </update>
+
+    <update id="softDelete">
+        update know_posts
+           set status = 'deleted',
+               updated_at = #{updatedAt}
+         where id = cast(#{postId} as bigint)
+           and creator_id = cast(#{creatorId} as bigint)
+           and status &lt;&gt; 'deleted'
+    </update>
+
+    <insert id="insertOutbox" parameterType="com.zhiguang.be.content.model.OutboxEventEntity">
+        insert into outbox(
+            id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, created_at, published_at
+        ) values (
+            cast(#{id} as bigint),
+            #{aggregateType},
+            cast(#{aggregateId} as bigint),
+            #{eventType},
+            #{payloadJson},
+            #{status},
+            #{retryCount},
+            #{createdAt},
+            null
+        )
+    </insert>
+
+    <select id="listPendingOutbox" resultMap="OutboxEventMap">
+        select id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, created_at
+          from outbox
+         where aggregate_type = 'post'
+           and status in ('pending', 'failed')
+         order by created_at asc, id asc
+         limit #{limit}
+    </select>
+
+    <update id="markOutboxPublished">
+        update outbox
+           set status = 'published',
+               published_at = #{publishedAt},
+               last_error = null
+         where id = cast(#{eventId} as bigint)
+           and status in ('pending', 'failed')
+    </update>
+
+    <update id="markOutboxFailed">
+        update outbox
+           set status = 'failed',
+               retry_count = retry_count + 1,
+               last_error = #{lastError}
+         where id = cast(#{eventId} as bigint)
+           and status in ('pending', 'failed')
+    </update>
+
+</mapper>
