@@ -64,9 +64,15 @@ public class SecurityConfiguration {
                                 "/actuator/health",
                                 "/error"
                         ).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/discover/nearby").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/discover/nearby").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/content/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search/posts").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/feed/home").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/*/summary").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/summary-batch").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/follows/status").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(accessJwtDecoder)))

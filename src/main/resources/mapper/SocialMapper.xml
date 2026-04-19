@@ -17,11 +17,31 @@
         WHERE id = #{postId}
     </select>
 
+    <select id="listPostSnapshotsByIds" resultType="map">
+        SELECT id AS postId,
+               creator_id AS creatorId,
+               status,
+               visible
+        FROM know_posts
+        WHERE id IN
+        <foreach collection="postIds" item="postId" open="(" separator="," close=")">
+            #{postId}
+        </foreach>
+    </select>
+
     <select id="existsActiveFollowing" resultType="int">
         SELECT COUNT(1)
         FROM following
         WHERE from_user_id = #{fromUserId}
           AND to_user_id = #{toUserId}
+          AND rel_status = 1
+    </select>
+
+    <select id="existsActiveFollower" resultType="int">
+        SELECT COUNT(1)
+        FROM follower
+        WHERE to_user_id = #{toUserId}
+          AND from_user_id = #{fromUserId}
           AND rel_status = 1
     </select>
 
@@ -183,6 +203,33 @@
         WHERE target_type = #{targetType}
           AND target_id = #{targetId}
           AND action_type = #{actionType}
+          AND rel_status = 1
+    </select>
+
+    <select id="aggregateActiveInteractionCountsBatch" resultType="map">
+        SELECT target_id AS targetId,
+               action_type AS actionType,
+               COUNT(1) AS total
+        FROM like_favorite
+        WHERE target_type = #{targetType}
+          AND target_id IN
+          <foreach collection="targetIds" item="targetId" open="(" separator="," close=")">
+              #{targetId}
+          </foreach>
+          AND rel_status = 1
+        GROUP BY target_id, action_type
+    </select>
+
+    <select id="listActiveInteractionsByUserAndTargets" resultType="map">
+        SELECT target_id AS targetId,
+               action_type AS actionType
+        FROM like_favorite
+        WHERE user_id = #{userId}
+          AND target_type = #{targetType}
+          AND target_id IN
+          <foreach collection="targetIds" item="targetId" open="(" separator="," close=")">
+              #{targetId}
+          </foreach>
           AND rel_status = 1
     </select>
 

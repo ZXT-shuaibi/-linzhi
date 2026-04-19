@@ -279,6 +279,7 @@ paths:
       tags: [Discover]
       summary: 附近发现
       operationId: discoverNearby
+      security: []
       x-maturity: 规划中
       x-source: 基于需求推导
       parameters:
@@ -475,6 +476,7 @@ paths:
       tags: [Posts]
       summary: 查询文章详情
       operationId: getPostDetail
+      security: []
       x-maturity: 已实现
       x-source: 基于需求推导
       parameters:
@@ -500,6 +502,7 @@ paths:
       tags: [Search]
       summary: 搜索文章
       operationId: searchPosts
+      security: []
       x-maturity: 已实现
       x-source: 基于需求推导
       parameters:
@@ -539,6 +542,7 @@ paths:
       tags: [Search]
       summary: 搜索联想
       operationId: suggestSearch
+      security: []
       x-maturity: 已实现
       x-source: 基于需求推导
       parameters:
@@ -708,6 +712,7 @@ paths:
       tags: [Interactions]
       summary: 查询互动汇总
       operationId: getInteractionSummary
+      security: []
       x-maturity: 已实现
       x-source: 基于需求推导
       parameters:
@@ -725,6 +730,44 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/InteractionSummary'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /interactions/targets/{targetType}/summary-batch:
+    get:
+      tags: [Interactions]
+      summary: 批量查询互动汇总
+      operationId: getInteractionSummaryBatch
+      security: []
+      x-maturity: 已实现
+      x-source: 对齐 zhiguang 的批量回填能力
+      parameters:
+        - $ref: '#/components/parameters/TargetTypeParam'
+        - name: targetIds
+          in: query
+          required: true
+          schema:
+            type: array
+            items:
+              type: integer
+              format: int64
+          style: form
+          explode: true
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InteractionSummaryBatchData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':
@@ -830,11 +873,43 @@ paths:
                         $ref: '#/components/schemas/FollowListData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /follows/status:
+    get:
+      tags: [Follows]
+      summary: 查询用户关系状态
+      operationId: getFollowRelationStatus
+      security: []
+      x-maturity: 已实现
+      x-source: 对齐 zhiguang relation/status
+      parameters:
+        - name: targetUserId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RelationStatusData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /feed/home:
     get:
       tags: [Feed]
       summary: 查询首页 Feed
       operationId: getHomeFeed
+      security: []
       x-maturity: 已实现
       x-source: 基于需求推导
       parameters:
@@ -1678,6 +1753,10 @@ components:
           type: boolean
         viewerFavorited:
           type: boolean
+    InteractionSummaryBatchData:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/InteractionSummary'
     FollowActionData:
       type: object
       properties:
@@ -1711,6 +1790,15 @@ components:
             $ref: '#/components/schemas/FollowUserItem'
         page:
           $ref: '#/components/schemas/PageMeta'
+    RelationStatusData:
+      type: object
+      properties:
+        following:
+          type: boolean
+        followedBy:
+          type: boolean
+        mutual:
+          type: boolean
     FeedItem:
       type: object
       properties:
@@ -1875,6 +1963,8 @@ components:
           type: string
         operatorId:
           type: string
+        delta:
+          type: integer
         occurredAt:
           type: string
           format: date-time

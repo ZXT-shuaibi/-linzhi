@@ -12,16 +12,17 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Map;
+
 /**
  * 关注关系控制器。
- * 对外暴露关注、取关、关注列表和粉丝列表接口。
  */
 @Validated
 @RestController
@@ -33,17 +34,17 @@ public class FollowController {
     /**
      * 构造关注关系控制器。
      *
-     * @param followService 关注关系服务
+     * @param followService 关注服务
      */
     public FollowController(FollowService followService) {
         this.followService = followService;
     }
 
     /**
-     * 关注指定用户。
+     * 关注目标用户。
      *
-     * @param followeeId 被关注用户 ID
-     * @param jwt 当前访问令牌
+     * @param followeeId 目标用户 ID
+     * @param jwt 当前登录态
      * @return 关注动作结果
      */
     @PostMapping("/{followeeId}")
@@ -55,11 +56,11 @@ public class FollowController {
     }
 
     /**
-     * 取消关注指定用户。
+     * 取消关注目标用户。
      *
-     * @param followeeId 被取消关注用户 ID
-     * @param jwt 当前访问令牌
-     * @return 取消关注动作结果
+     * @param followeeId 目标用户 ID
+     * @param jwt 当前登录态
+     * @return 取消关注结果
      */
     @DeleteMapping("/{followeeId}")
     public ApiResponse<FollowActionData> unfollow(
@@ -70,11 +71,11 @@ public class FollowController {
     }
 
     /**
-     * 查询指定用户的关注列表。
+     * 查询用户关注列表。
      *
      * @param userId 目标用户 ID
      * @param page 页码
-     * @param size 分页大小
+     * @param size 每页条数
      * @return 关注列表
      */
     @GetMapping("/users/{userId}/following")
@@ -87,11 +88,11 @@ public class FollowController {
     }
 
     /**
-     * 查询指定用户的粉丝列表。
+     * 查询用户粉丝列表。
      *
      * @param userId 目标用户 ID
      * @param page 页码
-     * @param size 分页大小
+     * @param size 每页条数
      * @return 粉丝列表
      */
     @GetMapping("/users/{userId}/followers")
@@ -104,16 +105,49 @@ public class FollowController {
     }
 
     /**
-     * 从访问令牌中解析当前登录用户 ID。
+     * 查询当前查看者与目标用户之间的关注状态。
+     * 支持匿名查看。
      *
-     * @param jwt 当前访问令牌
-     * @return 当前登录用户 ID
+     * @param targetUserId 目标用户 ID
+     * @param jwt 当前登录态
+     * @return 关系状态结果
+     */
+    @GetMapping("/status")
+    public ApiResponse<Map<String, Boolean>> relationStatus(
+            @RequestParam long targetUserId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return ApiResponse.success(followService.relationStatus(currentViewerId(jwt), targetUserId));
+    }
+
+    /**
+     * 从 JWT 中解析当前用户 ID。
+     *
+     * @param jwt 当前登录态
+     * @return 当前用户 ID
      */
     private long currentUserId(Jwt jwt) {
         try {
             return Long.parseLong(jwt.getSubject());
         } catch (Exception ex) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
+            throw new BusinessException(
+                    ErrorCode.UNAUTHORIZED,
+                    HttpStatus.UNAUTHORIZED,
+                    "\u65e0\u6548\u7684\u767b\u5f55\u6001"
+            );
         }
+    }
+
+    /**
+     * 解析当前查看者 ID。
+     *
+     * @param jwt 当前登录态
+     * @return 当前查看者 ID，匿名用户返回 0
+     */
+    private long currentViewerId(Jwt jwt) {
+        if (jwt == null) {
+            return 0L;
+        }
+        return currentUserId(jwt);
     }
 }

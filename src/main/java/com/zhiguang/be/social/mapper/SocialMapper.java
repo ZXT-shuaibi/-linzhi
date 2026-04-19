@@ -30,6 +30,14 @@ public interface SocialMapper {
     Map<String, Object> findPostSnapshot(@Param("postId") long postId);
 
     /**
+     * 批量查询帖子快照信息。
+     *
+     * @param postIds 帖子 ID 列表
+     * @return 帖子快照字段映射列表
+     */
+    List<Map<String, Object>> listPostSnapshotsByIds(@Param("postIds") List<Long> postIds);
+
+    /**
      * 判断是否已存在有效关注关系。
      *
      * @param fromUserId 关注者用户 ID
@@ -37,6 +45,15 @@ public interface SocialMapper {
      * @return 命中数量
      */
     int existsActiveFollowing(@Param("fromUserId") long fromUserId, @Param("toUserId") long toUserId);
+
+    /**
+     * 判断是否已存在有效粉丝关系。
+     *
+     * @param toUserId 被关注者用户 ID
+     * @param fromUserId 关注者用户 ID
+     * @return 命中数量
+     */
+    int existsActiveFollower(@Param("toUserId") long toUserId, @Param("fromUserId") long fromUserId);
 
     /**
      * 恢复历史关注关系为有效状态。
@@ -240,6 +257,32 @@ public interface SocialMapper {
             @Param("targetType") String targetType,
             @Param("targetId") long targetId,
             @Param("actionType") String actionType
+    );
+
+    /**
+     * 批量聚合统计多个目标的互动数量。
+     *
+     * @param targetType 目标类型
+     * @param targetIds 目标 ID 列表
+     * @return 聚合统计结果列表，包含 targetId、actionType 和 total 字段
+     */
+    List<Map<String, Object>> aggregateActiveInteractionCountsBatch(
+            @Param("targetType") String targetType,
+            @Param("targetIds") List<Long> targetIds
+    );
+
+    /**
+     * 批量查询用户对多个目标的有效互动状态。
+     *
+     * @param userId 用户 ID
+     * @param targetType 目标类型
+     * @param targetIds 目标 ID 列表
+     * @return 有效互动结果列表，包含 targetId 和 actionType 字段
+     */
+    List<Map<String, Object>> listActiveInteractionsByUserAndTargets(
+            @Param("userId") long userId,
+            @Param("targetType") String targetType,
+            @Param("targetIds") List<Long> targetIds
     );
 
     /**

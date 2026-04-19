@@ -13,6 +13,7 @@ public class CounterEventPayload {
     private final String targetId;
     private final String action;
     private final String operatorId;
+    private final int delta;
     private final Instant occurredAt;
 
     /**
@@ -24,6 +25,7 @@ public class CounterEventPayload {
      * @param targetId 目标 ID
      * @param action 动作类型
      * @param operatorId 操作人 ID
+     * @param delta 计数变化量，激活动作为 1，取消动作为 -1
      * @param occurredAt 事件发生时间
      */
     public CounterEventPayload(
@@ -33,6 +35,7 @@ public class CounterEventPayload {
             String targetId,
             String action,
             String operatorId,
+            int delta,
             Instant occurredAt
     ) {
         this.eventId = eventId;
@@ -41,6 +44,7 @@ public class CounterEventPayload {
         this.targetId = targetId;
         this.action = action;
         this.operatorId = operatorId;
+        this.delta = delta;
         this.occurredAt = occurredAt;
     }
 
@@ -53,6 +57,7 @@ public class CounterEventPayload {
      * @param targetId 目标 ID
      * @param action 动作类型
      * @param operatorId 操作人 ID
+     * @param delta 计数变化量，激活动作为 1，取消动作为 -1
      * @return 互动事件载荷
      */
     public static CounterEventPayload of(
@@ -61,7 +66,8 @@ public class CounterEventPayload {
             String targetType,
             long targetId,
             String action,
-            long operatorId
+            long operatorId,
+            int delta
     ) {
         return new CounterEventPayload(
                 String.valueOf(eventId),
@@ -70,6 +76,7 @@ public class CounterEventPayload {
                 String.valueOf(targetId),
                 action,
                 String.valueOf(operatorId),
+                delta,
                 Instant.now()
         );
     }
@@ -96,6 +103,10 @@ public class CounterEventPayload {
 
     public String getOperatorId() {
         return operatorId;
+    }
+
+    public int getDelta() {
+        return delta;
     }
 
     public Instant getOccurredAt() {

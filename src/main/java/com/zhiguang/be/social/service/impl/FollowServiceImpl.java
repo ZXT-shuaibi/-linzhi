@@ -16,6 +16,7 @@ import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.http.HttpStatus;
@@ -37,8 +38,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 关注关系服务实现。
- * 负责处理关注、取关、关注列表、粉丝列表以及用户关系判断等能力。
+ * 社交关注服务实现。
+ * 对齐当前项目的关注、取关、列表查询、关系态查询与缓存维护逻辑。
  */
 @Service
 public class FollowServiceImpl implements FollowService {
@@ -54,12 +55,12 @@ public class FollowServiceImpl implements FollowService {
     private final ObjectMapper objectMapper;
 
     /**
-     * 构造关注关系服务实现。
+     * 构造关注服务。
      *
-     * @param socialMapper 社交模块统一数据访问接口
+     * @param socialMapper 社交模块 Mapper
      * @param snowflakeIdGenerator 雪花 ID 生成器
      * @param userSocialCounterService 用户维社交计数服务
-     * @param stringRedisTemplate Redis 字符串模板
+     * @param stringRedisTemplate Redis 模板
      * @param objectMapper JSON 序列化组件
      */
     public FollowServiceImpl(
@@ -77,11 +78,10 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 关注指定用户。
-     * 同一个用户不能重复关注目标用户，也不能关注自己。
+     * 关注目标用户。
      *
      * @param currentUserId 当前登录用户 ID
-     * @param followeeId 被关注用户 ID
+     * @param followeeId 目标用户 ID
      * @return 关注动作结果
      */
     @Override
@@ -92,11 +92,8 @@ public class FollowServiceImpl implements FollowService {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "请勿重复关注");
         }
 
-        if (socialMapper.reactivateFollowing(currentUserId, followeeId) == 0) {
-            socialMapper.insertFollowing(snowflakeIdGenerator.nextId(), currentUserId, followeeId);
-        }
-        if (socialMapper.reactivateFollower(followeeId, currentUserId) == 0) {
-            socialMapper.insertFollower(snowflakeIdGenerator.nextId(), followeeId, currentUserId);
+        if (!activateFollowRelation(currentUserId, followeeId)) {
+            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "关注关系写入失败");
         }
 
         long eventId = snowflakeIdGenerator.nextId();
@@ -111,14 +108,22 @@ public class FollowServiceImpl implements FollowService {
         runAfterCommit(() -> {
             try {
                 long score = System.currentTimeMillis();
-                stringRedisTemplate.opsForZSet().add(SocialRedisKeys.followingKey(currentUserId), String.valueOf(followeeId), score);
-                stringRedisTemplate.opsForZSet().add(SocialRedisKeys.followerKey(followeeId), String.valueOf(currentUserId), score);
+                stringRedisTemplate.opsForZSet().add(
+                        SocialRedisKeys.followingKey(currentUserId),
+                        String.valueOf(followeeId),
+                        score
+                );
+                stringRedisTemplate.opsForZSet().add(
+                        SocialRedisKeys.followerKey(followeeId),
+                        String.valueOf(currentUserId),
+                        score
+                );
                 stringRedisTemplate.expire(SocialRedisKeys.followingKey(currentUserId), FOLLOW_CACHE_TTL);
                 stringRedisTemplate.expire(SocialRedisKeys.followerKey(followeeId), FOLLOW_CACHE_TTL);
                 userSocialCounterService.incrementFollowings(currentUserId, 1);
                 userSocialCounterService.incrementFollowers(followeeId, 1);
             } catch (Exception ex) {
-                log.warn("关注成功后刷新 Redis 视图失败, followerId={}, followeeId={}", currentUserId, followeeId, ex);
+                log.warn("refresh follow cache failed, followerId={}, followeeId={}", currentUserId, followeeId, ex);
             }
         });
 
@@ -126,12 +131,11 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 取消关注指定用户。
-     * 对已处于未关注状态的关系按幂等成功处理，不额外报错。
+     * 取消关注目标用户。
      *
      * @param currentUserId 当前登录用户 ID
-     * @param followeeId 被取消关注的用户 ID
-     * @return 取消关注动作结果
+     * @param followeeId 目标用户 ID
+     * @return 取消关注后的动作结果
      */
     @Override
     @Transactional
@@ -152,12 +156,18 @@ public class FollowServiceImpl implements FollowService {
 
             runAfterCommit(() -> {
                 try {
-                    stringRedisTemplate.opsForZSet().remove(SocialRedisKeys.followingKey(currentUserId), String.valueOf(followeeId));
-                    stringRedisTemplate.opsForZSet().remove(SocialRedisKeys.followerKey(followeeId), String.valueOf(currentUserId));
+                    stringRedisTemplate.opsForZSet().remove(
+                            SocialRedisKeys.followingKey(currentUserId),
+                            String.valueOf(followeeId)
+                    );
+                    stringRedisTemplate.opsForZSet().remove(
+                            SocialRedisKeys.followerKey(followeeId),
+                            String.valueOf(currentUserId)
+                    );
                     userSocialCounterService.incrementFollowings(currentUserId, -1);
                     userSocialCounterService.incrementFollowers(followeeId, -1);
                 } catch (Exception ex) {
-                    log.warn("取关成功后刷新 Redis 视图失败, followerId={}, followeeId={}", currentUserId, followeeId, ex);
+                    log.warn("refresh unfollow cache failed, followerId={}, followeeId={}", currentUserId, followeeId, ex);
                 }
             });
         }
@@ -170,7 +180,7 @@ public class FollowServiceImpl implements FollowService {
      *
      * @param userId 目标用户 ID
      * @param page 页码
-     * @param size 分页大小
+     * @param size 每页大小
      * @return 关注列表
      */
     @Override
@@ -184,7 +194,7 @@ public class FollowServiceImpl implements FollowService {
      *
      * @param userId 目标用户 ID
      * @param page 页码
-     * @param size 分页大小
+     * @param size 每页大小
      * @return 粉丝列表
      */
     @Override
@@ -194,7 +204,35 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 判断当前用户是否已关注目标用户。
+     * 查询当前查看者与目标用户的关系态。
+     *
+     * @param currentUserId 当前查看者用户 ID，匿名时可传 0
+     * @param targetUserId 目标用户 ID
+     * @return 关注三态结果
+     */
+    @Override
+    public Map<String, Boolean> relationStatus(long currentUserId, long targetUserId) {
+        ensureUserExists(targetUserId, "目标用户不存在");
+
+        Map<String, Boolean> result = new LinkedHashMap<String, Boolean>();
+        if (currentUserId <= 0L) {
+            result.put("following", false);
+            result.put("followedBy", false);
+            result.put("mutual", false);
+            return result;
+        }
+
+        ensureUserExists(currentUserId, "当前用户不存在");
+        boolean following = isFollowing(currentUserId, targetUserId);
+        boolean followedBy = isFollowing(targetUserId, currentUserId);
+        result.put("following", following);
+        result.put("followedBy", followedBy);
+        result.put("mutual", following && followedBy);
+        return result;
+    }
+
+    /**
+     * 判断一个用户是否已关注另一个用户。
      *
      * @param currentUserId 当前用户 ID
      * @param targetUserId 目标用户 ID
@@ -202,18 +240,18 @@ public class FollowServiceImpl implements FollowService {
      */
     @Override
     public boolean isFollowing(long currentUserId, long targetUserId) {
-        if (currentUserId <= 0 || targetUserId <= 0) {
+        if (currentUserId <= 0L || targetUserId <= 0L) {
             return false;
         }
         return socialMapper.existsActiveFollowing(currentUserId, targetUserId) > 0;
     }
 
     /**
-     * 构建关注动作返回结果。
+     * 构造关注动作返回结果。
      *
      * @param currentUserId 当前用户 ID
      * @param followeeId 目标用户 ID
-     * @param following 当前是否已关注
+     * @param following 当前是否关注
      * @return 关注动作结果
      */
     private FollowActionData buildFollowActionData(long currentUserId, long followeeId, boolean following) {
@@ -223,11 +261,11 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 构建关注列表或粉丝列表返回结果。
+     * 统一构造关注列表或粉丝列表结果。
      *
      * @param userId 目标用户 ID
      * @param page 页码
-     * @param size 分页大小
+     * @param size 每页大小
      * @param followingMode true 表示关注列表，false 表示粉丝列表
      * @return 列表结果
      */
@@ -235,11 +273,13 @@ public class FollowServiceImpl implements FollowService {
         int safePage = Math.max(page, 1);
         int safeSize = Math.max(Math.min(size, 50), 1);
         int offset = (safePage - 1) * safeSize;
-        long total = followingMode ? socialMapper.countFollowingActive(userId) : socialMapper.countFollowerActive(userId);
-        long remain = Math.max(total - offset, 0);
+        long total = followingMode
+                ? socialMapper.countFollowingActive(userId)
+                : socialMapper.countFollowerActive(userId);
+        long remain = Math.max(total - offset, 0L);
 
         List<FollowUserItem> items = readFollowItemsFromCache(userId, offset, safeSize, followingMode);
-        long expected = Math.min(safeSize, remain);
+        long expected = Math.min((long) safeSize, remain);
         if (items.size() < expected) {
             warmFollowCache(userId, offset + safeSize, followingMode);
             items = readFollowItemsFromCache(userId, offset, safeSize, followingMode);
@@ -252,7 +292,7 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 从 Redis 读取关注列表或粉丝列表视图。
+     * 从 Redis 读取关注或粉丝列表缓存。
      *
      * @param userId 目标用户 ID
      * @param offset 偏移量
@@ -268,28 +308,34 @@ public class FollowServiceImpl implements FollowService {
             return Collections.emptyList();
         }
 
-        List<Long> ids = new ArrayList<>(tuples.size());
-        Map<Long, Instant> followedAtMap = new LinkedHashMap<>();
+        List<Long> ids = new ArrayList<Long>(tuples.size());
+        Map<Long, Instant> followedAtMap = new LinkedHashMap<Long, Instant>();
         for (ZSetOperations.TypedTuple<String> tuple : tuples) {
             if (tuple == null || tuple.getValue() == null) {
                 continue;
             }
-            long targetUserId = Long.parseLong(tuple.getValue());
-            ids.add(targetUserId);
-            double score = tuple.getScore() == null ? System.currentTimeMillis() : tuple.getScore();
-            followedAtMap.put(targetUserId, Instant.ofEpochMilli((long) score));
+            try {
+                long targetUserId = Long.parseLong(tuple.getValue());
+                ids.add(targetUserId);
+                double score = tuple.getScore() == null ? System.currentTimeMillis() : tuple.getScore();
+                followedAtMap.put(targetUserId, Instant.ofEpochMilli((long) score));
+            } catch (Exception ignore) {
+                // 忽略异常缓存值，继续读取其它记录。
+            }
         }
         if (ids.isEmpty()) {
             return Collections.emptyList();
         }
 
         List<Map<String, Object>> userRows = socialMapper.listUsersByIds(ids);
-        Map<Long, Map<String, Object>> userMap = new LinkedHashMap<>();
-        for (Map<String, Object> row : userRows) {
-            userMap.put(toLong(row.get("userId")), row);
+        Map<Long, Map<String, Object>> userMap = new LinkedHashMap<Long, Map<String, Object>>();
+        if (userRows != null) {
+            for (Map<String, Object> row : userRows) {
+                userMap.put(toLong(row.get("userId")), row);
+            }
         }
 
-        List<FollowUserItem> items = new ArrayList<>(ids.size());
+        List<FollowUserItem> items = new ArrayList<FollowUserItem>(ids.size());
         for (Long id : ids) {
             Map<String, Object> userRow = userMap.get(id);
             if (userRow == null) {
@@ -306,10 +352,10 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 使用数据库结果回填 Redis 关注视图。
+     * 使用数据库结果预热 Redis 列表缓存。
      *
      * @param userId 目标用户 ID
-     * @param need 需要预热的条目数量
+     * @param need 需要预热的数量
      * @param followingMode true 表示关注列表，false 表示粉丝列表
      */
     private void warmFollowCache(long userId, int need, boolean followingMode) {
@@ -324,6 +370,9 @@ public class FollowServiceImpl implements FollowService {
         String key = followingMode ? SocialRedisKeys.followingKey(userId) : SocialRedisKeys.followerKey(userId);
         for (Map<String, Object> row : rows) {
             String value = toStringValue(row.get("userId"));
+            if (value == null) {
+                continue;
+            }
             Instant followedAt = toInstant(row.get("followedAt"));
             stringRedisTemplate.opsForZSet().add(key, value, followedAt.toEpochMilli());
         }
@@ -331,7 +380,7 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 直接从数据库查询关注列表或粉丝列表。
+     * 直接从数据库查询关注或粉丝列表。
      *
      * @param userId 目标用户 ID
      * @param size 返回数量
@@ -347,7 +396,7 @@ public class FollowServiceImpl implements FollowService {
             return Collections.emptyList();
         }
 
-        List<FollowUserItem> items = new ArrayList<>(rows.size());
+        List<FollowUserItem> items = new ArrayList<FollowUserItem>(rows.size());
         for (Map<String, Object> row : rows) {
             items.add(new FollowUserItem(
                     toStringValue(row.get("userId")),
@@ -363,9 +412,11 @@ public class FollowServiceImpl implements FollowService {
      * 校验关注目标是否合法。
      *
      * @param currentUserId 当前登录用户 ID
-     * @param followeeId 被关注用户 ID
+     * @param followeeId 目标用户 ID
      */
     private void validateFollowTarget(long currentUserId, long followeeId) {
+        ensureAuthenticatedUser(currentUserId);
+        ensureUserExists(currentUserId, "当前用户不存在");
         if (currentUserId == followeeId) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "不能关注自己");
         }
@@ -385,9 +436,83 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
+     * 校验当前操作用户是否已登录。
+     *
+     * @param currentUserId 当前操作用户 ID
+     */
+    private void ensureAuthenticatedUser(long currentUserId) {
+        if (currentUserId <= 0L) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
+        }
+    }
+
+    /**
+     * 激活关注与粉丝双向关系。
+     *
+     * @param currentUserId 当前用户 ID
+     * @param followeeId 目标用户 ID
+     * @return 本次是否真的发生了状态变化
+     */
+    private boolean activateFollowRelation(long currentUserId, long followeeId) {
+        boolean followingChanged = activateFollowingRow(currentUserId, followeeId);
+        boolean followerChanged = activateFollowerRow(followeeId, currentUserId);
+        return followingChanged || followerChanged;
+    }
+
+    /**
+     * 激活正向关注关系。
+     *
+     * @param currentUserId 当前用户 ID
+     * @param followeeId 目标用户 ID
+     * @return 本次是否真的发生了状态变化
+     */
+    private boolean activateFollowingRow(long currentUserId, long followeeId) {
+        if (socialMapper.reactivateFollowing(currentUserId, followeeId) > 0) {
+            return true;
+        }
+        if (socialMapper.existsActiveFollowing(currentUserId, followeeId) > 0) {
+            return false;
+        }
+        try {
+            socialMapper.insertFollowing(snowflakeIdGenerator.nextId(), currentUserId, followeeId);
+            return true;
+        } catch (DuplicateKeyException ex) {
+            if (socialMapper.existsActiveFollowing(currentUserId, followeeId) > 0) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * 激活反向粉丝关系。
+     *
+     * @param followeeId 目标用户 ID
+     * @param currentUserId 当前用户 ID
+     * @return 本次是否真的发生了状态变化
+     */
+    private boolean activateFollowerRow(long followeeId, long currentUserId) {
+        if (socialMapper.reactivateFollower(followeeId, currentUserId) > 0) {
+            return true;
+        }
+        if (socialMapper.existsActiveFollower(followeeId, currentUserId) > 0) {
+            return false;
+        }
+        try {
+            socialMapper.insertFollower(snowflakeIdGenerator.nextId(), followeeId, currentUserId);
+            return true;
+        } catch (DuplicateKeyException ex) {
+            if (socialMapper.existsActiveFollower(followeeId, currentUserId) > 0) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    /**
      * 序列化 outbox 事件载荷。
      *
-     * @param payload 事件载荷对象
+     * @param payload 事件对象
      * @return JSON 字符串
      */
     private String serialize(Object payload) {
@@ -409,9 +534,6 @@ public class FollowServiceImpl implements FollowService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            /**
-             * 在事务提交完成后执行任务。
-             */
             @Override
             public void afterCommit() {
                 runnable.run();
@@ -420,7 +542,7 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 将任意对象转为 long。
+     * 将任意对象转成 long。
      *
      * @param value 原始对象
      * @return long 数值
@@ -433,7 +555,7 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 将任意对象转为字符串。
+     * 将任意对象转成字符串。
      *
      * @param value 原始对象
      * @return 字符串值

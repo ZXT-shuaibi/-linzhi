@@ -15,6 +15,7 @@ import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -26,14 +27,15 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 点赞与收藏服务实现。
- * 负责处理互动状态切换、互动汇总查询以及 Redis 位图和计数 SDS 的维护。
+ * 社交互动服务实现。
+ * 负责点赞、收藏、互动汇总、位图缓存和实体计数 SDS 的维护。
  */
 @Service
 public class InteractionServiceImpl implements InteractionService {
@@ -54,12 +56,12 @@ public class InteractionServiceImpl implements InteractionService {
     private final DefaultRedisScript<Long> entityCounterIncrementScript;
 
     /**
-     * 构造点赞与收藏服务实现。
+     * 构造互动服务。
      *
-     * @param socialMapper 社交模块统一数据访问接口
+     * @param socialMapper 社交模块 Mapper
      * @param snowflakeIdGenerator 雪花 ID 生成器
      * @param userSocialCounterService 用户维社交计数服务
-     * @param stringRedisTemplate Redis 字符串模板
+     * @param stringRedisTemplate Redis 模板
      * @param objectMapper JSON 序列化组件
      */
     public InteractionServiceImpl(
@@ -75,7 +77,7 @@ public class InteractionServiceImpl implements InteractionService {
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
 
-        this.bitmapToggleScript = new DefaultRedisScript<>();
+        this.bitmapToggleScript = new DefaultRedisScript<Long>();
         this.bitmapToggleScript.setResultType(Long.class);
         this.bitmapToggleScript.setScriptText(
                 "local bmKey = KEYS[1]\n"
@@ -94,7 +96,7 @@ public class InteractionServiceImpl implements InteractionService {
                         + "return -1\n"
         );
 
-        this.entityCounterIncrementScript = new DefaultRedisScript<>();
+        this.entityCounterIncrementScript = new DefaultRedisScript<Long>();
         this.entityCounterIncrementScript.setResultType(Long.class);
         this.entityCounterIncrementScript.setScriptText(
                 "local cntKey = KEYS[1]\n"
@@ -126,12 +128,12 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 对目标内容执行点赞操作。
+     * 对目标内容执行点赞。
      *
      * @param currentUserId 当前登录用户 ID
      * @param targetType 目标类型
      * @param targetId 目标 ID
-     * @return 点赞动作结果
+     * @return 动作结果
      */
     @Override
     @Transactional
@@ -145,7 +147,7 @@ public class InteractionServiceImpl implements InteractionService {
      * @param currentUserId 当前登录用户 ID
      * @param targetType 目标类型
      * @param targetId 目标 ID
-     * @return 取消点赞动作结果
+     * @return 动作结果
      */
     @Override
     @Transactional
@@ -154,12 +156,12 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 对目标内容执行收藏操作。
+     * 对目标内容执行收藏。
      *
      * @param currentUserId 当前登录用户 ID
      * @param targetType 目标类型
      * @param targetId 目标 ID
-     * @return 收藏动作结果
+     * @return 动作结果
      */
     @Override
     @Transactional
@@ -173,7 +175,7 @@ public class InteractionServiceImpl implements InteractionService {
      * @param currentUserId 当前登录用户 ID
      * @param targetType 目标类型
      * @param targetId 目标 ID
-     * @return 取消收藏动作结果
+     * @return 动作结果
      */
     @Override
     @Transactional
@@ -184,7 +186,7 @@ public class InteractionServiceImpl implements InteractionService {
     /**
      * 查询单个目标内容的互动汇总。
      *
-     * @param currentUserId 当前查看用户 ID
+     * @param currentUserId 当前查看者用户 ID
      * @param targetType 目标类型
      * @param targetId 目标 ID
      * @return 互动汇总
@@ -193,8 +195,8 @@ public class InteractionServiceImpl implements InteractionService {
     public InteractionSummary summary(long currentUserId, String targetType, long targetId) {
         loadTargetSnapshot(targetType, targetId);
         long[] stats = readEntityCounters(targetType, targetId);
-        boolean viewerLiked = currentUserId > 0 && isInteractionActive(currentUserId, targetType, targetId, "like");
-        boolean viewerFavorited = currentUserId > 0 && isInteractionActive(currentUserId, targetType, targetId, "favorite");
+        boolean viewerLiked = currentUserId > 0L && isInteractionActive(currentUserId, targetType, targetId, "like");
+        boolean viewerFavorited = currentUserId > 0L && isInteractionActive(currentUserId, targetType, targetId, "favorite");
         return new InteractionSummary(
                 targetType,
                 String.valueOf(targetId),
@@ -207,24 +209,51 @@ public class InteractionServiceImpl implements InteractionService {
 
     /**
      * 批量查询多个目标内容的互动汇总。
-     * 当前实现优先保证链路闭环和可读性，先使用逐个汇总的朴素写法。
      *
-     * @param currentUserId 当前查看用户 ID
+     * @param currentUserId 当前查看者用户 ID
      * @param targetType 目标类型
      * @param targetIds 目标 ID 列表
      * @return 以目标 ID 为键的互动汇总映射
      */
     @Override
     public Map<String, InteractionSummary> summaryBatch(long currentUserId, String targetType, List<Long> targetIds) {
-        Map<String, InteractionSummary> result = new LinkedHashMap<>();
-        if (targetIds == null || targetIds.isEmpty()) {
+        Map<String, InteractionSummary> result = new LinkedHashMap<String, InteractionSummary>();
+        List<Long> normalizedTargetIds = normalizeTargetIds(targetIds);
+        if (normalizedTargetIds.isEmpty()) {
             return result;
         }
-        for (Long targetId : targetIds) {
-            if (targetId == null) {
+
+        ensureSupportedTargetType(targetType);
+        Map<Long, PostTargetSnapshot> snapshots = loadTargetSnapshots(targetType, normalizedTargetIds);
+        Map<Long, long[]> counters = readEntityCountersBatch(targetType, normalizedTargetIds);
+        Map<Long, boolean[]> viewerStates = readViewerStatesBatch(currentUserId, targetType, normalizedTargetIds);
+
+        for (Long targetId : normalizedTargetIds) {
+            PostTargetSnapshot snapshot = snapshots.get(targetId);
+            if (snapshot == null) {
                 continue;
             }
-            result.put(String.valueOf(targetId), summary(currentUserId, targetType, targetId));
+
+            long[] stats = counters.get(targetId);
+            if (stats == null) {
+                stats = new long[]{0L, 0L};
+            }
+
+            boolean[] states = viewerStates.get(targetId);
+            boolean viewerLiked = states != null && states[0];
+            boolean viewerFavorited = states != null && states[1];
+
+            result.put(
+                    String.valueOf(targetId),
+                    new InteractionSummary(
+                            targetType,
+                            String.valueOf(targetId),
+                            stats[0],
+                            stats[1],
+                            viewerLiked,
+                            viewerFavorited
+                    )
+            );
         }
         return result;
     }
@@ -235,8 +264,8 @@ public class InteractionServiceImpl implements InteractionService {
      * @param currentUserId 当前登录用户 ID
      * @param targetType 目标类型
      * @param targetId 目标 ID
-     * @param action 动作类型，支持 like / favorite
-     * @param active true 表示激活动作，false 表示取消动作
+     * @param action 动作类型
+     * @param active true 表示生效，false 表示取消
      * @return 动作结果
      */
     private InteractionActionData changeInteraction(
@@ -246,23 +275,17 @@ public class InteractionServiceImpl implements InteractionService {
             String action,
             boolean active
     ) {
+        ensureAuthenticatedUser(currentUserId);
         PostTargetSnapshot snapshot = loadTargetSnapshot(targetType, targetId);
-        boolean alreadyActive = socialMapper.existsActiveInteraction(currentUserId, targetType, targetId, action) > 0;
-        if (active && alreadyActive) {
-            return buildActionData(targetType, targetId, action, true);
-        }
-        if (!active && !alreadyActive) {
-            return buildActionData(targetType, targetId, action, false);
+        boolean changed = active
+                ? activateInteractionState(currentUserId, targetType, targetId, action)
+                : deactivateInteractionState(currentUserId, targetType, targetId, action);
+
+        if (!changed) {
+            return buildActionData(targetType, targetId, action, active);
         }
 
-        if (active) {
-            if (socialMapper.reactivateInteraction(currentUserId, targetType, targetId, action) == 0) {
-                socialMapper.insertInteraction(snowflakeIdGenerator.nextId(), currentUserId, targetType, targetId, action);
-            }
-        } else {
-            socialMapper.deactivateInteraction(currentUserId, targetType, targetId, action);
-        }
-
+        int delta = active ? 1 : -1;
         String eventType = resolveEventType(action);
         long eventId = snowflakeIdGenerator.nextId();
         socialMapper.insertOutboxEvent(
@@ -270,10 +293,9 @@ public class InteractionServiceImpl implements InteractionService {
                 "interaction",
                 targetId,
                 eventType,
-                serialize(CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId))
+                serialize(CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId, delta))
         );
 
-        int delta = active ? 1 : -1;
         runAfterCommit(() -> {
             try {
                 syncBitmap(targetType, targetId, currentUserId, action, active);
@@ -285,7 +307,7 @@ public class InteractionServiceImpl implements InteractionService {
                 }
             } catch (Exception ex) {
                 log.warn(
-                        "互动成功后刷新 Redis 视图失败, userId={}, targetType={}, targetId={}, action={}, active={}",
+                        "refresh interaction cache failed, userId={}, targetType={}, targetId={}, action={}, active={}",
                         currentUserId,
                         targetType,
                         targetId,
@@ -300,7 +322,7 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 构建互动动作返回结果。
+     * 构造互动动作返回结果。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
@@ -319,7 +341,271 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 校验目标内容是否合法并读取快照。
+     * 规范化批量查询目标 ID。
+     *
+     * @param targetIds 原始目标 ID 列表
+     * @return 去重且有效的目标 ID 列表
+     */
+    private List<Long> normalizeTargetIds(List<Long> targetIds) {
+        List<Long> normalized = new ArrayList<Long>();
+        if (targetIds == null || targetIds.isEmpty()) {
+            return normalized;
+        }
+
+        Map<Long, Boolean> unique = new LinkedHashMap<Long, Boolean>();
+        for (Long targetId : targetIds) {
+            if (targetId == null || targetId <= 0L) {
+                continue;
+            }
+            if (!unique.containsKey(targetId)) {
+                unique.put(targetId, Boolean.TRUE);
+            }
+        }
+        normalized.addAll(unique.keySet());
+        return normalized;
+    }
+
+    /**
+     * 批量加载内容快照并校验是否允许互动。
+     *
+     * @param targetType 目标类型
+     * @param targetIds 目标 ID 列表
+     * @return 以目标 ID 为键的快照映射
+     */
+    private Map<Long, PostTargetSnapshot> loadTargetSnapshots(String targetType, List<Long> targetIds) {
+        Map<Long, PostTargetSnapshot> snapshots = new LinkedHashMap<Long, PostTargetSnapshot>();
+        if (targetIds.isEmpty()) {
+            return snapshots;
+        }
+
+        List<Map<String, Object>> rows = socialMapper.listPostSnapshotsByIds(targetIds);
+        if (rows != null) {
+            for (Map<String, Object> row : rows) {
+                PostTargetSnapshot snapshot = toSnapshot(row);
+                if (snapshot != null) {
+                    snapshots.put(snapshot.getPostId(), snapshot);
+                }
+            }
+        }
+
+        for (Long targetId : targetIds) {
+            PostTargetSnapshot snapshot = snapshots.get(targetId);
+            if (snapshot == null) {
+                throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "目标内容不存在");
+            }
+            if (!snapshot.interactable()) {
+                throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "当前内容不可互动");
+            }
+        }
+        return snapshots;
+    }
+
+    /**
+     * 将数据库行转换为内容快照。
+     *
+     * @param row 数据库查询结果
+     * @return 内容快照
+     */
+    private PostTargetSnapshot toSnapshot(Map<String, Object> row) {
+        if (row == null || row.isEmpty()) {
+            return null;
+        }
+        Object postId = row.get("postId");
+        Object creatorId = row.get("creatorId");
+        if (postId == null || creatorId == null) {
+            return null;
+        }
+        return new PostTargetSnapshot(
+                toLong(postId),
+                toLong(creatorId),
+                toStringValue(row.get("status")),
+                toStringValue(row.get("visible"))
+        );
+    }
+
+    /**
+     * 批量读取实体计数。
+     * 优先读取 Redis SDS，缺失时回退数据库聚合。
+     *
+     * @param targetType 目标类型
+     * @param targetIds 目标 ID 列表
+     * @return 以目标 ID 为键的计数映射
+     */
+    private Map<Long, long[]> readEntityCountersBatch(String targetType, List<Long> targetIds) {
+        Map<Long, long[]> result = new LinkedHashMap<Long, long[]>();
+        if (targetIds.isEmpty()) {
+            return result;
+        }
+
+        List<String> keys = new ArrayList<String>(targetIds.size());
+        for (Long targetId : targetIds) {
+            keys.add(SocialRedisKeys.entityCounterKey(targetType, targetId));
+        }
+
+        List<Object> pipelineResult = stringRedisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            for (String key : keys) {
+                connection.stringCommands().get(key.getBytes(StandardCharsets.UTF_8));
+            }
+            return null;
+        });
+
+        List<Long> fallbackTargetIds = new ArrayList<Long>();
+        for (int i = 0; i < targetIds.size(); i++) {
+            Long targetId = targetIds.get(i);
+            Object value = pipelineResult != null && i < pipelineResult.size() ? pipelineResult.get(i) : null;
+            byte[] raw = value instanceof byte[] ? (byte[]) value : null;
+            if (raw != null && raw.length == ENTITY_FIELD_COUNT * ENTITY_FIELD_SIZE) {
+                result.put(targetId, new long[]{
+                        readInt32BE(raw, OFFSET_LIKE),
+                        readInt32BE(raw, OFFSET_FAVORITE)
+                });
+            } else {
+                result.put(targetId, new long[]{0L, 0L});
+                fallbackTargetIds.add(targetId);
+            }
+        }
+
+        if (!fallbackTargetIds.isEmpty()) {
+            List<Map<String, Object>> rows = socialMapper.aggregateActiveInteractionCountsBatch(targetType, fallbackTargetIds);
+            if (rows != null) {
+                for (Map<String, Object> row : rows) {
+                    long targetId = toLong(row.get("targetId"));
+                    String actionType = toStringValue(row.get("actionType"));
+                    long total = toLong(row.get("total"));
+                    long[] stats = result.get(targetId);
+                    if (stats == null) {
+                        stats = new long[]{0L, 0L};
+                        result.put(targetId, stats);
+                    }
+                    if ("like".equals(actionType)) {
+                        stats[0] = total;
+                    } else if ("favorite".equals(actionType)) {
+                        stats[1] = total;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 批量读取查看者对目标列表的点赞和收藏状态。
+     * 优先读取 Redis 位图，缺失时回退数据库事实表。
+     *
+     * @param currentUserId 当前查看者用户 ID
+     * @param targetType 目标类型
+     * @param targetIds 目标 ID 列表
+     * @return 以目标 ID 为键的状态映射，下标 0 为点赞，下标 1 为收藏
+     */
+    private Map<Long, boolean[]> readViewerStatesBatch(long currentUserId, String targetType, List<Long> targetIds) {
+        Map<Long, boolean[]> result = new LinkedHashMap<Long, boolean[]>();
+        for (Long targetId : targetIds) {
+            result.put(targetId, new boolean[]{false, false});
+        }
+        if (currentUserId <= 0L || targetIds.isEmpty()) {
+            return result;
+        }
+
+        List<String> keys = new ArrayList<String>(targetIds.size() * 2);
+        List<Long> orderedTargetIds = new ArrayList<Long>(targetIds.size() * 2);
+        List<String> orderedActions = new ArrayList<String>(targetIds.size() * 2);
+        long bitOffset = SocialRedisKeys.bitOffsetOf(currentUserId);
+        long chunk = SocialRedisKeys.chunkOf(currentUserId);
+
+        for (Long targetId : targetIds) {
+            keys.add(SocialRedisKeys.bitmapKey("like", targetType, targetId, chunk));
+            orderedTargetIds.add(targetId);
+            orderedActions.add("like");
+
+            keys.add(SocialRedisKeys.bitmapKey("fav", targetType, targetId, chunk));
+            orderedTargetIds.add(targetId);
+            orderedActions.add("favorite");
+        }
+
+        List<Object> pipelineResult = stringRedisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            for (String key : keys) {
+                connection.stringCommands().getBit(key.getBytes(StandardCharsets.UTF_8), bitOffset);
+            }
+            return null;
+        });
+
+        for (int i = 0; i < orderedTargetIds.size(); i++) {
+            Object value = pipelineResult != null && i < pipelineResult.size() ? pipelineResult.get(i) : null;
+            if (!toBooleanResult(value)) {
+                continue;
+            }
+            boolean[] states = result.get(orderedTargetIds.get(i));
+            if (states == null) {
+                continue;
+            }
+            if ("like".equals(orderedActions.get(i))) {
+                states[0] = true;
+            } else {
+                states[1] = true;
+            }
+        }
+
+        List<Map<String, Object>> rows = socialMapper.listActiveInteractionsByUserAndTargets(currentUserId, targetType, targetIds);
+        if (rows != null) {
+            for (Map<String, Object> row : rows) {
+                long targetId = toLong(row.get("targetId"));
+                String actionType = toStringValue(row.get("actionType"));
+                boolean[] states = result.get(targetId);
+                if (states == null) {
+                    continue;
+                }
+                if ("like".equals(actionType)) {
+                    states[0] = true;
+                } else if ("favorite".equals(actionType)) {
+                    states[1] = true;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 激活互动状态。
+     *
+     * @param currentUserId 当前用户 ID
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param action 动作类型
+     * @return 本次是否真的发生了状态变化
+     */
+    private boolean activateInteractionState(long currentUserId, String targetType, long targetId, String action) {
+        if (socialMapper.reactivateInteraction(currentUserId, targetType, targetId, action) > 0) {
+            return true;
+        }
+        if (socialMapper.existsActiveInteraction(currentUserId, targetType, targetId, action) > 0) {
+            return false;
+        }
+        try {
+            socialMapper.insertInteraction(snowflakeIdGenerator.nextId(), currentUserId, targetType, targetId, action);
+            return true;
+        } catch (DuplicateKeyException ex) {
+            if (socialMapper.existsActiveInteraction(currentUserId, targetType, targetId, action) > 0) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * 取消互动状态。
+     *
+     * @param currentUserId 当前用户 ID
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param action 动作类型
+     * @return 本次是否真的发生了状态变化
+     */
+    private boolean deactivateInteractionState(long currentUserId, String targetType, long targetId, String action) {
+        return socialMapper.deactivateInteraction(currentUserId, targetType, targetId, action) > 0;
+    }
+
+    /**
+     * 加载并校验单个目标快照。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
@@ -327,17 +613,10 @@ public class InteractionServiceImpl implements InteractionService {
      */
     private PostTargetSnapshot loadTargetSnapshot(String targetType, long targetId) {
         ensureSupportedTargetType(targetType);
-        Map<String, Object> row = socialMapper.findPostSnapshot(targetId);
-        if (row == null || row.isEmpty()) {
+        PostTargetSnapshot snapshot = toSnapshot(socialMapper.findPostSnapshot(targetId));
+        if (snapshot == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "目标内容不存在");
         }
-
-        PostTargetSnapshot snapshot = new PostTargetSnapshot(
-                toLong(row.get("postId")),
-                toLong(row.get("creatorId")),
-                toStringValue(row.get("status")),
-                toStringValue(row.get("visible"))
-        );
         if (!snapshot.interactable()) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "当前内容不可互动");
         }
@@ -356,12 +635,23 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 读取实体点赞和收藏计数。
-     * 优先读 Redis 计数 SDS，缺失时回退到数据库事实层聚合。
+     * 校验当前操作用户是否已登录。
+     *
+     * @param currentUserId 当前操作用户 ID
+     */
+    private void ensureAuthenticatedUser(long currentUserId) {
+        if (currentUserId <= 0L) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
+        }
+    }
+
+    /**
+     * 读取单个实体计数。
+     * 优先读 Redis SDS，缺失时回退数据库聚合。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
-     * @return 长度为 2 的统计数组，下标 0 为点赞数，下标 1 为收藏数
+     * @return 长度为 2 的统计数组
      */
     private long[] readEntityCounters(String targetType, long targetId) {
         String key = SocialRedisKeys.entityCounterKey(targetType, targetId);
@@ -384,13 +674,12 @@ public class InteractionServiceImpl implements InteractionService {
 
     /**
      * 判断指定用户对目标内容的互动状态是否生效。
-     * Redis 位图未命中时，会回退到数据库事实层判断。
      *
      * @param userId 用户 ID
      * @param targetType 目标类型
      * @param targetId 目标 ID
      * @param action 动作类型
-     * @return 当前是否生效
+     * @return 生效返回 true，否则返回 false
      */
     private boolean isInteractionActive(long userId, String targetType, long targetId, String action) {
         if (isBitmapMarked(action, targetType, targetId, userId)) {
@@ -400,13 +689,13 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 判断 Redis 位图里是否已标记当前用户动作状态。
+     * 判断位图中是否存在当前用户状态。
      *
      * @param action 动作类型
      * @param targetType 目标类型
      * @param targetId 目标 ID
      * @param userId 用户 ID
-     * @return 位图是否已置位
+     * @return 命中返回 true，否则返回 false
      */
     private boolean isBitmapMarked(String action, String targetType, long targetId, long userId) {
         String metric = resolveBitmapMetric(action);
@@ -418,13 +707,13 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 在事务提交后同步位图事实层。
+     * 同步互动位图。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
      * @param userId 用户 ID
      * @param action 动作类型
-     * @param active true 表示激活，false 表示取消
+     * @param active true 表示生效，false 表示取消
      */
     private void syncBitmap(String targetType, long targetId, long userId, String action, boolean active) {
         String metric = resolveBitmapMetric(action);
@@ -438,7 +727,7 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 在事务提交后同步实体计数 SDS。
+     * 同步实体计数 SDS。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
@@ -458,7 +747,7 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 解析动作类型对应的事件类型。
+     * 解析动作对应的事件类型。
      *
      * @param action 动作类型
      * @return 事件类型
@@ -468,7 +757,7 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 解析动作类型对应的 Redis 位图指标名。
+     * 解析动作对应的位图指标名。
      *
      * @param action 动作类型
      * @return 位图指标名
@@ -480,7 +769,7 @@ public class InteractionServiceImpl implements InteractionService {
     /**
      * 序列化 outbox 事件载荷。
      *
-     * @param payload 事件载荷对象
+     * @param payload 事件对象
      * @return JSON 字符串
      */
     private String serialize(Object payload) {
@@ -502,9 +791,6 @@ public class InteractionServiceImpl implements InteractionService {
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            /**
-             * 在事务提交完成后执行任务。
-             */
             @Override
             public void afterCommit() {
                 runnable.run();
@@ -513,7 +799,7 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 将任意对象转换为 long。
+     * 将任意对象转成 long。
      *
      * @param value 原始对象
      * @return long 数值
@@ -526,7 +812,7 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 将任意对象转换为字符串。
+     * 将任意对象转成字符串。
      *
      * @param value 原始对象
      * @return 字符串值
@@ -536,10 +822,26 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 以大端序读取 4 字节无符号整数。
+     * 将位图读取结果转成布尔值。
+     *
+     * @param value Redis 读取结果
+     * @return 布尔状态
+     */
+    private boolean toBooleanResult(Object value) {
+        if (value instanceof Boolean) {
+            return (Boolean) value;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).longValue() > 0L;
+        }
+        return value != null && Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    /**
+     * 按大端序读取 4 字节无符号整数。
      *
      * @param buffer 原始字节数组
-     * @param offset 起始偏移量
+     * @param offset 偏移量
      * @return 解析后的数值
      */
     private long readInt32BE(byte[] buffer, int offset) {
