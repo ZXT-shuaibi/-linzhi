@@ -7,6 +7,7 @@ package com.zhiguang.be.common.exception;
 public enum ErrorCode {
     VALIDATION_ERROR("COMMON_400_VALIDATION", "参数校验失败"),
     BAD_REQUEST("COMMON_400_BAD_REQUEST", "请求参数错误"),
+    CONFLICT("COMMON_409_CONFLICT", "资源状态冲突"),
     UNAUTHORIZED("AUTH_401_UNAUTHORIZED", "认证失败"),
     LOGIN_BLOCKED("AUTH_403_LOGIN_BLOCKED", "当前账号登录受限"),
     FORBIDDEN("COMMON_403_FORBIDDEN", "访问被拒绝"),

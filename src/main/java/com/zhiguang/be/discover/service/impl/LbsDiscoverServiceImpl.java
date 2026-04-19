@@ -160,7 +160,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private NearbySearchResponse performSearch(NearbySearchRequest request, String type) {
         String geoKey = GEO_KEY_PREFIX + type;
         Point center = toRedisPoint(request.lat(), request.lng());
-        Circle circle = new Circle(center, new Distance(request.radius(), Metrics.METERS));
+        Circle circle = new Circle(center, new Distance(request.radius(), Metrics.MILES));
         GeoRadiusCommandArgs searchArgs = buildSearchArgs(request);
 
         GeoResults<RedisGeoCommands.GeoLocation<String>> results;
