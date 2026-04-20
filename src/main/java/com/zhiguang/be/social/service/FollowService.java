@@ -2,8 +2,7 @@ package com.zhiguang.be.social.service;
 
 import com.zhiguang.be.social.FollowActionData;
 import com.zhiguang.be.social.FollowListData;
-
-import java.util.Map;
+import com.zhiguang.be.social.RelationStatusData;
 
 /**
  * 关注关系服务接口。
@@ -50,16 +49,16 @@ public interface FollowService {
     FollowListData followers(long userId, int page, int size);
 
     /**
-     * 查询当前查看者与目标用户的关系三态。
+     * 查询当前查看者与目标用户之间的关系状态。
      *
      * @param currentUserId 当前查看者 ID，匿名用户可传入 0
      * @param targetUserId 目标用户 ID
-     * @return 包含 following、followedBy、mutual 关键字的状态映射
+     * @return 关系状态结果
      */
-    Map<String, Boolean> relationStatus(long currentUserId, long targetUserId);
+    RelationStatusData relationStatus(long currentUserId, long targetUserId);
 
     /**
-     * 判断一个用户是否关注了另一个用户。
+     * 判断一个用户是否已关注另一个用户。
      *
      * @param currentUserId 当前用户 ID
      * @param targetUserId 目标用户 ID

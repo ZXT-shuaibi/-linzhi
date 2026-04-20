@@ -10,6 +10,7 @@ import com.zhiguang.be.social.FollowEventPayload;
 import com.zhiguang.be.social.FollowListData;
 import com.zhiguang.be.social.FollowUserItem;
 import com.zhiguang.be.social.PageMeta;
+import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.SocialRedisKeys;
 import com.zhiguang.be.social.mapper.SocialMapper;
 import com.zhiguang.be.social.service.FollowService;
@@ -211,24 +212,17 @@ public class FollowServiceImpl implements FollowService {
      * @return 关注三态结果
      */
     @Override
-    public Map<String, Boolean> relationStatus(long currentUserId, long targetUserId) {
+    public RelationStatusData relationStatus(long currentUserId, long targetUserId) {
         ensureUserExists(targetUserId, "目标用户不存在");
 
-        Map<String, Boolean> result = new LinkedHashMap<String, Boolean>();
         if (currentUserId <= 0L) {
-            result.put("following", false);
-            result.put("followedBy", false);
-            result.put("mutual", false);
-            return result;
+            return new RelationStatusData(false, false, false);
         }
 
         ensureUserExists(currentUserId, "当前用户不存在");
         boolean following = isFollowing(currentUserId, targetUserId);
         boolean followedBy = isFollowing(targetUserId, currentUserId);
-        result.put("following", following);
-        result.put("followedBy", followedBy);
-        result.put("mutual", following && followedBy);
-        return result;
+        return new RelationStatusData(following, followedBy, following && followedBy);
     }
 
     /**

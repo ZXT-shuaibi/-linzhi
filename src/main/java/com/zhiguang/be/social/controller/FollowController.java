@@ -5,6 +5,7 @@ import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.social.FollowActionData;
 import com.zhiguang.be.social.FollowListData;
+import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.service.FollowService;
 import jakarta.validation.constraints.Min;
 import org.springframework.http.HttpStatus;
@@ -18,8 +19,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.Map;
 
 /**
  * 关注关系控制器。
@@ -105,7 +104,7 @@ public class FollowController {
     }
 
     /**
-     * 查询当前查看者与目标用户之间的关注状态。
+     * 查询当前查看者与目标用户之间的关系状态。
      * 支持匿名查看。
      *
      * @param targetUserId 目标用户 ID
@@ -113,7 +112,7 @@ public class FollowController {
      * @return 关系状态结果
      */
     @GetMapping("/status")
-    public ApiResponse<Map<String, Boolean>> relationStatus(
+    public ApiResponse<RelationStatusData> relationStatus(
             @RequestParam long targetUserId,
             @AuthenticationPrincipal Jwt jwt
     ) {
@@ -133,7 +132,7 @@ public class FollowController {
             throw new BusinessException(
                     ErrorCode.UNAUTHORIZED,
                     HttpStatus.UNAUTHORIZED,
-                    "\u65e0\u6548\u7684\u767b\u5f55\u6001"
+                    "无效的登录态"
             );
         }
     }
