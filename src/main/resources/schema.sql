@@ -135,6 +135,14 @@ CREATE TABLE IF NOT EXISTS know_posts (
     title VARCHAR(256),
     -- 摘要描述。
     description VARCHAR(128),
+    -- 纬度。
+    latitude DOUBLE,
+    -- 经度。
+    longitude DOUBLE,
+    -- 地理网格编码。
+    geo_hash VARCHAR(16),
+    -- 地址描述。
+    address VARCHAR(255),
     -- 正文或正文文件访问地址。
     content_url CLOB,
     -- 对象存储中的 key。
@@ -168,6 +176,12 @@ CREATE TABLE IF NOT EXISTS know_posts (
     -- 关联作者。
     CONSTRAINT fk_know_posts_creator FOREIGN KEY (creator_id) REFERENCES users(id)
 );
+
+-- 兼容已有 know_posts 表缺少位置字段的场景。
+ALTER TABLE know_posts ADD COLUMN IF NOT EXISTS latitude DOUBLE;
+ALTER TABLE know_posts ADD COLUMN IF NOT EXISTS longitude DOUBLE;
+ALTER TABLE know_posts ADD COLUMN IF NOT EXISTS geo_hash VARCHAR(16);
+ALTER TABLE know_posts ADD COLUMN IF NOT EXISTS address VARCHAR(255);
 
 -- 查用户发帖列表。
 CREATE INDEX IF NOT EXISTS ix_know_posts_creator_created_at ON know_posts(creator_id, created_at);

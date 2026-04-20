@@ -64,6 +64,8 @@ public class SecurityConfiguration {
                                 "/actuator/health",
                                 "/error"
                         ).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/mine").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/feed").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/discover/nearby").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/discover/nearby").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/posts/*").permitAll()
