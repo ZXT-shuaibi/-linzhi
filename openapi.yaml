@@ -1104,7 +1104,7 @@ paths:
       operationId: getHomeFeed
       security: []
       x-maturity: 已实现
-      x-source: 基于需求推导
+      x-source: 基于代码实现
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/SizeParam'
@@ -1126,6 +1126,8 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/FeedData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '429':
