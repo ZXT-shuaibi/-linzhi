@@ -75,6 +75,7 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/*/summary").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/summary-batch").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/follows/status").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/social/counters/users/*").permitAll()
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(accessJwtDecoder)))

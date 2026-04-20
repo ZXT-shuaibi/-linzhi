@@ -1,5 +1,7 @@
 package com.zhiguang.be.social.service.impl;
 
+import com.zhiguang.be.common.exception.BusinessException;
+import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.social.SocialRedisKeys;
 import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.mapper.SocialMapper;
@@ -7,9 +9,11 @@ import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -18,7 +22,7 @@ import java.util.Map;
 
 /**
  * 用户维社交计数服务实现。
- * 负责维护用户维度的关注、粉丝、发帖、获赞和获收藏计数，并提供基于事实层的重建能力。
+ * 负责维护用户维度的关注、粉丝、发帖、获赞和获收藏计数，并提供按需自检与重建能力。
  */
 @Service
 public class UserSocialCounterServiceImpl implements UserSocialCounterService {
@@ -30,6 +34,7 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
     private static final int OFFSET_POSTS = 8;
     private static final int OFFSET_LIKED_POSTS = 12;
     private static final int OFFSET_FAVED_POSTS = 16;
+    private static final Duration COUNTER_CHECK_INTERVAL = Duration.ofMinutes(5);
 
     private final StringRedisTemplate stringRedisTemplate;
     private final SocialMapper socialMapper;
@@ -44,7 +49,7 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
     public UserSocialCounterServiceImpl(StringRedisTemplate stringRedisTemplate, SocialMapper socialMapper) {
         this.stringRedisTemplate = stringRedisTemplate;
         this.socialMapper = socialMapper;
-        this.incrementFieldScript = new DefaultRedisScript<>();
+        this.incrementFieldScript = new DefaultRedisScript<Long>();
         this.incrementFieldScript.setResultType(Long.class);
         this.incrementFieldScript.setScriptText(
                 "local cntKey = KEYS[1]\n"
@@ -132,25 +137,25 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
 
     /**
      * 查询用户维社交计数。
-     * Redis 中缺失或结构异常时，会自动回退到事实层重建。
+     * 读取时会按需做结构校验和轻量一致性校验，不一致时自动重建。
      *
      * @param userId 用户 ID
      * @return 用户维社交计数
      */
     @Override
     public UserSocialCounterData getUserSocialCounter(long userId) {
+        ensureUserExists(userId);
+
         byte[] raw = readRawCounter(userId);
-        if (raw == null || raw.length != FIELD_SIZE * FIELD_COUNT) {
+        if (!isValidRawCounter(raw)) {
             return rebuildAllCounters(userId);
         }
-        return new UserSocialCounterData(
-                String.valueOf(userId),
-                readInt32BE(raw, OFFSET_FOLLOWINGS),
-                readInt32BE(raw, OFFSET_FOLLOWERS),
-                readInt32BE(raw, OFFSET_POSTS),
-                readInt32BE(raw, OFFSET_LIKED_POSTS),
-                readInt32BE(raw, OFFSET_FAVED_POSTS)
-        );
+
+        if (shouldCheckCounterConsistency(userId) && !isFollowCounterConsistent(userId, raw)) {
+            return rebuildAllCounters(userId);
+        }
+
+        return toUserSocialCounterData(userId, raw);
     }
 
     /**
@@ -161,6 +166,8 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
      */
     @Override
     public UserSocialCounterData rebuildAllCounters(long userId) {
+        ensureUserExists(userId);
+
         long followings = socialMapper.countFollowingActive(userId);
         long followers = socialMapper.countFollowerActive(userId);
         long posts = socialMapper.countPublishedPostsByCreatorId(userId);
@@ -179,32 +186,27 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
             }
         }
 
-        byte[] buffer = new byte[FIELD_SIZE * FIELD_COUNT];
-        writeInt32BE(buffer, OFFSET_FOLLOWINGS, followings);
-        writeInt32BE(buffer, OFFSET_FOLLOWERS, followers);
-        writeInt32BE(buffer, OFFSET_POSTS, posts);
-        writeInt32BE(buffer, OFFSET_LIKED_POSTS, likedPosts);
-        writeInt32BE(buffer, OFFSET_FAVED_POSTS, favedPosts);
-        writeRawCounter(userId, buffer);
-
-        return new UserSocialCounterData(
-                String.valueOf(userId),
-                followings,
-                followers,
-                posts,
-                likedPosts,
-                favedPosts
-        );
+        byte[] raw = new byte[FIELD_SIZE * FIELD_COUNT];
+        writeInt32BE(raw, OFFSET_FOLLOWINGS, followings);
+        writeInt32BE(raw, OFFSET_FOLLOWERS, followers);
+        writeInt32BE(raw, OFFSET_POSTS, posts);
+        writeInt32BE(raw, OFFSET_LIKED_POSTS, likedPosts);
+        writeInt32BE(raw, OFFSET_FAVED_POSTS, favedPosts);
+        writeRawCounter(userId, raw);
+        return toUserSocialCounterData(userId, raw);
     }
 
     /**
-     * 对用户维计数的指定槽位做原子增量更新。
+     * 对用户维计数指定槽位做原子增量更新。
      *
      * @param userId 用户 ID
      * @param fieldIndex 槽位下标，从 1 开始
      * @param delta 变化量
      */
     private void incrementField(long userId, int fieldIndex, int delta) {
+        if (userId <= 0L || delta == 0) {
+            return;
+        }
         stringRedisTemplate.execute(
                 incrementFieldScript,
                 Collections.singletonList(SocialRedisKeys.userCounterKey(userId)),
@@ -212,6 +214,66 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
                 String.valueOf(FIELD_SIZE),
                 String.valueOf(fieldIndex),
                 String.valueOf(delta)
+        );
+    }
+
+    /**
+     * 判断是否需要做本次抽样一致性校验。
+     * 参考 zhiguang 的做法，用短期锁控制检查频率。
+     *
+     * @param userId 用户 ID
+     * @return 需要检查返回 true，否则返回 false
+     */
+    private boolean shouldCheckCounterConsistency(long userId) {
+        Boolean doCheck = stringRedisTemplate.opsForValue().setIfAbsent(
+                SocialRedisKeys.userCounterCheckKey(userId),
+                "1",
+                COUNTER_CHECK_INTERVAL
+        );
+        return Boolean.TRUE.equals(doCheck);
+    }
+
+    /**
+     * 校验用户关注数和粉丝数是否与事实层一致。
+     * 这里仅做轻量校验，不每次都回源比对全部槽位。
+     *
+     * @param userId 用户 ID
+     * @param raw 当前 Redis 中的原始计数字节数组
+     * @return 一致返回 true，否则返回 false
+     */
+    private boolean isFollowCounterConsistent(long userId, byte[] raw) {
+        long cachedFollowings = readInt32BE(raw, OFFSET_FOLLOWINGS);
+        long cachedFollowers = readInt32BE(raw, OFFSET_FOLLOWERS);
+        long dbFollowings = socialMapper.countFollowingActive(userId);
+        long dbFollowers = socialMapper.countFollowerActive(userId);
+        return cachedFollowings == dbFollowings && cachedFollowers == dbFollowers;
+    }
+
+    /**
+     * 判断原始计数结构是否完整有效。
+     *
+     * @param raw 原始计数字节数组
+     * @return 结构有效返回 true，否则返回 false
+     */
+    private boolean isValidRawCounter(byte[] raw) {
+        return raw != null && raw.length == FIELD_SIZE * FIELD_COUNT;
+    }
+
+    /**
+     * 将原始 SDS 计数转换为对外返回对象。
+     *
+     * @param userId 用户 ID
+     * @param raw 原始计数字节数组
+     * @return 用户维社交计数对象
+     */
+    private UserSocialCounterData toUserSocialCounterData(long userId, byte[] raw) {
+        return new UserSocialCounterData(
+                String.valueOf(userId),
+                readInt32BE(raw, OFFSET_FOLLOWINGS),
+                readInt32BE(raw, OFFSET_FOLLOWERS),
+                readInt32BE(raw, OFFSET_POSTS),
+                readInt32BE(raw, OFFSET_LIKED_POSTS),
+                readInt32BE(raw, OFFSET_FAVED_POSTS)
         );
     }
 
@@ -249,8 +311,8 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
      * @return 以帖子 ID 为键的统计结果，数组下标 0 表示点赞数，下标 1 表示收藏数
      */
     private Map<Long, long[]> readPostInteractionCounters(List<Long> postIds) {
-        Map<Long, long[]> result = new LinkedHashMap<>();
-        List<String> keys = new ArrayList<>(postIds.size());
+        Map<Long, long[]> result = new LinkedHashMap<Long, long[]>();
+        List<String> keys = new ArrayList<String>(postIds.size());
         for (Long postId : postIds) {
             keys.add(SocialRedisKeys.entityCounterKey("post", postId));
         }
@@ -277,11 +339,22 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
             Long likeCount = socialMapper.aggregateActiveInteractionCount("post", postId, "like");
             Long favoriteCount = socialMapper.aggregateActiveInteractionCount("post", postId, "favorite");
             result.put(postId, new long[]{
-                    likeCount == null ? 0L : likeCount,
-                    favoriteCount == null ? 0L : favoriteCount
+                    likeCount == null ? 0L : likeCount.longValue(),
+                    favoriteCount == null ? 0L : favoriteCount.longValue()
             });
         }
         return result;
+    }
+
+    /**
+     * 校验用户是否存在。
+     *
+     * @param userId 用户 ID
+     */
+    private void ensureUserExists(long userId) {
+        if (userId <= 0L || socialMapper.existsUser(userId) <= 0) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "目标用户不存在");
+        }
     }
 
     /**
