@@ -10,6 +10,8 @@
             <arg column="author_avatar" javaType="java.lang.String"/>
             <arg column="title" javaType="java.lang.String"/>
             <arg column="description" javaType="java.lang.String"/>
+            <arg column="img_urls" javaType="java.lang.String"/>
+            <arg column="tags" javaType="java.lang.String"/>
             <arg column="latitude" javaType="java.lang.Double"/>
             <arg column="longitude" javaType="java.lang.Double"/>
             <arg column="publish_time" javaType="java.time.Instant"/>
@@ -24,6 +26,8 @@
                u.avatar as author_avatar,
                p.title,
                p.description,
+               p.img_urls,
+               p.tags,
                p.latitude,
                p.longitude,
                p.publish_time,

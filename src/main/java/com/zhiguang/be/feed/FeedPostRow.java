@@ -13,6 +13,8 @@ public record FeedPostRow(
         String authorAvatar,
         String title,
         String description,
+        String imgUrlsJson,
+        String tagsJson,
         Double latitude,
         Double longitude,
         Instant publishTime,

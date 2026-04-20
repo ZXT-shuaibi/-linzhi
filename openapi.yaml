@@ -2052,14 +2052,36 @@ components:
           type: string
         summary:
           type: string
+        coverUrl:
+          type: string
+          format: uri
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
         author:
           $ref: '#/components/schemas/UserProfileBrief'
+        likeCount:
+          type: integer
+          format: int64
+        favoriteCount:
+          type: integer
+          format: int64
+        liked:
+          type: boolean
+          nullable: true
+        faved:
+          type: boolean
+          nullable: true
         distanceMeters:
           type: number
           format: double
         hotScore:
           type: number
           format: double
+        isTop:
+          type: boolean
         publishedAt:
           type: string
           format: date-time

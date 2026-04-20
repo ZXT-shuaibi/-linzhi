@@ -18,5 +18,5 @@ public interface FeedService {
      * @param geoHash 可选 GeoHash
      * @return 首页 Feed 分页结果
      */
-    FeedData getHomeFeed(int page, int size, Double lat, Double lng, String geoHash);
+    FeedData getHomeFeed(int page, int size, Double lat, Double lng, String geoHash, long viewerId);
 }

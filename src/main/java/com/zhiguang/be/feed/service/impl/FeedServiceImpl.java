@@ -1,6 +1,7 @@
 package com.zhiguang.be.feed.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
@@ -10,7 +11,9 @@ import com.zhiguang.be.feed.FeedItem;
 import com.zhiguang.be.feed.FeedPostRow;
 import com.zhiguang.be.feed.mapper.FeedMapper;
 import com.zhiguang.be.feed.service.FeedService;
+import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.PageMeta;
+import com.zhiguang.be.social.service.InteractionService;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -22,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -41,6 +45,7 @@ public class FeedServiceImpl implements FeedService {
     private final FeedMapper feedMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+    private final InteractionService interactionService;
     private final ConcurrentHashMap<String, LocalCacheEntry> localPageCache = new ConcurrentHashMap<String, LocalCacheEntry>();
     private final ConcurrentHashMap<String, Object> singleFlightLocks = new ConcurrentHashMap<String, Object>();
 
@@ -54,11 +59,13 @@ public class FeedServiceImpl implements FeedService {
     public FeedServiceImpl(
             FeedMapper feedMapper,
             StringRedisTemplate stringRedisTemplate,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            InteractionService interactionService
     ) {
         this.feedMapper = feedMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+        this.interactionService = interactionService;
     }
 
     /**
@@ -74,7 +81,7 @@ public class FeedServiceImpl implements FeedService {
      * @return 首页 Feed 分页结果
      */
     @Override
-    public FeedData getHomeFeed(int page, int size, Double lat, Double lng, String geoHash) {
+    public FeedData getHomeFeed(int page, int size, Double lat, Double lng, String geoHash, long viewerId) {
         int safePage = normalizePage(page);
         int safeSize = normalizePageSize(size);
         validateLocation(lat, lng);
@@ -82,14 +89,14 @@ public class FeedServiceImpl implements FeedService {
         String cacheKey = buildCacheKey(safePage, safeSize, lat, lng, geoHash);
         FeedData localCached = readLocalCache(cacheKey);
         if (localCached != null) {
-            return new FeedData(localCached.items(), localCached.page(), "L1");
+            return enrichFeedData(localCached, viewerId, "L1");
         }
 
         CachedFeedPage cachedPage = readCache(cacheKey);
         if (cachedPage != null) {
             FeedData l2Data = cachedPage.toFeedData("L2");
             writeLocalCache(cacheKey, l2Data);
-            return l2Data;
+            return enrichFeedData(l2Data, viewerId, "L2");
         }
 
         Object lock = singleFlightLocks.computeIfAbsent(cacheKey, key -> new Object());
@@ -97,14 +104,14 @@ public class FeedServiceImpl implements FeedService {
             try {
                 FeedData localCachedAgain = readLocalCache(cacheKey);
                 if (localCachedAgain != null) {
-                    return new FeedData(localCachedAgain.items(), localCachedAgain.page(), "L1");
+                    return enrichFeedData(localCachedAgain, viewerId, "L1");
                 }
 
                 CachedFeedPage cachedPageAgain = readCache(cacheKey);
                 if (cachedPageAgain != null) {
                     FeedData l2Data = cachedPageAgain.toFeedData("L2");
                     writeLocalCache(cacheKey, l2Data);
-                    return l2Data;
+                    return enrichFeedData(l2Data, viewerId, "L2");
                 }
 
                 FeedData freshData = hasLocation(lat, lng)
@@ -112,7 +119,7 @@ public class FeedServiceImpl implements FeedService {
                         : buildLatestFeed(safePage, safeSize);
                 writeCache(cacheKey, freshData);
                 writeLocalCache(cacheKey, freshData);
-                return new FeedData(freshData.items(), freshData.page(), "DB");
+                return enrichFeedData(freshData, viewerId, "DB");
             } finally {
                 singleFlightLocks.remove(cacheKey);
             }
@@ -192,15 +199,67 @@ public class FeedServiceImpl implements FeedService {
      * @return Feed 卡片
      */
     private FeedItem toFeedItem(FeedPostRow row, Double distanceMeters, Double hotScore) {
+        List<String> imageUrls = parseStringList(row.imgUrlsJson());
         return new FeedItem(
                 row.postId(),
                 row.title(),
                 row.description(),
+                imageUrls.isEmpty() ? null : imageUrls.get(0),
+                parseStringList(row.tagsJson()),
                 new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar()),
+                null,
+                null,
+                null,
+                null,
                 distanceMeters,
                 hotScore,
+                row.isTop(),
                 row.publishTime()
         );
+    }
+
+    /**
+     * 叠加互动汇总与用户态。
+     * 公共缓存中不存用户态字段，返回前再按当前查看者进行覆盖。
+     *
+     * @param baseFeedData 基础 Feed 数据
+     * @param viewerId 当前查看者 ID
+     * @param cacheLayer 命中缓存层级
+     * @return 叠加后的 Feed 数据
+     */
+    private FeedData enrichFeedData(FeedData baseFeedData, long viewerId, String cacheLayer) {
+        List<FeedItem> baseItems = baseFeedData.items();
+        if (baseItems == null || baseItems.isEmpty()) {
+            return new FeedData(baseItems, baseFeedData.page(), cacheLayer);
+        }
+
+        List<Long> targetIds = new ArrayList<Long>(baseItems.size());
+        for (FeedItem item : baseItems) {
+            targetIds.add(Long.parseLong(item.postId()));
+        }
+
+        Map<String, InteractionSummary> summaryMap = interactionService.summaryBatch(viewerId, "post", targetIds);
+        List<FeedItem> enrichedItems = new ArrayList<FeedItem>(baseItems.size());
+        for (FeedItem item : baseItems) {
+            InteractionSummary summary = summaryMap.get(item.postId());
+            enrichedItems.add(new FeedItem(
+                    item.postId(),
+                    item.title(),
+                    item.summary(),
+                    item.coverUrl(),
+                    item.tags(),
+                    item.author(),
+                    summary == null ? 0L : summary.getLikeCount(),
+                    summary == null ? 0L : summary.getFavoriteCount(),
+                    summary == null ? null : summary.isViewerLiked(),
+                    summary == null ? null : summary.isViewerFavorited(),
+                    item.distanceMeters(),
+                    item.hotScore(),
+                    item.isTop(),
+                    item.publishedAt()
+            ));
+        }
+        return new FeedData(enrichedItems, baseFeedData.page(), cacheLayer);
     }
 
     /**
@@ -420,6 +479,24 @@ public class FeedServiceImpl implements FeedService {
      */
     private String sanitizeSegment(String value) {
         return value.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_.-]", "_");
+    }
+
+    /**
+     * 解析 JSON 字符串数组。
+     *
+     * @param json JSON 数组字符串
+     * @return 字符串列表
+     */
+    private List<String> parseStringList(String json) {
+        if (!StringUtils.hasText(json)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<String>>() {
+            });
+        } catch (Exception ex) {
+            return List.of();
+        }
     }
 
     /**
