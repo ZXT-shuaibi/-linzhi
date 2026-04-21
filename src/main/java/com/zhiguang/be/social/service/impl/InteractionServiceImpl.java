@@ -10,6 +10,8 @@ import com.zhiguang.be.social.InteractionActionData;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.PostTargetSnapshot;
 import com.zhiguang.be.social.SocialRedisKeys;
+import com.zhiguang.be.social.kafka.CounterEvent;
+import com.zhiguang.be.social.kafka.CounterEventProducer;
 import com.zhiguang.be.social.mapper.SocialMapper;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
@@ -21,6 +23,7 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -50,15 +53,19 @@ public class InteractionServiceImpl implements InteractionService {
     private static final int OFFSET_LIKE = 0;
     private static final int OFFSET_FAVORITE = 4;
     private static final Duration ENTITY_COUNTER_REBUILD_LOCK_TTL = Duration.ofSeconds(5);
+    private static final String AGGREGATE_FIELD_LIKE = "1";
+    private static final String AGGREGATE_FIELD_FAVORITE = "2";
 
     private final SocialMapper socialMapper;
     private final FollowService followService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final UserSocialCounterService userSocialCounterService;
+    private final CounterEventProducer counterEventProducer;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final DefaultRedisScript<Long> bitmapToggleScript;
     private final DefaultRedisScript<Long> entityCounterIncrementScript;
+    private final DefaultRedisScript<String> aggregateFoldScript;
 
     /**
      * 构造互动服务。
@@ -74,6 +81,7 @@ public class InteractionServiceImpl implements InteractionService {
             FollowService followService,
             SnowflakeIdGenerator snowflakeIdGenerator,
             UserSocialCounterService userSocialCounterService,
+            CounterEventProducer counterEventProducer,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper
     ) {
@@ -81,6 +89,7 @@ public class InteractionServiceImpl implements InteractionService {
         this.followService = followService;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.userSocialCounterService = userSocialCounterService;
+        this.counterEventProducer = counterEventProducer;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
 
@@ -131,6 +140,46 @@ public class InteractionServiceImpl implements InteractionService {
                         + "cnt = string.sub(cnt, 1, off) .. seg .. string.sub(cnt, off + fieldSize + 1)\n"
                         + "redis.call('SET', cntKey, cnt)\n"
                         + "return 1\n"
+        );
+
+        this.aggregateFoldScript = new DefaultRedisScript<String>();
+        this.aggregateFoldScript.setResultType(String.class);
+        this.aggregateFoldScript.setScriptText(
+                "local aggKey = KEYS[1]\n"
+                        + "local cntKey = KEYS[2]\n"
+                        + "local schemaLen = tonumber(ARGV[1])\n"
+                        + "local fieldSize = tonumber(ARGV[2])\n"
+                        + "local likeField = ARGV[3]\n"
+                        + "local favoriteField = ARGV[4]\n"
+                        + "local function read32be(s, off)\n"
+                        + "  local b = {string.byte(s, off + 1, off + 4)}\n"
+                        + "  local n = 0\n"
+                        + "  for i = 1, 4 do n = n * 256 + b[i] end\n"
+                        + "  return n\n"
+                        + "end\n"
+                        + "local function write32be(n)\n"
+                        + "  local t = {}\n"
+                        + "  for i = 4, 1, -1 do t[i] = n % 256; n = math.floor(n / 256) end\n"
+                        + "  return string.char(unpack(t))\n"
+                        + "end\n"
+                        + "local function writeValue(cnt, off, value)\n"
+                        + "  local seg = write32be(value)\n"
+                        + "  return string.sub(cnt, 1, off) .. seg .. string.sub(cnt, off + fieldSize + 1)\n"
+                        + "end\n"
+                        + "local likeDelta = tonumber(redis.call('HGET', aggKey, likeField) or '0')\n"
+                        + "local favoriteDelta = tonumber(redis.call('HGET', aggKey, favoriteField) or '0')\n"
+                        + "if likeDelta == 0 and favoriteDelta == 0 then return '0,0' end\n"
+                        + "local cnt = redis.call('GET', cntKey)\n"
+                        + "if not cnt then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
+                        + "local likeValue = read32be(cnt, 0) + likeDelta\n"
+                        + "if likeValue < 0 then likeValue = 0 end\n"
+                        + "cnt = writeValue(cnt, 0, likeValue)\n"
+                        + "local favoriteValue = read32be(cnt, fieldSize) + favoriteDelta\n"
+                        + "if favoriteValue < 0 then favoriteValue = 0 end\n"
+                        + "cnt = writeValue(cnt, fieldSize, favoriteValue)\n"
+                        + "redis.call('SET', cntKey, cnt)\n"
+                        + "redis.call('DEL', aggKey)\n"
+                        + "return tostring(likeDelta) .. ',' .. tostring(favoriteDelta)\n"
         );
     }
 
@@ -306,7 +355,15 @@ public class InteractionServiceImpl implements InteractionService {
         runAfterCommit(() -> {
             try {
                 syncBitmap(targetType, targetId, currentUserId, action, active);
-                incrementEntityCounter(targetType, targetId, action, delta);
+                incrementAggregateBucket(targetType, targetId, action, delta);
+                counterEventProducer.publish(CounterEvent.of(
+                        targetType,
+                        String.valueOf(targetId),
+                        resolveBitmapMetric(action),
+                        resolveCounterFieldIndex(action),
+                        currentUserId,
+                        delta
+                ));
                 if ("like".equals(action)) {
                     userSocialCounterService.incrementLikesReceived(snapshot.getCreatorId(), delta);
                 } else {
@@ -509,6 +566,21 @@ public class InteractionServiceImpl implements InteractionService {
                     result.put(targetId, stats);
                 }
                 writeEntityCounterSnapshot(targetType, targetId, stats[0], stats[1]);
+                clearAggregateBucket(targetType, targetId);
+            }
+        }
+
+        Map<Long, long[]> aggregateDeltas = readAggregateDeltasBatch(targetType, targetIds);
+        for (Long targetId : targetIds) {
+            long[] stats = result.get(targetId);
+            if (stats == null) {
+                stats = new long[]{0L, 0L};
+                result.put(targetId, stats);
+            }
+            long[] deltas = aggregateDeltas.get(targetId);
+            if (deltas != null) {
+                stats[0] += deltas[0];
+                stats[1] += deltas[1];
             }
         }
         return result;
@@ -722,26 +794,82 @@ public class InteractionServiceImpl implements InteractionService {
         String key = SocialRedisKeys.entityCounterKey(targetType, targetId);
         byte[] raw = stringRedisTemplate.execute((RedisCallback<byte[]>) connection ->
                 connection.stringCommands().get(key.getBytes(StandardCharsets.UTF_8)));
+        long[] baseStats;
         if (isValidEntityCounterRaw(raw)) {
-            return new long[]{
+            baseStats = new long[]{
                     readInt32BE(raw, OFFSET_LIKE),
                     readInt32BE(raw, OFFSET_FAVORITE)
             };
+        } else {
+            long[] rebuilt = tryRebuildEntityCounter(targetType, targetId);
+            if (rebuilt != null) {
+                baseStats = rebuilt;
+            } else {
+                Long likeCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "like");
+                Long favoriteCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "favorite");
+                baseStats = new long[]{
+                        likeCount == null ? 0L : likeCount,
+                        favoriteCount == null ? 0L : favoriteCount
+                };
+                writeEntityCounterSnapshot(targetType, targetId, baseStats[0], baseStats[1]);
+                clearAggregateBucket(targetType, targetId);
+            }
         }
 
-        long[] rebuilt = tryRebuildEntityCounter(targetType, targetId);
-        if (rebuilt != null) {
-            return rebuilt;
-        }
+        long[] delta = readAggregateDelta(targetType, targetId);
+        return new long[]{baseStats[0] + delta[0], baseStats[1] + delta[1]};
+    }
 
-        Long likeCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "like");
-        Long favoriteCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "favorite");
-        long[] stats = new long[]{
-                likeCount == null ? 0L : likeCount,
-                favoriteCount == null ? 0L : favoriteCount
+    /**
+     * 读取单个实体的近实时聚合增量。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return 聚合增量数组
+     */
+    private long[] readAggregateDelta(String targetType, long targetId) {
+        List<Object> values = stringRedisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            byte[] aggKey = SocialRedisKeys.aggregateBucketKey(targetType, targetId).getBytes(StandardCharsets.UTF_8);
+            connection.hashCommands().hGet(aggKey, AGGREGATE_FIELD_LIKE.getBytes(StandardCharsets.UTF_8));
+            connection.hashCommands().hGet(aggKey, AGGREGATE_FIELD_FAVORITE.getBytes(StandardCharsets.UTF_8));
+            return null;
+        });
+        return new long[]{
+                toLongResult(values != null && !values.isEmpty() ? values.get(0) : null),
+                toLongResult(values != null && values.size() > 1 ? values.get(1) : null)
         };
-        writeEntityCounterSnapshot(targetType, targetId, stats[0], stats[1]);
-        return stats;
+    }
+
+    /**
+     * 批量读取多个实体的近实时聚合增量。
+     *
+     * @param targetType 目标类型
+     * @param targetIds 目标 ID 列表
+     * @return 以目标 ID 为键的聚合增量映射
+     */
+    private Map<Long, long[]> readAggregateDeltasBatch(String targetType, List<Long> targetIds) {
+        Map<Long, long[]> result = new LinkedHashMap<Long, long[]>();
+        if (targetIds == null || targetIds.isEmpty()) {
+            return result;
+        }
+
+        List<Object> values = stringRedisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            for (Long targetId : targetIds) {
+                byte[] aggKey = SocialRedisKeys.aggregateBucketKey(targetType, targetId).getBytes(StandardCharsets.UTF_8);
+                connection.hashCommands().hGet(aggKey, AGGREGATE_FIELD_LIKE.getBytes(StandardCharsets.UTF_8));
+                connection.hashCommands().hGet(aggKey, AGGREGATE_FIELD_FAVORITE.getBytes(StandardCharsets.UTF_8));
+            }
+            return null;
+        });
+
+        int index = 0;
+        for (Long targetId : targetIds) {
+            Object likeValue = values != null && index < values.size() ? values.get(index) : null;
+            Object favoriteValue = values != null && index + 1 < values.size() ? values.get(index + 1) : null;
+            result.put(targetId, new long[]{toLongResult(likeValue), toLongResult(favoriteValue)});
+            index += 2;
+        }
+        return result;
     }
 
     /**
@@ -816,6 +944,101 @@ public class InteractionServiceImpl implements InteractionService {
                 String.valueOf(fieldIndex),
                 String.valueOf(delta)
         );
+    }
+
+    /**
+     * 将本次互动增量写入聚合桶，供后台折叠进实体计数快照。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param action 动作类型
+     * @param delta 变化量
+     */
+    private void incrementAggregateBucket(String targetType, long targetId, String action, int delta) {
+        if (delta == 0) {
+            return;
+        }
+        String aggKey = SocialRedisKeys.aggregateBucketKey(targetType, targetId);
+        String field = "like".equals(action) ? AGGREGATE_FIELD_LIKE : AGGREGATE_FIELD_FAVORITE;
+        stringRedisTemplate.opsForHash().increment(aggKey, field, delta);
+    }
+
+    /**
+     * 清理实体聚合桶。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     */
+    private void clearAggregateBucket(String targetType, long targetId) {
+        stringRedisTemplate.delete(SocialRedisKeys.aggregateBucketKey(targetType, targetId));
+    }
+
+    /**
+     * 定时将聚合桶折叠进实体计数快照。
+     * 当前项目先用轻量扫描实现，后续接 Kafka 后再替换为真正的消费聚合链。
+     */
+    @Scheduled(fixedDelayString = "${social.aggregate-flush-delay-ms:3000}")
+    public void flushAggregateBuckets() {
+        Set<String> keys = stringRedisTemplate.keys(SocialRedisKeys.aggregateBucketPattern());
+        if (keys == null || keys.isEmpty()) {
+            return;
+        }
+
+        for (String aggKey : keys) {
+            AggregateBucketTarget target = parseAggregateBucketKey(aggKey);
+            if (target == null) {
+                continue;
+            }
+            try {
+                foldAggregateBucket(target.targetType, target.targetId);
+            } catch (Exception ex) {
+                log.warn("flush aggregate bucket failed, aggKey={}", aggKey, ex);
+            }
+        }
+    }
+
+    /**
+     * 原子地将单个聚合桶折叠进实体计数快照，并清空聚合桶。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     */
+    private void foldAggregateBucket(String targetType, long targetId) {
+        String result = stringRedisTemplate.execute(
+                aggregateFoldScript,
+                java.util.Arrays.asList(
+                        SocialRedisKeys.aggregateBucketKey(targetType, targetId),
+                        SocialRedisKeys.entityCounterKey(targetType, targetId)
+                ),
+                String.valueOf(ENTITY_FIELD_COUNT),
+                String.valueOf(ENTITY_FIELD_SIZE),
+                AGGREGATE_FIELD_LIKE,
+                AGGREGATE_FIELD_FAVORITE
+        );
+        if (result != null && !"0,0".equals(result)) {
+            log.debug("fold aggregate bucket success, targetType={}, targetId={}, delta={}", targetType, targetId, result);
+        }
+    }
+
+    /**
+     * 解析聚合桶 key 中的目标信息。
+     *
+     * @param aggKey 聚合桶 key
+     * @return 解析成功返回目标信息，否则返回 null
+     */
+    private AggregateBucketTarget parseAggregateBucketKey(String aggKey) {
+        if (aggKey == null || aggKey.trim().isEmpty()) {
+            return null;
+        }
+        String[] parts = aggKey.split(":", 4);
+        if (parts.length != 4) {
+            return null;
+        }
+        try {
+            return new AggregateBucketTarget(parts[2], Long.parseLong(parts[3]));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     /**
@@ -942,6 +1165,10 @@ public class InteractionServiceImpl implements InteractionService {
         return "like".equals(action) ? "like" : "fav";
     }
 
+    private int resolveCounterFieldIndex(String action) {
+        return "like".equals(action) ? 1 : 2;
+    }
+
     /**
      * 序列化 outbox 事件载荷。
      *
@@ -1014,6 +1241,33 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
+     * 将 Redis 读取结果转换为 long。
+     *
+     * @param value Redis 读取结果
+     * @return 数值结果
+     */
+    private long toLongResult(Object value) {
+        if (value == null) {
+            return 0L;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof byte[]) {
+            try {
+                return Long.parseLong(new String((byte[]) value, StandardCharsets.UTF_8));
+            } catch (NumberFormatException ex) {
+                return 0L;
+            }
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
+    }
+
+    /**
      * 按大端序读取 4 字节无符号整数。
      *
      * @param buffer 原始字节数组
@@ -1041,5 +1295,18 @@ public class InteractionServiceImpl implements InteractionService {
         buffer[offset + 1] = (byte) ((safeValue >>> 16) & 0xFF);
         buffer[offset + 2] = (byte) ((safeValue >>> 8) & 0xFF);
         buffer[offset + 3] = (byte) (safeValue & 0xFF);
+    }
+
+    /**
+     * 聚合桶目标信息。
+     */
+    private static final class AggregateBucketTarget {
+        private final String targetType;
+        private final long targetId;
+
+        private AggregateBucketTarget(String targetType, long targetId) {
+            this.targetType = targetType;
+            this.targetId = targetId;
+        }
     }
 }

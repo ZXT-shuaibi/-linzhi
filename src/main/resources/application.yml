@@ -10,6 +10,17 @@ spring:
     redis:
       host: localhost
       port: 6379
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: zhiguang-be
+      auto-offset-reset: latest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
   sql:
     init:
       mode: always
@@ -32,6 +43,13 @@ storage:
   mock-upload-base-url: https://mock-oss.local/upload
   public-base-url: https://mock-oss.local/public
   presign-expire-seconds: 600
+
+social:
+  counter:
+    kafka:
+      enabled: false
+  rebuild:
+    enabled: false
 
 security:
   user-store: jdbc

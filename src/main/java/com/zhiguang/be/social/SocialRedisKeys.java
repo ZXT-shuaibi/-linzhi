@@ -54,6 +54,15 @@ public final class SocialRedisKeys {
     }
 
     /**
+     * 返回聚合桶扫描模式。
+     *
+     * @return Redis 模式串
+     */
+    public static String aggregateBucketPattern() {
+        return "agg:" + ENTITY_COUNTER_SCHEMA + ":*";
+    }
+
+    /**
      * 返回实体计数重建锁键。
      *
      * @param targetType 目标类型
