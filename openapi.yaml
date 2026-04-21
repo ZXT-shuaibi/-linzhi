@@ -2067,6 +2067,20 @@ components:
           type: integer
         favedPosts:
           type: integer
+    UserProfileBrief:
+      type: object
+      properties:
+        userId:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: uri
+        socialCounters:
+          $ref: '#/components/schemas/UserSocialCounterData'
+        relationStatus:
+          $ref: '#/components/schemas/RelationStatusData'
     FeedItem:
       type: object
       properties:

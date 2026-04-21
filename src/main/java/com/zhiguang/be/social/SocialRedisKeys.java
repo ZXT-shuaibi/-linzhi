@@ -54,6 +54,17 @@ public final class SocialRedisKeys {
     }
 
     /**
+     * 返回实体计数重建锁键。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return Redis 锁键
+     */
+    public static String entityCounterRebuildLockKey(String targetType, long targetId) {
+        return "lock:cnt-rebuild:" + targetType + ":" + targetId;
+    }
+
+    /**
      * 返回关注列表 ZSet 键。
      *
      * @param userId 用户 ID
@@ -84,6 +95,18 @@ public final class SocialRedisKeys {
      */
     public static String bitmapKey(String metric, String targetType, long targetId, long chunk) {
         return "bm:" + metric + ":" + targetType + ":" + targetId + ":" + chunk;
+    }
+
+    /**
+     * 返回实体位图分片匹配模式。
+     *
+     * @param metric 指标名称
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return Redis 模式串
+     */
+    public static String bitmapPattern(String metric, String targetType, long targetId) {
+        return "bm:" + metric + ":" + targetType + ":" + targetId + ":*";
     }
 
     /**

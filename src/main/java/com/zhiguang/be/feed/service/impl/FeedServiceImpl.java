@@ -13,7 +13,11 @@ import com.zhiguang.be.feed.mapper.FeedMapper;
 import com.zhiguang.be.feed.service.FeedService;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.PageMeta;
+import com.zhiguang.be.social.RelationStatusData;
+import com.zhiguang.be.social.UserSocialCounterData;
+import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
+import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -45,7 +49,9 @@ public class FeedServiceImpl implements FeedService {
     private final FeedMapper feedMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+    private final FollowService followService;
     private final InteractionService interactionService;
+    private final UserSocialCounterService userSocialCounterService;
     private final ConcurrentHashMap<String, LocalCacheEntry> localPageCache = new ConcurrentHashMap<String, LocalCacheEntry>();
     private final ConcurrentHashMap<String, Object> singleFlightLocks = new ConcurrentHashMap<String, Object>();
 
@@ -60,12 +66,16 @@ public class FeedServiceImpl implements FeedService {
             FeedMapper feedMapper,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper,
-            InteractionService interactionService
+            FollowService followService,
+            InteractionService interactionService,
+            UserSocialCounterService userSocialCounterService
     ) {
         this.feedMapper = feedMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+        this.followService = followService;
         this.interactionService = interactionService;
+        this.userSocialCounterService = userSocialCounterService;
     }
 
     /**
@@ -206,7 +216,7 @@ public class FeedServiceImpl implements FeedService {
                 row.description(),
                 imageUrls.isEmpty() ? null : imageUrls.get(0),
                 parseStringList(row.tagsJson()),
-                new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar()),
+                new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), null, null),
                 null,
                 null,
                 null,
@@ -239,16 +249,21 @@ public class FeedServiceImpl implements FeedService {
         }
 
         Map<String, InteractionSummary> summaryMap = interactionService.summaryBatch(viewerId, "post", targetIds);
+        Map<String, PostAuthor> authorMap = loadAuthors(baseItems, viewerId);
         List<FeedItem> enrichedItems = new ArrayList<FeedItem>(baseItems.size());
         for (FeedItem item : baseItems) {
             InteractionSummary summary = summaryMap.get(item.postId());
+            PostAuthor author = item.author() == null ? null : authorMap.get(item.author().userId());
+            if (author == null) {
+                author = item.author();
+            }
             enrichedItems.add(new FeedItem(
                     item.postId(),
                     item.title(),
                     item.summary(),
                     item.coverUrl(),
                     item.tags(),
-                    item.author(),
+                    author,
                     summary == null ? 0L : summary.getLikeCount(),
                     summary == null ? 0L : summary.getFavoriteCount(),
                     viewerId > 0L && summary != null ? summary.isViewerLiked() : null,
@@ -260,6 +275,52 @@ public class FeedServiceImpl implements FeedService {
             ));
         }
         return new FeedData(enrichedItems, baseFeedData.page(), cacheLayer);
+    }
+
+    /**
+     * 批量补齐 Feed 作者信息，统一附带作者社交计数和查看者关系态。
+     *
+     * @param items Feed 卡片列表
+     * @param viewerId 当前查看者 ID
+     * @return 以作者 ID 为键的作者信息映射
+     */
+    private Map<String, PostAuthor> loadAuthors(List<FeedItem> items, long viewerId) {
+        Map<String, PostAuthor> authorMap = new java.util.LinkedHashMap<String, PostAuthor>();
+        if (items == null || items.isEmpty()) {
+            return authorMap;
+        }
+
+        for (FeedItem item : items) {
+            PostAuthor author = item.author();
+            if (author == null || !StringUtils.hasText(author.userId()) || authorMap.containsKey(author.userId())) {
+                continue;
+            }
+
+            long authorUserId = parseOptionalUserId(author.userId());
+            UserSocialCounterData socialCounters = authorUserId > 0L
+                    ? userSocialCounterService.getUserSocialCounter(authorUserId)
+                    : null;
+            RelationStatusData relationStatus = resolveRelationStatus(viewerId, authorUserId);
+            authorMap.put(
+                    author.userId(),
+                    new PostAuthor(author.userId(), author.nickname(), author.avatar(), socialCounters, relationStatus)
+            );
+        }
+        return authorMap;
+    }
+
+    /**
+     * 解析当前查看者与作者之间的关系态。
+     *
+     * @param viewerId 当前查看者 ID
+     * @param authorUserId 作者用户 ID
+     * @return 关系态结果
+     */
+    private RelationStatusData resolveRelationStatus(long viewerId, long authorUserId) {
+        if (viewerId <= 0L || authorUserId <= 0L) {
+            return new RelationStatusData(false, false, false);
+        }
+        return followService.relationStatus(viewerId, authorUserId);
     }
 
     /**
@@ -505,6 +566,23 @@ public class FeedServiceImpl implements FeedService {
      * @param distance 原始距离
      * @return 处理后的距离
      */
+    /**
+     * 解析可选的用户 ID 字符串。
+     *
+     * @param userId 用户 ID 字符串
+     * @return 合法时返回数值 ID，否则返回 0
+     */
+    private long parseOptionalUserId(String userId) {
+        if (!StringUtils.hasText(userId)) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(userId);
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
+    }
+
     private Double roundDistance(double distance) {
         return Math.round(distance * 100D) / 100D;
     }

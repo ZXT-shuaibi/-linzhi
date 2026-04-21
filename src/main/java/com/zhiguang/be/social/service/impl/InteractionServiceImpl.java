@@ -27,12 +27,14 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 社交互动服务实现。
@@ -47,6 +49,7 @@ public class InteractionServiceImpl implements InteractionService {
     private static final int ENTITY_FIELD_SIZE = 4;
     private static final int OFFSET_LIKE = 0;
     private static final int OFFSET_FAVORITE = 4;
+    private static final Duration ENTITY_COUNTER_REBUILD_LOCK_TTL = Duration.ofSeconds(5);
 
     private final SocialMapper socialMapper;
     private final FollowService followService;
@@ -454,18 +457,28 @@ public class InteractionServiceImpl implements InteractionService {
             return null;
         });
 
-        List<Long> fallbackTargetIds = new ArrayList<Long>();
+        List<Long> rebuildTargetIds = new ArrayList<Long>();
         for (int i = 0; i < targetIds.size(); i++) {
             Long targetId = targetIds.get(i);
             Object value = pipelineResult != null && i < pipelineResult.size() ? pipelineResult.get(i) : null;
             byte[] raw = value instanceof byte[] ? (byte[]) value : null;
-            if (raw != null && raw.length == ENTITY_FIELD_COUNT * ENTITY_FIELD_SIZE) {
+            if (isValidEntityCounterRaw(raw)) {
                 result.put(targetId, new long[]{
                         readInt32BE(raw, OFFSET_LIKE),
                         readInt32BE(raw, OFFSET_FAVORITE)
                 });
             } else {
                 result.put(targetId, new long[]{0L, 0L});
+                rebuildTargetIds.add(targetId);
+            }
+        }
+
+        List<Long> fallbackTargetIds = new ArrayList<Long>();
+        for (Long targetId : rebuildTargetIds) {
+            long[] rebuilt = tryRebuildEntityCounter(targetType, targetId);
+            if (rebuilt != null) {
+                result.put(targetId, rebuilt);
+            } else {
                 fallbackTargetIds.add(targetId);
             }
         }
@@ -488,6 +501,14 @@ public class InteractionServiceImpl implements InteractionService {
                         stats[1] = total;
                     }
                 }
+            }
+            for (Long targetId : fallbackTargetIds) {
+                long[] stats = result.get(targetId);
+                if (stats == null) {
+                    stats = new long[]{0L, 0L};
+                    result.put(targetId, stats);
+                }
+                writeEntityCounterSnapshot(targetType, targetId, stats[0], stats[1]);
             }
         }
         return result;
@@ -701,19 +722,26 @@ public class InteractionServiceImpl implements InteractionService {
         String key = SocialRedisKeys.entityCounterKey(targetType, targetId);
         byte[] raw = stringRedisTemplate.execute((RedisCallback<byte[]>) connection ->
                 connection.stringCommands().get(key.getBytes(StandardCharsets.UTF_8)));
-        if (raw != null && raw.length == ENTITY_FIELD_COUNT * ENTITY_FIELD_SIZE) {
+        if (isValidEntityCounterRaw(raw)) {
             return new long[]{
                     readInt32BE(raw, OFFSET_LIKE),
                     readInt32BE(raw, OFFSET_FAVORITE)
             };
         }
 
+        long[] rebuilt = tryRebuildEntityCounter(targetType, targetId);
+        if (rebuilt != null) {
+            return rebuilt;
+        }
+
         Long likeCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "like");
         Long favoriteCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "favorite");
-        return new long[]{
+        long[] stats = new long[]{
                 likeCount == null ? 0L : likeCount,
                 favoriteCount == null ? 0L : favoriteCount
         };
+        writeEntityCounterSnapshot(targetType, targetId, stats[0], stats[1]);
+        return stats;
     }
 
     /**
@@ -796,6 +824,110 @@ public class InteractionServiceImpl implements InteractionService {
      * @param action 动作类型
      * @return 事件类型
      */
+    /**
+     * 按需从位图事实层重建帖子维计数。
+     * 这里使用轻量重建锁，避免同一帖子在短时间内被重复重建。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return 重建成功返回计数数组；当前不适合重建时返回 null
+     */
+    private long[] tryRebuildEntityCounter(String targetType, long targetId) {
+        String lockKey = SocialRedisKeys.entityCounterRebuildLockKey(targetType, targetId);
+        Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "1", ENTITY_COUNTER_REBUILD_LOCK_TTL);
+        if (!Boolean.TRUE.equals(locked)) {
+            return null;
+        }
+
+        try {
+            Long likeCount = bitCountShardsPipelined("like", targetType, targetId);
+            Long favoriteCount = bitCountShardsPipelined("fav", targetType, targetId);
+            if (likeCount == null && favoriteCount == null) {
+                return null;
+            }
+
+            if (likeCount == null) {
+                likeCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "like");
+            }
+            if (favoriteCount == null) {
+                favoriteCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "favorite");
+            }
+
+            long safeLikeCount = likeCount == null ? 0L : likeCount;
+            long safeFavoriteCount = favoriteCount == null ? 0L : favoriteCount;
+            writeEntityCounterSnapshot(targetType, targetId, safeLikeCount, safeFavoriteCount);
+            stringRedisTemplate.delete(SocialRedisKeys.aggregateBucketKey(targetType, targetId));
+            return new long[]{safeLikeCount, safeFavoriteCount};
+        } catch (Exception ex) {
+            log.warn("rebuild entity counter from bitmap failed, targetType={}, targetId={}", targetType, targetId, ex);
+            return null;
+        } finally {
+            stringRedisTemplate.delete(lockKey);
+        }
+    }
+
+    /**
+     * 对指定实体的所有位图分片做管道化 BITCOUNT 汇总。
+     * 当前阶段先采用 KEYS + BITCOUNT 的收缩实现，后续再演进为更稳定的分片索引方案。
+     *
+     * @param metric 指标名称
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return 若存在位图分片则返回汇总值；若完全不存在分片则返回 null
+     */
+    private Long bitCountShardsPipelined(String metric, String targetType, long targetId) {
+        Set<String> keys = stringRedisTemplate.keys(SocialRedisKeys.bitmapPattern(metric, targetType, targetId));
+        if (keys == null || keys.isEmpty()) {
+            return null;
+        }
+
+        List<Object> pipelineResult = stringRedisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            for (String key : keys) {
+                connection.stringCommands().bitCount(key.getBytes(StandardCharsets.UTF_8));
+            }
+            return null;
+        });
+
+        long sum = 0L;
+        if (pipelineResult != null) {
+            for (Object value : pipelineResult) {
+                if (value instanceof Number) {
+                    sum += ((Number) value).longValue();
+                }
+            }
+        }
+        return sum;
+    }
+
+    /**
+     * 将实体计数整体写回 Redis SDS。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param likeCount 点赞数
+     * @param favoriteCount 收藏数
+     */
+    private void writeEntityCounterSnapshot(String targetType, long targetId, long likeCount, long favoriteCount) {
+        byte[] raw = new byte[ENTITY_FIELD_COUNT * ENTITY_FIELD_SIZE];
+        writeInt32BE(raw, OFFSET_LIKE, likeCount);
+        writeInt32BE(raw, OFFSET_FAVORITE, favoriteCount);
+        byte[] key = SocialRedisKeys.entityCounterKey(targetType, targetId).getBytes(StandardCharsets.UTF_8);
+        stringRedisTemplate.execute((RedisCallback<Boolean>) connection -> {
+            connection.stringCommands().set(key, raw);
+            return Boolean.TRUE;
+        });
+    }
+
+    /**
+     * 判断实体计数 SDS 结构是否完整。
+     *
+     * @param raw Redis 原始字节数组
+     * @return 结构完整返回 true，否则返回 false
+     */
+    private boolean isValidEntityCounterRaw(byte[] raw) {
+        return raw != null && raw.length == ENTITY_FIELD_COUNT * ENTITY_FIELD_SIZE;
+    }
+
     private String resolveEventType(String action) {
         return "like".equals(action) ? "LIKE_CHANGED" : "FAVORITE_CHANGED";
     }
@@ -894,5 +1026,20 @@ public class InteractionServiceImpl implements InteractionService {
             value = (value << 8) | (buffer[offset + i] & 0xFFL);
         }
         return value;
+    }
+
+    /**
+     * 按大端序写入 4 字节无符号整数。
+     *
+     * @param buffer 原始字节数组
+     * @param offset 偏移量
+     * @param value 待写入的计数值
+     */
+    private void writeInt32BE(byte[] buffer, int offset, long value) {
+        long safeValue = Math.max(0L, Math.min(value, 0xFFFF_FFFFL));
+        buffer[offset] = (byte) ((safeValue >>> 24) & 0xFF);
+        buffer[offset + 1] = (byte) ((safeValue >>> 16) & 0xFF);
+        buffer[offset + 2] = (byte) ((safeValue >>> 8) & 0xFF);
+        buffer[offset + 3] = (byte) (safeValue & 0xFF);
     }
 }

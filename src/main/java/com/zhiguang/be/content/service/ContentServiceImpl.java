@@ -24,6 +24,8 @@ import com.zhiguang.be.content.model.OutboxEventEntity;
 import com.zhiguang.be.content.model.PostSyncPayload;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
 import com.zhiguang.be.social.InteractionSummary;
+import com.zhiguang.be.social.RelationStatusData;
+import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
@@ -408,9 +410,10 @@ public class ContentServiceImpl {
 
         List<String> imageUrls = parseStringList(row.imgUrlsJson());
         InteractionSummary summary = loadDetailInteractionSummary(row, viewerUserId);
+        PostAuthor author = buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId);
         return new PostDetail(
                 row.postId(),
-                new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar()),
+                author,
                 row.status(),
                 row.title(),
                 row.description(),
@@ -599,17 +602,22 @@ public class ContentServiceImpl {
         List<KnowPostFeedRow> pageRows = hasMore ? rows.subList(0, size) : rows;
         long viewerUserId = parseOptionalUserId(viewerId);
         Map<String, InteractionSummary> summaryMap = loadPageInteractionSummaries(pageRows, viewerUserId);
+        Map<String, PostAuthor> authorMap = loadAuthors(pageRows, viewerUserId);
         List<PostCard> items = new ArrayList<>(pageRows.size());
         for (KnowPostFeedRow row : pageRows) {
             List<String> imageUrls = parseStringList(row.imgUrlsJson());
             InteractionSummary summary = summaryMap.get(row.postId());
+            PostAuthor author = authorMap.get(row.creatorId());
+            if (author == null) {
+                author = buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId);
+            }
             items.add(new PostCard(
                     row.postId(),
                     row.title(),
                     row.description(),
                     imageUrls.isEmpty() ? null : imageUrls.get(0),
                     parseStringList(row.tagsJson()),
-                    new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar()),
+                    author,
                     summary == null ? 0L : summary.getLikeCount(),
                     summary == null ? 0L : summary.getFavoriteCount(),
                     viewerUserId > 0L && summary != null ? summary.isViewerLiked() : null,
@@ -659,6 +667,66 @@ public class ContentServiceImpl {
             return summaryMap;
         }
         return interactionService.summaryBatch(viewerUserId, "post", targetIds);
+    }
+
+    /**
+     * 构建详情页作者信息。
+     *
+     * @param creatorId 作者 ID
+     * @param nickname 作者昵称
+     * @param avatar 作者头像
+     * @param viewerUserId 当前查看者 ID
+     * @return 作者信息
+     */
+    private PostAuthor buildAuthor(String creatorId, String nickname, String avatar, long viewerUserId) {
+        long creatorUserId = parseOptionalUserId(creatorId);
+        UserSocialCounterData socialCounters = creatorUserId > 0L
+                ? userSocialCounterService.getUserSocialCounter(creatorUserId)
+                : null;
+        RelationStatusData relationStatus = resolveRelationStatus(viewerUserId, creatorUserId);
+        return new PostAuthor(creatorId, nickname, avatar, socialCounters, relationStatus);
+    }
+
+    /**
+     * 批量装配列表中的作者信息，避免同一作者重复查询。
+     *
+     * @param rows 当前页面的内容行
+     * @param viewerUserId 当前查看者 ID
+     * @return 以作者 ID 为键的作者信息映射
+     */
+    private Map<String, PostAuthor> loadAuthors(List<KnowPostFeedRow> rows, long viewerUserId) {
+        Map<String, PostAuthor> authorMap = new LinkedHashMap<String, PostAuthor>();
+        if (rows == null || rows.isEmpty()) {
+            return authorMap;
+        }
+
+        for (KnowPostFeedRow row : rows) {
+            if (row == null || !hasText(row.creatorId()) || authorMap.containsKey(row.creatorId())) {
+                continue;
+            }
+            authorMap.put(
+                    row.creatorId(),
+                    buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId)
+            );
+        }
+        return authorMap;
+    }
+
+    /**
+     * 解析当前查看者与作者之间的关系态。
+     *
+     * @param viewerUserId 当前查看者 ID
+     * @param creatorUserId 作者用户 ID
+     * @return 关系态结果
+     */
+    private RelationStatusData resolveRelationStatus(long viewerUserId, long creatorUserId) {
+        if (creatorUserId <= 0L) {
+            return new RelationStatusData(false, false, false);
+        }
+        if (viewerUserId <= 0L) {
+            return new RelationStatusData(false, false, false);
+        }
+        return followService.relationStatus(viewerUserId, creatorUserId);
     }
 
     /**
