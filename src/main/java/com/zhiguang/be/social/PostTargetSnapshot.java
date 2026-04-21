@@ -50,4 +50,31 @@ public class PostTargetSnapshot {
     public boolean interactable() {
         return "published".equalsIgnoreCase(status);
     }
+
+    /**
+     * 判断当前内容是否为公开可见。
+     *
+     * @return 公开可见返回 true，否则返回 false
+     */
+    public boolean isPublicVisible() {
+        return "public".equalsIgnoreCase(visible);
+    }
+
+    /**
+     * 判断当前内容是否为粉丝可见。
+     *
+     * @return 粉丝可见返回 true，否则返回 false
+     */
+    public boolean isFollowersVisible() {
+        return "followers".equalsIgnoreCase(visible);
+    }
+
+    /**
+     * 判断当前内容是否为私密可见。
+     *
+     * @return 私密可见返回 true，否则返回 false
+     */
+    public boolean isPrivateVisible() {
+        return "private".equalsIgnoreCase(visible);
+    }
 }

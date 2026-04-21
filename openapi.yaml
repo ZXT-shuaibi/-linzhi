@@ -1527,6 +1527,18 @@ components:
           type: string
         isTop:
           type: boolean
+        likeCount:
+          type: integer
+          format: int64
+        favoriteCount:
+          type: integer
+          format: int64
+        liked:
+          type: boolean
+          nullable: true
+        faved:
+          type: boolean
+          nullable: true
         publishedAt:
           type: string
           format: date-time
@@ -1860,6 +1872,18 @@ components:
           $ref: '#/components/schemas/Location'
         interactionCounters:
           $ref: '#/components/schemas/InteractionCounters'
+        likeCount:
+          type: integer
+          format: int64
+        favoriteCount:
+          type: integer
+          format: int64
+        liked:
+          type: boolean
+          nullable: true
+        faved:
+          type: boolean
+          nullable: true
         publishedAt:
           type: string
           format: date-time

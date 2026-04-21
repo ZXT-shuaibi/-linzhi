@@ -151,7 +151,7 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
             return rebuildAllCounters(userId);
         }
 
-        if (shouldCheckCounterConsistency(userId) && !isFollowCounterConsistent(userId, raw)) {
+        if (shouldCheckCounterConsistency(userId) && !isUserCounterConsistent(userId, raw)) {
             return rebuildAllCounters(userId);
         }
 
@@ -241,12 +241,16 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
      * @param raw 当前 Redis 中的原始计数字节数组
      * @return 一致返回 true，否则返回 false
      */
-    private boolean isFollowCounterConsistent(long userId, byte[] raw) {
+    private boolean isUserCounterConsistent(long userId, byte[] raw) {
         long cachedFollowings = readInt32BE(raw, OFFSET_FOLLOWINGS);
         long cachedFollowers = readInt32BE(raw, OFFSET_FOLLOWERS);
+        long cachedPosts = readInt32BE(raw, OFFSET_POSTS);
         long dbFollowings = socialMapper.countFollowingActive(userId);
         long dbFollowers = socialMapper.countFollowerActive(userId);
-        return cachedFollowings == dbFollowings && cachedFollowers == dbFollowers;
+        long dbPosts = socialMapper.countPublishedPostsByCreatorId(userId);
+        return cachedFollowings == dbFollowings
+                && cachedFollowers == dbFollowers
+                && cachedPosts == dbPosts;
     }
 
     /**

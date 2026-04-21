@@ -11,6 +11,7 @@ import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.PostTargetSnapshot;
 import com.zhiguang.be.social.SocialRedisKeys;
 import com.zhiguang.be.social.mapper.SocialMapper;
+import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
@@ -48,6 +49,7 @@ public class InteractionServiceImpl implements InteractionService {
     private static final int OFFSET_FAVORITE = 4;
 
     private final SocialMapper socialMapper;
+    private final FollowService followService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final UserSocialCounterService userSocialCounterService;
     private final StringRedisTemplate stringRedisTemplate;
@@ -66,12 +68,14 @@ public class InteractionServiceImpl implements InteractionService {
      */
     public InteractionServiceImpl(
             SocialMapper socialMapper,
+            FollowService followService,
             SnowflakeIdGenerator snowflakeIdGenerator,
             UserSocialCounterService userSocialCounterService,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper
     ) {
         this.socialMapper = socialMapper;
+        this.followService = followService;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.userSocialCounterService = userSocialCounterService;
         this.stringRedisTemplate = stringRedisTemplate;
@@ -193,7 +197,7 @@ public class InteractionServiceImpl implements InteractionService {
      */
     @Override
     public InteractionSummary summary(long currentUserId, String targetType, long targetId) {
-        loadTargetSnapshot(targetType, targetId);
+        loadTargetSnapshot(currentUserId, targetType, targetId);
         long[] stats = readEntityCounters(targetType, targetId);
         boolean viewerLiked = currentUserId > 0L && isInteractionActive(currentUserId, targetType, targetId, "like");
         boolean viewerFavorited = currentUserId > 0L && isInteractionActive(currentUserId, targetType, targetId, "favorite");
@@ -224,7 +228,7 @@ public class InteractionServiceImpl implements InteractionService {
         }
 
         ensureSupportedTargetType(targetType);
-        Map<Long, PostTargetSnapshot> snapshots = loadTargetSnapshots(targetType, normalizedTargetIds);
+        Map<Long, PostTargetSnapshot> snapshots = loadTargetSnapshots(currentUserId, targetType, normalizedTargetIds);
         Map<Long, long[]> counters = readEntityCountersBatch(targetType, normalizedTargetIds);
         Map<Long, boolean[]> viewerStates = readViewerStatesBatch(currentUserId, targetType, normalizedTargetIds);
 
@@ -276,7 +280,7 @@ public class InteractionServiceImpl implements InteractionService {
             boolean active
     ) {
         ensureAuthenticatedUser(currentUserId);
-        PostTargetSnapshot snapshot = loadTargetSnapshot(targetType, targetId);
+        PostTargetSnapshot snapshot = loadTargetSnapshot(currentUserId, targetType, targetId);
         boolean changed = active
                 ? activateInteractionState(currentUserId, targetType, targetId, action)
                 : deactivateInteractionState(currentUserId, targetType, targetId, action);
@@ -372,7 +376,7 @@ public class InteractionServiceImpl implements InteractionService {
      * @param targetIds 目标 ID 列表
      * @return 以目标 ID 为键的快照映射
      */
-    private Map<Long, PostTargetSnapshot> loadTargetSnapshots(String targetType, List<Long> targetIds) {
+    private Map<Long, PostTargetSnapshot> loadTargetSnapshots(long currentUserId, String targetType, List<Long> targetIds) {
         Map<Long, PostTargetSnapshot> snapshots = new LinkedHashMap<Long, PostTargetSnapshot>();
         if (targetIds.isEmpty()) {
             return snapshots;
@@ -393,6 +397,7 @@ public class InteractionServiceImpl implements InteractionService {
             if (snapshot == null) {
                 throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "目标内容不存在");
             }
+            ensureSnapshotAccessible(currentUserId, snapshot);
             if (!snapshot.interactable()) {
                 throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "当前内容不可互动");
             }
@@ -611,12 +616,13 @@ public class InteractionServiceImpl implements InteractionService {
      * @param targetId 目标 ID
      * @return 目标快照
      */
-    private PostTargetSnapshot loadTargetSnapshot(String targetType, long targetId) {
+    private PostTargetSnapshot loadTargetSnapshot(long currentUserId, String targetType, long targetId) {
         ensureSupportedTargetType(targetType);
         PostTargetSnapshot snapshot = toSnapshot(socialMapper.findPostSnapshot(targetId));
         if (snapshot == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "目标内容不存在");
         }
+        ensureSnapshotAccessible(currentUserId, snapshot);
         if (!snapshot.interactable()) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "当前内容不可互动");
         }
@@ -628,6 +634,44 @@ public class InteractionServiceImpl implements InteractionService {
      *
      * @param targetType 目标类型
      */
+    /**
+     * 统一校验帖子是否允许当前查看者读取互动信息或发起互动操作。
+     *
+     * @param currentUserId 当前查看者或操作人 ID，匿名查看时可传 0
+     * @param snapshot 目标帖子快照
+     */
+    private void ensureSnapshotAccessible(long currentUserId, PostTargetSnapshot snapshot) {
+        if (!snapshot.interactable()) {
+            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "当前内容不可互动");
+        }
+        if (!canAccessSnapshot(currentUserId, snapshot)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "当前内容暂无访问权限");
+        }
+    }
+
+    /**
+     * 判断当前查看者是否有权访问目标帖子的互动信息。
+     *
+     * @param currentUserId 当前查看者或操作人 ID
+     * @param snapshot 目标帖子快照
+     * @return 允许访问返回 true，否则返回 false
+     */
+    private boolean canAccessSnapshot(long currentUserId, PostTargetSnapshot snapshot) {
+        if (snapshot == null) {
+            return false;
+        }
+        if (currentUserId > 0L && currentUserId == snapshot.getCreatorId()) {
+            return true;
+        }
+        if (snapshot.isPublicVisible()) {
+            return true;
+        }
+        if (snapshot.isFollowersVisible() && currentUserId > 0L) {
+            return followService.isFollowing(currentUserId, snapshot.getCreatorId());
+        }
+        return false;
+    }
+
     private void ensureSupportedTargetType(String targetType) {
         if (!"post".equalsIgnoreCase(targetType)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "当前只支持 post 类型");
