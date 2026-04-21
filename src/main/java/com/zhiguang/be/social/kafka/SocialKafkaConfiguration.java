@@ -1,8 +1,8 @@
 package com.zhiguang.be.social.kafka;
 
+import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
@@ -10,7 +10,8 @@ import org.springframework.kafka.listener.ContainerProperties;
 
 /**
  * 社交模块 Kafka 配置。
- * 当前主要提供手动确认位点的监听容器，供灾难回放消费者使用。
+ * 当前主要提供手动确认位点的监听容器，
+ * 供聚合消费者和灾难回放消费者使用。
  */
 @Configuration
 @EnableKafka

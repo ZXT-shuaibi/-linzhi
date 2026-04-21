@@ -10,8 +10,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * 计数事件 Kafka 生产者。
- * 当前默认关闭，只在显式开启后把互动计数事件发往 Kafka，
- * 供后续聚合消费或灾难回放使用。
+ * 当前默认关闭，只在显式开启后把互动计数事件发送到 Kafka，
+ * 供聚合消费者和灾难回放链使用。
  */
 @Service
 public class CounterEventProducer {
@@ -27,7 +27,7 @@ public class CounterEventProducer {
      *
      * @param kafkaTemplate Kafka 模板
      * @param objectMapper JSON 组件
-     * @param enabled 是否开启 Kafka 事件发送
+     * @param enabled 是否开启 Kafka 计数链路
      */
     public CounterEventProducer(
             KafkaTemplate<String, String> kafkaTemplate,
@@ -63,5 +63,14 @@ public class CounterEventProducer {
             log.warn("serialize counter event failed, entityType={}, entityId={}",
                     event.getEntityType(), event.getEntityId(), ex);
         }
+    }
+
+    /**
+     * 返回当前是否开启 Kafka 计数链路。
+     *
+     * @return 开启返回 true，否则返回 false
+     */
+    public boolean isEnabled() {
+        return enabled;
     }
 }

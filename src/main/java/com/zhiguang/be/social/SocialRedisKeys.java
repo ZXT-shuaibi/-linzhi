@@ -5,9 +5,6 @@ package com.zhiguang.be.social;
  */
 public final class SocialRedisKeys {
 
-    private static final String ENTITY_COUNTER_SCHEMA = "s1";
-    private static final int BITMAP_CHUNK_SIZE = 32768;
-
     private SocialRedisKeys() {
     }
 
@@ -22,7 +19,7 @@ public final class SocialRedisKeys {
     }
 
     /**
-     * 返回用户计数采样校验键。
+     * 返回用户计数抽样校验键。
      *
      * @param userId 用户 ID
      * @return Redis 键
@@ -39,18 +36,40 @@ public final class SocialRedisKeys {
      * @return Redis 键
      */
     public static String entityCounterKey(String targetType, long targetId) {
-        return "cnt:" + ENTITY_COUNTER_SCHEMA + ":" + targetType + ":" + targetId;
+        return entityCounterKey(targetType, String.valueOf(targetId));
     }
 
     /**
-     * 返回二期聚合桶键。
+     * 返回实体计数 SDS 键。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return Redis 键
+     */
+    public static String entityCounterKey(String targetType, String targetId) {
+        return "cnt:" + SocialCounterSchema.SCHEMA_ID + ":" + targetType + ":" + targetId;
+    }
+
+    /**
+     * 返回聚合桶键。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
      * @return Redis 键
      */
     public static String aggregateBucketKey(String targetType, long targetId) {
-        return "agg:" + ENTITY_COUNTER_SCHEMA + ":" + targetType + ":" + targetId;
+        return aggregateBucketKey(targetType, String.valueOf(targetId));
+    }
+
+    /**
+     * 返回聚合桶键。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return Redis 键
+     */
+    public static String aggregateBucketKey(String targetType, String targetId) {
+        return "agg:" + SocialCounterSchema.SCHEMA_ID + ":" + targetType + ":" + targetId;
     }
 
     /**
@@ -59,7 +78,7 @@ public final class SocialRedisKeys {
      * @return Redis 模式串
      */
     public static String aggregateBucketPattern() {
-        return "agg:" + ENTITY_COUNTER_SCHEMA + ":*";
+        return "agg:" + SocialCounterSchema.SCHEMA_ID + ":*";
     }
 
     /**
@@ -71,6 +90,39 @@ public final class SocialRedisKeys {
      */
     public static String entityCounterRebuildLockKey(String targetType, long targetId) {
         return "lock:cnt-rebuild:" + targetType + ":" + targetId;
+    }
+
+    /**
+     * 返回实体计数重建退避指数键。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return Redis 键
+     */
+    public static String entityCounterRebuildBackoffExpKey(String targetType, long targetId) {
+        return "backoff:cnt-rebuild:exp:" + targetType + ":" + targetId;
+    }
+
+    /**
+     * 返回实体计数重建退避截止时间键。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return Redis 键
+     */
+    public static String entityCounterRebuildBackoffUntilKey(String targetType, long targetId) {
+        return "backoff:cnt-rebuild:until:" + targetType + ":" + targetId;
+    }
+
+    /**
+     * 返回实体计数重建限流键。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return Redis 键
+     */
+    public static String entityCounterRebuildRateLimitKey(String targetType, long targetId) {
+        return "rl:cnt-rebuild:" + targetType + ":" + targetId;
     }
 
     /**
@@ -125,7 +177,7 @@ public final class SocialRedisKeys {
      * @return 分片号
      */
     public static long chunkOf(long userId) {
-        return userId / BITMAP_CHUNK_SIZE;
+        return BitmapShard.chunkOf(userId);
     }
 
     /**
@@ -135,6 +187,6 @@ public final class SocialRedisKeys {
      * @return 位偏移
      */
     public static long bitOffsetOf(long userId) {
-        return userId % BITMAP_CHUNK_SIZE;
+        return BitmapShard.bitOf(userId);
     }
 }

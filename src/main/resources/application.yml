@@ -48,6 +48,13 @@ social:
   counter:
     kafka:
       enabled: false
+      flush-delay-ms: 1000
+    rebuild:
+      lock-ttl-ms: 5000
+      rate-permits: 3
+      rate-window-seconds: 10
+      backoff-base-ms: 500
+      backoff-max-ms: 30000
   rebuild:
     enabled: false
 

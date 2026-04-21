@@ -6,6 +6,7 @@ import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
 import com.zhiguang.be.social.CounterEventPayload;
+import com.zhiguang.be.social.SocialCounterSchema;
 import com.zhiguang.be.social.InteractionActionData;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.PostTargetSnapshot;
@@ -18,6 +19,7 @@ import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -48,13 +50,10 @@ public class InteractionServiceImpl implements InteractionService {
 
     private static final Logger log = LoggerFactory.getLogger(InteractionServiceImpl.class);
 
-    private static final int ENTITY_FIELD_COUNT = 2;
-    private static final int ENTITY_FIELD_SIZE = 4;
-    private static final int OFFSET_LIKE = 0;
-    private static final int OFFSET_FAVORITE = 4;
-    private static final Duration ENTITY_COUNTER_REBUILD_LOCK_TTL = Duration.ofSeconds(5);
-    private static final String AGGREGATE_FIELD_LIKE = "1";
-    private static final String AGGREGATE_FIELD_FAVORITE = "2";
+    private static final int OFFSET_LIKE = SocialCounterSchema.offsetOf(SocialCounterSchema.IDX_LIKE);
+    private static final int OFFSET_FAVORITE = SocialCounterSchema.offsetOf(SocialCounterSchema.IDX_FAV);
+    private static final String AGGREGATE_FIELD_LIKE = String.valueOf(SocialCounterSchema.IDX_LIKE);
+    private static final String AGGREGATE_FIELD_FAVORITE = String.valueOf(SocialCounterSchema.IDX_FAV);
 
     private final SocialMapper socialMapper;
     private final FollowService followService;
@@ -66,6 +65,19 @@ public class InteractionServiceImpl implements InteractionService {
     private final DefaultRedisScript<Long> bitmapToggleScript;
     private final DefaultRedisScript<Long> entityCounterIncrementScript;
     private final DefaultRedisScript<String> aggregateFoldScript;
+    private final DefaultRedisScript<Long> rebuildRateLimitScript;
+    private final DefaultRedisScript<Long> rebuildLockReleaseScript;
+
+    @Value("${social.counter.rebuild.lock-ttl-ms:5000}")
+    private long rebuildLockTtlMs;
+    @Value("${social.counter.rebuild.rate-permits:3}")
+    private int rebuildRatePermits;
+    @Value("${social.counter.rebuild.rate-window-seconds:10}")
+    private int rebuildRateWindowSeconds;
+    @Value("${social.counter.rebuild.backoff-base-ms:500}")
+    private long rebuildBackoffBaseMs;
+    @Value("${social.counter.rebuild.backoff.max-ms:30000}")
+    private long rebuildBackoffMaxMs;
 
     /**
      * 构造互动服务。
@@ -133,7 +145,7 @@ public class InteractionServiceImpl implements InteractionService {
                         + "end\n"
                         + "local cnt = redis.call('GET', cntKey)\n"
                         + "if not cnt then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
-                        + "local off = (idx - 1) * fieldSize\n"
+                        + "local off = idx * fieldSize\n"
                         + "local v = read32be(cnt, off) + delta\n"
                         + "if v < 0 then v = 0 end\n"
                         + "local seg = write32be(v)\n"
@@ -171,15 +183,36 @@ public class InteractionServiceImpl implements InteractionService {
                         + "if likeDelta == 0 and favoriteDelta == 0 then return '0,0' end\n"
                         + "local cnt = redis.call('GET', cntKey)\n"
                         + "if not cnt then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
-                        + "local likeValue = read32be(cnt, 0) + likeDelta\n"
+                        + "local likeValue = read32be(cnt, fieldSize) + likeDelta\n"
                         + "if likeValue < 0 then likeValue = 0 end\n"
-                        + "cnt = writeValue(cnt, 0, likeValue)\n"
-                        + "local favoriteValue = read32be(cnt, fieldSize) + favoriteDelta\n"
+                        + "cnt = writeValue(cnt, fieldSize, likeValue)\n"
+                        + "local favoriteValue = read32be(cnt, fieldSize * 2) + favoriteDelta\n"
                         + "if favoriteValue < 0 then favoriteValue = 0 end\n"
-                        + "cnt = writeValue(cnt, fieldSize, favoriteValue)\n"
+                        + "cnt = writeValue(cnt, fieldSize * 2, favoriteValue)\n"
                         + "redis.call('SET', cntKey, cnt)\n"
                         + "redis.call('DEL', aggKey)\n"
                         + "return tostring(likeDelta) .. ',' .. tostring(favoriteDelta)\n"
+        );
+
+        this.rebuildRateLimitScript = new DefaultRedisScript<Long>();
+        this.rebuildRateLimitScript.setResultType(Long.class);
+        this.rebuildRateLimitScript.setScriptText(
+                "local rateKey = KEYS[1]\n"
+                        + "local permits = tonumber(ARGV[1])\n"
+                        + "local windowMs = tonumber(ARGV[2])\n"
+                        + "local current = redis.call('INCR', rateKey)\n"
+                        + "if current == 1 then redis.call('PEXPIRE', rateKey, windowMs) end\n"
+                        + "if current <= permits then return 1 end\n"
+                        + "return 0\n"
+        );
+
+        this.rebuildLockReleaseScript = new DefaultRedisScript<Long>();
+        this.rebuildLockReleaseScript.setResultType(Long.class);
+        this.rebuildLockReleaseScript.setScriptText(
+                "if redis.call('GET', KEYS[1]) == ARGV[1] then\n"
+                        + "  return redis.call('DEL', KEYS[1])\n"
+                        + "end\n"
+                        + "return 0\n"
         );
     }
 
@@ -355,15 +388,18 @@ public class InteractionServiceImpl implements InteractionService {
         runAfterCommit(() -> {
             try {
                 syncBitmap(targetType, targetId, currentUserId, action, active);
-                incrementAggregateBucket(targetType, targetId, action, delta);
-                counterEventProducer.publish(CounterEvent.of(
-                        targetType,
-                        String.valueOf(targetId),
-                        resolveBitmapMetric(action),
-                        resolveCounterFieldIndex(action),
-                        currentUserId,
-                        delta
-                ));
+                if (counterEventProducer.isEnabled()) {
+                    counterEventProducer.publish(CounterEvent.of(
+                            targetType,
+                            String.valueOf(targetId),
+                            resolveBitmapMetric(action),
+                            resolveCounterFieldIndex(action),
+                            currentUserId,
+                            delta
+                    ));
+                } else {
+                    incrementAggregateBucket(targetType, targetId, action, delta);
+                }
                 if ("like".equals(action)) {
                     userSocialCounterService.incrementLikesReceived(snapshot.getCreatorId(), delta);
                 } else {
@@ -935,12 +971,12 @@ public class InteractionServiceImpl implements InteractionService {
      * @param delta 变化量
      */
     private void incrementEntityCounter(String targetType, long targetId, String action, int delta) {
-        int fieldIndex = "like".equals(action) ? 1 : 2;
+        int fieldIndex = "like".equals(action) ? SocialCounterSchema.IDX_LIKE : SocialCounterSchema.IDX_FAV;
         stringRedisTemplate.execute(
                 entityCounterIncrementScript,
                 Collections.singletonList(SocialRedisKeys.entityCounterKey(targetType, targetId)),
-                String.valueOf(ENTITY_FIELD_COUNT),
-                String.valueOf(ENTITY_FIELD_SIZE),
+                String.valueOf(SocialCounterSchema.SCHEMA_LEN),
+                String.valueOf(SocialCounterSchema.FIELD_SIZE),
                 String.valueOf(fieldIndex),
                 String.valueOf(delta)
         );
@@ -979,6 +1015,17 @@ public class InteractionServiceImpl implements InteractionService {
      */
     @Scheduled(fixedDelayString = "${social.aggregate-flush-delay-ms:3000}")
     public void flushAggregateBuckets() {
+        if (counterEventProducer.isEnabled()) {
+            return;
+        }
+        flushAggregateBucketsNow();
+    }
+
+    /**
+     * 立即执行一次聚合桶刷写。
+     * 供本地调度链或 Kafka 聚合消费者统一复用。
+     */
+    public void flushAggregateBucketsNow() {
         Set<String> keys = stringRedisTemplate.keys(SocialRedisKeys.aggregateBucketPattern());
         if (keys == null || keys.isEmpty()) {
             return;
@@ -998,6 +1045,35 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
+     * 接收 Kafka 聚合事件并写入本地聚合桶。
+     *
+     * @param event Kafka 计数事件
+     */
+    public void acceptAggregateEvent(CounterEvent event) {
+        if (event == null) {
+            return;
+        }
+
+        long targetId;
+        try {
+            targetId = Long.parseLong(event.getEntityId());
+        } catch (NumberFormatException ex) {
+            log.warn("ignore counter event with invalid entity id, entityType={}, entityId={}",
+                    event.getEntityType(), event.getEntityId(), ex);
+            return;
+        }
+
+        String action = resolveActionByCounterEvent(event);
+        if (action == null) {
+            log.warn("ignore counter event with unsupported metric, entityType={}, entityId={}, metric={}, idx={}",
+                    event.getEntityType(), event.getEntityId(), event.getMetric(), event.getIdx());
+            return;
+        }
+
+        incrementAggregateBucket(event.getEntityType(), targetId, action, event.getDelta());
+    }
+
+    /**
      * 原子地将单个聚合桶折叠进实体计数快照，并清空聚合桶。
      *
      * @param targetType 目标类型
@@ -1010,8 +1086,8 @@ public class InteractionServiceImpl implements InteractionService {
                         SocialRedisKeys.aggregateBucketKey(targetType, targetId),
                         SocialRedisKeys.entityCounterKey(targetType, targetId)
                 ),
-                String.valueOf(ENTITY_FIELD_COUNT),
-                String.valueOf(ENTITY_FIELD_SIZE),
+                String.valueOf(SocialCounterSchema.SCHEMA_LEN),
+                String.valueOf(SocialCounterSchema.FIELD_SIZE),
                 AGGREGATE_FIELD_LIKE,
                 AGGREGATE_FIELD_FAVORITE
         );
@@ -1056,9 +1132,24 @@ public class InteractionServiceImpl implements InteractionService {
      * @return 重建成功返回计数数组；当前不适合重建时返回 null
      */
     private long[] tryRebuildEntityCounter(String targetType, long targetId) {
+        if (inRebuildBackoff(targetType, targetId)) {
+            return null;
+        }
+
+        if (!allowedByRebuildRateLimiter(targetType, targetId)) {
+            escalateRebuildBackoff(targetType, targetId);
+            return null;
+        }
+
         String lockKey = SocialRedisKeys.entityCounterRebuildLockKey(targetType, targetId);
-        Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "1", ENTITY_COUNTER_REBUILD_LOCK_TTL);
+        String lockValue = String.valueOf(System.nanoTime());
+        Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(
+                lockKey,
+                lockValue,
+                Duration.ofMillis(rebuildLockTtlMs)
+        );
         if (!Boolean.TRUE.equals(locked)) {
+            escalateRebuildBackoff(targetType, targetId);
             return null;
         }
 
@@ -1080,13 +1171,102 @@ public class InteractionServiceImpl implements InteractionService {
             long safeFavoriteCount = favoriteCount == null ? 0L : favoriteCount;
             writeEntityCounterSnapshot(targetType, targetId, safeLikeCount, safeFavoriteCount);
             stringRedisTemplate.delete(SocialRedisKeys.aggregateBucketKey(targetType, targetId));
+            resetRebuildBackoff(targetType, targetId);
             return new long[]{safeLikeCount, safeFavoriteCount};
         } catch (Exception ex) {
+            escalateRebuildBackoff(targetType, targetId);
             log.warn("rebuild entity counter from bitmap failed, targetType={}, targetId={}", targetType, targetId, ex);
             return null;
         } finally {
-            stringRedisTemplate.delete(lockKey);
+            releaseRebuildLock(lockKey, lockValue);
         }
+    }
+
+    /**
+     * 判断当前实体是否仍处于重建退避期。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return 仍在退避期返回 true，否则返回 false
+     */
+    private boolean inRebuildBackoff(String targetType, long targetId) {
+        String until = stringRedisTemplate.opsForValue()
+                .get(SocialRedisKeys.entityCounterRebuildBackoffUntilKey(targetType, targetId));
+        if (until == null || until.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            return System.currentTimeMillis() < Long.parseLong(until);
+        } catch (NumberFormatException ex) {
+            stringRedisTemplate.delete(SocialRedisKeys.entityCounterRebuildBackoffUntilKey(targetType, targetId));
+            return false;
+        }
+    }
+
+    /**
+     * 判断当前实体是否允许再次触发重建。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return 允许返回 true，否则返回 false
+     */
+    private boolean allowedByRebuildRateLimiter(String targetType, long targetId) {
+        Long allowed = stringRedisTemplate.execute(
+                rebuildRateLimitScript,
+                Collections.singletonList(SocialRedisKeys.entityCounterRebuildRateLimitKey(targetType, targetId)),
+                String.valueOf(rebuildRatePermits),
+                String.valueOf(rebuildRateWindowSeconds * 1000L)
+        );
+        return allowed != null && allowed.longValue() == 1L;
+    }
+
+    /**
+     * 提升当前实体的重建退避等级。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     */
+    private void escalateRebuildBackoff(String targetType, long targetId) {
+        String expKey = SocialRedisKeys.entityCounterRebuildBackoffExpKey(targetType, targetId);
+        Long nextExp = stringRedisTemplate.opsForValue().increment(expKey);
+        if (nextExp != null && nextExp.longValue() == 1L) {
+            stringRedisTemplate.expire(expKey, Duration.ofHours(1));
+        }
+
+        long exp = nextExp == null ? 0L : Math.max(0L, nextExp.longValue() - 1L);
+        exp = Math.min(exp, 10L);
+        long delay = Math.min(rebuildBackoffBaseMs * (1L << exp), rebuildBackoffMaxMs);
+        long until = System.currentTimeMillis() + delay;
+        stringRedisTemplate.opsForValue().set(
+                SocialRedisKeys.entityCounterRebuildBackoffUntilKey(targetType, targetId),
+                String.valueOf(until),
+                Duration.ofMillis(delay + 1000L)
+        );
+    }
+
+    /**
+     * 重置当前实体的重建退避状态。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     */
+    private void resetRebuildBackoff(String targetType, long targetId) {
+        stringRedisTemplate.delete(SocialRedisKeys.entityCounterRebuildBackoffExpKey(targetType, targetId));
+        stringRedisTemplate.delete(SocialRedisKeys.entityCounterRebuildBackoffUntilKey(targetType, targetId));
+    }
+
+    /**
+     * 按 token 安全释放重建锁，避免误删其他请求的新锁。
+     *
+     * @param lockKey 锁键
+     * @param lockValue 锁值
+     */
+    private void releaseRebuildLock(String lockKey, String lockValue) {
+        stringRedisTemplate.execute(
+                rebuildLockReleaseScript,
+                Collections.singletonList(lockKey),
+                lockValue
+        );
     }
 
     /**
@@ -1131,7 +1311,7 @@ public class InteractionServiceImpl implements InteractionService {
      * @param favoriteCount 收藏数
      */
     private void writeEntityCounterSnapshot(String targetType, long targetId, long likeCount, long favoriteCount) {
-        byte[] raw = new byte[ENTITY_FIELD_COUNT * ENTITY_FIELD_SIZE];
+        byte[] raw = new byte[SocialCounterSchema.SCHEMA_LEN * SocialCounterSchema.FIELD_SIZE];
         writeInt32BE(raw, OFFSET_LIKE, likeCount);
         writeInt32BE(raw, OFFSET_FAVORITE, favoriteCount);
         byte[] key = SocialRedisKeys.entityCounterKey(targetType, targetId).getBytes(StandardCharsets.UTF_8);
@@ -1148,7 +1328,7 @@ public class InteractionServiceImpl implements InteractionService {
      * @return 结构完整返回 true，否则返回 false
      */
     private boolean isValidEntityCounterRaw(byte[] raw) {
-        return raw != null && raw.length == ENTITY_FIELD_COUNT * ENTITY_FIELD_SIZE;
+        return raw != null && raw.length == SocialCounterSchema.SCHEMA_LEN * SocialCounterSchema.FIELD_SIZE;
     }
 
     private String resolveEventType(String action) {
@@ -1166,7 +1346,26 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     private int resolveCounterFieldIndex(String action) {
-        return "like".equals(action) ? 1 : 2;
+        return "like".equals(action) ? SocialCounterSchema.IDX_LIKE : SocialCounterSchema.IDX_FAV;
+    }
+
+    /**
+     * 根据 Kafka 计数事件还原内部动作名称。
+     *
+     * @param event Kafka 计数事件
+     * @return 返回 like 或 favorite；不支持时返回 null
+     */
+    private String resolveActionByCounterEvent(CounterEvent event) {
+        if (event == null) {
+            return null;
+        }
+        if ("like".equals(event.getMetric()) || event.getIdx() == SocialCounterSchema.IDX_LIKE) {
+            return "like";
+        }
+        if ("fav".equals(event.getMetric()) || event.getIdx() == SocialCounterSchema.IDX_FAV) {
+            return "favorite";
+        }
+        return null;
     }
 
     /**
@@ -1276,7 +1475,7 @@ public class InteractionServiceImpl implements InteractionService {
      */
     private long readInt32BE(byte[] buffer, int offset) {
         long value = 0L;
-        for (int i = 0; i < ENTITY_FIELD_SIZE; i++) {
+        for (int i = 0; i < SocialCounterSchema.FIELD_SIZE; i++) {
             value = (value << 8) | (buffer[offset + i] & 0xFFL);
         }
         return value;

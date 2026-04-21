@@ -1,6 +1,7 @@
 package com.zhiguang.be.social.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.social.SocialCounterSchema;
 import com.zhiguang.be.social.SocialRedisKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,9 +24,6 @@ import java.util.Collections;
 public class CounterRebuildConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(CounterRebuildConsumer.class);
-    private static final int ENTITY_FIELD_COUNT = 2;
-    private static final int ENTITY_FIELD_SIZE = 4;
-
     private final ObjectMapper objectMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final DefaultRedisScript<Long> incrementFieldScript;
@@ -60,7 +58,7 @@ public class CounterRebuildConsumer {
                         + "end\n"
                         + "local cnt = redis.call('GET', cntKey)\n"
                         + "if not cnt then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
-                        + "local off = (idx - 1) * fieldSize\n"
+                        + "local off = idx * fieldSize\n"
                         + "local v = read32be(cnt, off) + delta\n"
                         + "if v < 0 then v = 0 end\n"
                         + "local seg = write32be(v)\n"
@@ -72,7 +70,7 @@ public class CounterRebuildConsumer {
 
     /**
      * 从最早位点开始消费历史计数事件并折叠进 Redis 计数快照。
-     * 只有写入成功后才提交位点，避免中途失败导致回放缺口。
+     * 只有写入成功后才提交位点，避免回放缺口。
      *
      * @param message Kafka 消息内容
      * @param acknowledgment 手动位点确认器
@@ -86,15 +84,14 @@ public class CounterRebuildConsumer {
     )
     public void onMessage(String message, Acknowledgment acknowledgment) throws Exception {
         CounterEvent event = objectMapper.readValue(message, CounterEvent.class);
-        long targetId = Long.parseLong(event.getEntityId());
-        String cntKey = SocialRedisKeys.entityCounterKey(event.getEntityType(), targetId);
+        String cntKey = SocialRedisKeys.entityCounterKey(event.getEntityType(), event.getEntityId());
 
         try {
             stringRedisTemplate.execute(
                     incrementFieldScript,
                     Collections.singletonList(cntKey),
-                    String.valueOf(ENTITY_FIELD_COUNT),
-                    String.valueOf(ENTITY_FIELD_SIZE),
+                    String.valueOf(SocialCounterSchema.SCHEMA_LEN),
+                    String.valueOf(SocialCounterSchema.FIELD_SIZE),
                     String.valueOf(event.getIdx()),
                     String.valueOf(event.getDelta())
             );
