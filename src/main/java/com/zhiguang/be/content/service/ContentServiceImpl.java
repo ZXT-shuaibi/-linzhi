@@ -53,7 +53,7 @@ import java.util.UUID;
  * 草稿 -> 预签名 -> 确认正文 -> 更新元数据 -> 发布 -> 同步 Discover -> 详情/feed/mine。
  */
 @Service
-public class ContentServiceImpl {
+public class ContentServiceImpl implements ContentService {
 
     private static final Logger log = LoggerFactory.getLogger(ContentServiceImpl.class);
 
@@ -163,12 +163,32 @@ public class ContentServiceImpl {
     /**
      * 查询当前用户已发布内容。
      */
+    @Override
     public PostPageData getMyPublished(String creatorId, int page, int size) {
         int safeSize = normalizePageSize(size);
         int safePage = normalizePage(page);
         int offset = (safePage - 1) * safeSize;
         List<KnowPostFeedRow> rows = knowPostMapper.listMyPublished(creatorId, safeSize + 1, offset);
         return toPageData(rows, safePage, safeSize, creatorId);
+    }
+
+    /**
+     * 查询指定用户主页可见的已发布内容。
+     * 个人主页场景下：本人可见自己的全部已发布内容；关注者可见 followers 内容；其他人仅可见 public。
+     */
+    @Override
+    public PostPageData getUserPublished(String creatorId, String viewerId, int page, int size) {
+        if (hasText(viewerId) && creatorId.equals(viewerId)) {
+            return getMyPublished(creatorId, page, size);
+        }
+
+        int safeSize = normalizePageSize(size);
+        int safePage = normalizePage(page);
+        int offset = (safePage - 1) * safeSize;
+        boolean includeFollowers = hasText(viewerId)
+                && followService.isFollowing(Long.parseLong(viewerId), Long.parseLong(creatorId));
+        List<KnowPostFeedRow> rows = knowPostMapper.listUserPublished(creatorId, includeFollowers, safeSize + 1, offset);
+        return toPageData(rows, safePage, safeSize, viewerId);
     }
 
     /**

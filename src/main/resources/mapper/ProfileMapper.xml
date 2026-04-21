@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zhiguang.be.profile.mapper.ProfileMapper">
+
+    <resultMap id="ProfileUserRowMap" type="com.zhiguang.be.profile.model.ProfileUserRow">
+        <constructor>
+            <arg column="id" javaType="long"/>
+            <arg column="phone" javaType="java.lang.String"/>
+            <arg column="account" javaType="java.lang.String"/>
+            <arg column="nickname" javaType="java.lang.String"/>
+            <arg column="avatar" javaType="java.lang.String"/>
+            <arg column="bio" javaType="java.lang.String"/>
+            <arg column="gender" javaType="java.lang.String"/>
+            <arg column="birthday" javaType="java.time.LocalDate"/>
+            <arg column="school" javaType="java.lang.String"/>
+            <arg column="tags_json" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <select id="findByUserId" resultMap="ProfileUserRowMap">
+        select id,
+               phone,
+               account,
+               nickname,
+               avatar,
+               bio,
+               gender,
+               birthday,
+               school,
+               tags_json,
+               status
+          from users
+         where id = #{userId}
+    </select>
+
+    <update id="updateProfile">
+        update users
+        <set>
+            <if test="nickname != null">nickname = #{nickname},</if>
+            <if test="avatar != null">avatar = #{avatar},</if>
+            <if test="bio != null">bio = #{bio},</if>
+            <if test="gender != null">gender = #{gender},</if>
+            <if test="birthday != null">birthday = #{birthday},</if>
+            <if test="school != null">school = #{school},</if>
+            <if test="tagsJson != null">tags_json = #{tagsJson},</if>
+            updated_at = current_timestamp
+        </set>
+         where id = #{userId}
+    </update>
+</mapper>

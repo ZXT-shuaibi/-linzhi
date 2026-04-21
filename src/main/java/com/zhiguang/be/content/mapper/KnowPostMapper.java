@@ -47,6 +47,16 @@ public interface KnowPostMapper {
     );
 
     /**
+     * 查询指定用户主页可见的已发布内容。
+     */
+    List<KnowPostFeedRow> listUserPublished(
+            @Param("creatorId") String creatorId,
+            @Param("includeFollowers") boolean includeFollowers,
+            @Param("limit") int limit,
+            @Param("offset") int offset
+    );
+
+    /**
      * 判断查看者是否关注了内容作者。
      */
     boolean existsFollowingRelation(

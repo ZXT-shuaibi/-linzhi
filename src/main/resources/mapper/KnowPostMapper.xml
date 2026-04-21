@@ -194,6 +194,32 @@
          limit #{limit} offset #{offset}
     </select>
 
+    <select id="listUserPublished" resultMap="KnowPostFeedRowMap">
+        select p.id,
+               p.creator_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               p.title,
+               p.description,
+               p.img_urls,
+               p.tags,
+               p.visible,
+               p.publish_time,
+               p.is_top
+          from know_posts p
+          join users u on u.id = p.creator_id
+         where p.creator_id = cast(#{creatorId} as bigint)
+           and p.status = 'published'
+           and (
+                p.visible = 'public'
+                <if test="includeFollowers">
+                    or p.visible = 'followers'
+                </if>
+           )
+         order by p.is_top desc, p.publish_time desc, p.id desc
+         limit #{limit} offset #{offset}
+    </select>
+
     <select id="existsFollowingRelation" resultType="boolean">
         select exists(
             select 1

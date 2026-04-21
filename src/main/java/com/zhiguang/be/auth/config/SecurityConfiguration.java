@@ -72,6 +72,8 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/search/posts").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/feed/home").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*/posts").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/*/summary").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/summary-batch").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/follows/status").permitAll()

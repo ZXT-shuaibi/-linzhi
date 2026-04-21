@@ -29,6 +29,8 @@ tags:
     description: 关注关系
   - name: Social
     description: 用户社交计数
+  - name: Profile
+    description: 个人资料与个人主页
   - name: Feed
     description: 首页 Feed
   - name: Trade
@@ -276,6 +278,105 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '429':
           $ref: '#/components/responses/TooManyRequestsError'
+  /profile/me:
+    get:
+      tags: [Profile]
+      summary: 查询当前登录用户资料
+      operationId: getMyProfile
+      x-maturity: 已实现
+      x-source: 当前代码
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    patch:
+      tags: [Profile]
+      summary: 局部更新当前登录用户资料
+      operationId: patchMyProfile
+      x-maturity: 已实现
+      x-source: 当前代码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePatchRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /profile/users/{userId}:
+    get:
+      tags: [Profile]
+      summary: 查询指定用户主页资料
+      operationId: getUserProfile
+      security: []
+      x-maturity: 已实现
+      x-source: 当前代码
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileData'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /profile/users/{userId}/posts:
+    get:
+      tags: [Profile]
+      summary: 查询指定用户主页可见的发布内容
+      operationId: getUserProfilePosts
+      security: []
+      x-maturity: 已实现
+      x-source: 当前代码
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PostPageData'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /discover/nearby:
     get:
       tags: [Discover]
@@ -2081,6 +2182,79 @@ components:
           $ref: '#/components/schemas/UserSocialCounterData'
         relationStatus:
           $ref: '#/components/schemas/RelationStatusData'
+    ProfilePatchRequest:
+      type: object
+      properties:
+        nickname:
+          type: string
+          minLength: 1
+          maxLength: 64
+        avatar:
+          type: string
+          maxLength: 512
+          nullable: true
+        bio:
+          type: string
+          maxLength: 512
+          nullable: true
+        gender:
+          type: string
+          enum: [male, female, other, unknown]
+          nullable: true
+        birthday:
+          type: string
+          format: date
+          nullable: true
+        school:
+          type: string
+          maxLength: 128
+          nullable: true
+        tags:
+          type: array
+          nullable: true
+          items:
+            type: string
+            maxLength: 32
+    ProfileData:
+      type: object
+      properties:
+        userId:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        account:
+          type: string
+          nullable: true
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: uri
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        gender:
+          type: string
+          nullable: true
+        birthday:
+          type: string
+          format: date
+          nullable: true
+        school:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        socialCounters:
+          $ref: '#/components/schemas/UserSocialCounterData'
+        relationStatus:
+          $ref: '#/components/schemas/RelationStatusData'
+        self:
+          type: boolean
     FeedItem:
       type: object
       properties:
