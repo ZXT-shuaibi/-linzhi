@@ -1,102 +1,104 @@
-﻿openapi: 3.0.3
+openapi: 3.0.3
 info:
-  title: 閭婚噷鐭ュ厜 API
+  title: 邻里知光 API
   version: 1.0.0
   description: |
-    鍩轰簬銆婇偦閲岀煡鍏?鎶€鏈垎妗?璇︾粏鐗堛€嬩笌琛ュ厖 docx 鏁寸悊鐨勭洰鏍囨€佹帴鍙ｆ枃妗ｃ€?
-    褰撳墠宸ヤ綔鍖烘棤浠ｇ爜蹇収锛屾湰瑙勮寖鐢ㄤ簬鑱旇皟銆佽瘎瀹′笌鍚庣画 Swagger/Knife4j/Postman 瀵煎叆銆?
+    基于《邻里知光-技术分档-详细版》与补充 docx 整理的目标态接口文档。
+    当前工作区无代码快照，本规范用于联调、评审与后续 Swagger/Knife4j/Postman 导入。
 servers:
   - url: /api/v1
-    description: 榛樿 API 鍓嶇紑
+    description: 默认 API 前缀
 security:
   - BearerAuth: []
 tags:
   - name: Auth
-    description: 璁よ瘉涓庝护鐗岀敓鍛藉懆鏈?
+    description: 认证与令牌生命周期
   - name: Discover
-    description: LBS 闄勮繎鍙戠幇
+    description: LBS 附近发现
   - name: Posts
-    description: 鑽夌銆佸厓鏁版嵁涓庡彂甯?
+    description: 草稿、元数据与发布
   - name: Storage
-    description: OSS 棰勭鍚嶄笂浼?
+    description: OSS 预签名上传
   - name: Search
-    description: 鎼滅储涓庤仈鎯?
+    description: 搜索与联想
   - name: Rag
-    description: RAG 娴佸紡闂瓟
+    description: RAG 流式问答
   - name: Interactions
-    description: 鐐硅禐涓庢敹钘?
+    description: 点赞与收藏
   - name: Follows
-    description: 鍏虫敞鍏崇郴
+    description: 关注关系
+  - name: Social
+    description: 用户社交计数
   - name: Feed
-    description: 棣栭〉 Feed
+    description: 首页 Feed
   - name: Trade
-    description: 绉掓潃涓庤鍗?
+    description: 秒杀与订单
   - name: Ops
-    description: 闄愭祦銆佺嚎绋嬫睜鍜屾寚鏍?
+    description: 限流、线程池和指标
 x-internal-events:
   - name: counter-event
-    maturity: 宸插疄鐜?
-    source: 鍘熸枃鏄庣‘
+    maturity: 已实现
+    source: 原文明确
     topic: counter-event
     eventTypes: [LIKE_CHANGED, FAVORITE_CHANGED]
-    trigger: 鐐硅禐鎴栨敹钘忎綅鍥剧姸鎬佸彂鐢熷彉鍖?
+    trigger: 点赞或收藏位图状态发生变化
     payloadSchema: '#/components/schemas/CounterEventPayload'
     idempotencyKey: eventId
-    compensation: Kafka 閲嶆斁銆佷綅鍥鹃噸寤恒€丏LQ
+    compensation: Kafka 重放、位图重建、DLQ
   - name: follow-event
-    maturity: 宸插疄鐜?
-    source: 鍘熸枃鏄庣‘
+    maturity: 已实现
+    source: 原文明确
     topic: follow-event
     eventTypes: [FOLLOW_CREATED, FOLLOW_REMOVED]
-    trigger: 鍏虫敞涓昏〃涓?outbox 浜嬪姟鎻愪氦鍚?
+    trigger: 关注主表与 outbox 事务提交后
     payloadSchema: '#/components/schemas/FollowEventPayload'
     idempotencyKey: eventId
-    compensation: 绮変笣璁℃暟淇銆佸叧娉ㄥ垪琛ㄩ噸寤?
+    compensation: 粉丝计数修复、关注列表重建
   - name: post-published
-    maturity: 宸插疄鐜?
-    source: 鍘熸枃鏄庣‘
+    maturity: 已实现
+    source: 原文明确
     topic: post-published
     eventTypes: [POST_PUBLISHED]
-    trigger: 鍐呭鍙戝竷鎴愬姛鍚?
+    trigger: 内容发布成功后
     payloadSchema: '#/components/schemas/PostPublishedPayload'
     idempotencyKey: eventId
-    compensation: 鎽樿閲嶈瘯銆佹悳绱㈢储寮曞洖濉€丗eed 鍒锋柊
+    compensation: 摘要重试、搜索索引回填、Feed 刷新
   - name: rag-index-rebuild
-    maturity: 宸插疄鐜?
-    source: 鍩轰簬闇€姹傛帹瀵?
+    maturity: 已实现
+    source: 基于需求推导
     topic: rag-index-rebuild
     eventTypes: [RAG_INDEX_REBUILD_REQUESTED]
-    trigger: 鏂囩珷鍐呭鏇存柊鎴栫储寮曢噸寤鸿姹?
+    trigger: 文章内容更新或索引重建请求
     payloadSchema: '#/components/schemas/RagIndexRebuildPayload'
     idempotencyKey: postId+version
-    compensation: 鍒囩墖鍏ㄩ噺閲嶅缓
+    compensation: 切片全量重建
   - name: seckill-success
-    maturity: 瑙勫垝涓?
-    source: 鍘熸枃鏄庣‘
+    maturity: 规划中
+    source: 原文明确
     topic: seckill-success
     eventTypes: [SECKILL_PRECHECK_PASSED]
-    trigger: 绉掓潃棰勬閫氳繃鍚?
+    trigger: 秒杀预检通过后
     payloadSchema: '#/components/schemas/SeckillSuccessPayload'
     idempotencyKey: requestId
-    compensation: 閲嶆柊鍏ラ槦鎴栨爣璁板け璐?
+    compensation: 重新入队或标记失败
   - name: order-timeout
-    maturity: 瑙勫垝涓?
-    source: 鍩轰簬闇€姹傛帹瀵?
+    maturity: 规划中
+    source: 基于需求推导
     topic: order-timeout
     eventTypes: [ORDER_PAYMENT_TIMEOUT]
-    trigger: 鏈敮浠樿鍗曡秴鏃?
+    trigger: 未支付订单超时
     payloadSchema: '#/components/schemas/OrderTimeoutPayload'
     idempotencyKey: orderId+expireAt
-    compensation: 鍏冲崟琛ュ伩銆佸簱瀛樺洖琛?
+    compensation: 关单补偿、库存回补
 paths:
   /auth/send-code:
     post:
       tags: [Auth]
-      summary: 鍙戦€侀獙璇佺爜
+      summary: 发送验证码
       operationId: sendCode
       security: []
-      x-maturity: 宸插疄鐜?
-      x-source: 鏂囨。瀵归綈鏂板
+      x-maturity: 已实现
+      x-source: 文档对齐新增
       requestBody:
         required: true
         content:
@@ -105,7 +107,7 @@ paths:
               $ref: '#/components/schemas/SendCodeRequest'
       responses:
         '200':
-          description: 鍙戦€佹垚鍔?
+          description: 发送成功
           content:
             application/json:
               schema:
@@ -124,11 +126,11 @@ paths:
   /auth/register:
     post:
       tags: [Auth]
-      summary: 鐢ㄦ埛娉ㄥ唽
+      summary: 用户注册
       operationId: register
       security: []
-      x-maturity: 宸插疄鐜?
-      x-source: 鍘熸枃鏄庣‘
+      x-maturity: 已实现
+      x-source: 原文明确
       requestBody:
         required: true
         content:
@@ -137,7 +139,7 @@ paths:
               $ref: '#/components/schemas/RegisterRequest'
       responses:
         '200':
-          description: 娉ㄥ唽鎴愬姛
+          description: 注册成功
           content:
             application/json:
               schema:
@@ -156,11 +158,11 @@ paths:
   /auth/login:
     post:
       tags: [Auth]
-      summary: 鐢ㄦ埛鐧诲綍
+      summary: 用户登录
       operationId: login
       security: []
-      x-maturity: 宸插疄鐜?
-      x-source: 鍘熸枃鏄庣‘
+      x-maturity: 已实现
+      x-source: 原文明确
       requestBody:
         required: true
         content:
@@ -169,7 +171,7 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: 鐧诲綍鎴愬姛
+          description: 登录成功
           content:
             application/json:
               schema:
@@ -190,11 +192,11 @@ paths:
   /auth/token/refresh:
     post:
       tags: [Auth]
-      summary: 鍒锋柊浠ょ墝
+      summary: 刷新令牌
       operationId: refreshToken
       security: []
-      x-maturity: 宸插疄鐜?
-      x-source: 鍘熸枃鏄庣‘
+      x-maturity: 已实现
+      x-source: 原文明确
       requestBody:
         required: true
         content:
@@ -203,7 +205,7 @@ paths:
               $ref: '#/components/schemas/RefreshTokenRequest'
       responses:
         '200':
-          description: 鍒锋柊鎴愬姛
+          description: 刷新成功
           content:
             application/json:
               schema:
@@ -220,10 +222,10 @@ paths:
   /auth/logout:
     post:
       tags: [Auth]
-      summary: 鐢ㄦ埛鐧诲嚭
+      summary: 用户登出
       operationId: logout
-      x-maturity: 宸插疄鐜?
-      x-source: 鍘熸枃鏄庣‘
+      x-maturity: 已实现
+      x-source: 原文明确
       requestBody:
         required: true
         content:
@@ -232,7 +234,7 @@ paths:
               $ref: '#/components/schemas/LogoutRequest'
       responses:
         '200':
-          description: 鐧诲嚭鎴愬姛
+          description: 登出成功
           content:
             application/json:
               schema:
@@ -250,8 +252,8 @@ paths:
       summary: 閲嶇疆瀵嗙爜
       operationId: resetPassword
       security: []
-      x-maturity: 宸插疄鐜?
-      x-source: 鍘熸枃鏄庣‘
+      x-maturity: 已实现
+      x-source: 原文明确
       requestBody:
         required: true
         content:
@@ -260,7 +262,7 @@ paths:
               $ref: '#/components/schemas/PasswordResetRequest'
       responses:
         '200':
-          description: 閲嶇疆鎴愬姛
+          description: 重置成功
           content:
             application/json:
               schema:
@@ -277,10 +279,11 @@ paths:
   /discover/nearby:
     get:
       tags: [Discover]
-      summary: 闄勮繎鍙戠幇
+      summary: 附近发现
       operationId: discoverNearby
-      x-maturity: 瑙勫垝涓?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      security: []
+      x-maturity: 规划中
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/LatParam'
         - $ref: '#/components/parameters/LngParam'
@@ -299,7 +302,7 @@ paths:
             type: string
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -316,10 +319,10 @@ paths:
   /posts/drafts:
     post:
       tags: [Posts]
-      summary: 鍒涘缓鑽夌
+      summary: 创建草稿
       operationId: createDraft
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       requestBody:
         required: true
         content:
@@ -328,7 +331,7 @@ paths:
               $ref: '#/components/schemas/CreateDraftRequest'
       responses:
         '200':
-          description: 鍒涘缓鎴愬姛
+          description: 创建成功
           content:
             application/json:
               schema:
@@ -345,10 +348,10 @@ paths:
   /storage/presign:
     post:
       tags: [Storage]
-      summary: 鐢宠 OSS 棰勭鍚嶄笂浼犲湴鍧€
+      summary: 申请 OSS 预签名上传地址
       operationId: createPresign
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       requestBody:
         required: true
         content:
@@ -357,7 +360,7 @@ paths:
               $ref: '#/components/schemas/PresignRequest'
       responses:
         '200':
-          description: 鐢熸垚鎴愬姛
+          description: 生成成功
           content:
             application/json:
               schema:
@@ -664,10 +667,11 @@ paths:
   /search/posts:
     get:
       tags: [Search]
-      summary: 鎼滅储鏂囩珷
+      summary: 搜索文章
       operationId: searchPosts
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      security: []
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - name: q
           in: query
@@ -686,7 +690,7 @@ paths:
             type: string
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -703,10 +707,11 @@ paths:
   /search/suggest:
     get:
       tags: [Search]
-      summary: 鎼滅储鑱旀兂
+      summary: 搜索联想
       operationId: suggestSearch
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      security: []
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - name: q
           in: query
@@ -722,7 +727,7 @@ paths:
             default: 10
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -739,10 +744,10 @@ paths:
   /rag/queries/stream:
     post:
       tags: [Rag]
-      summary: 娴佸紡闂瓟
+      summary: 流式问答
       operationId: streamRagQuery
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       requestBody:
         required: true
         content:
@@ -751,12 +756,12 @@ paths:
               $ref: '#/components/schemas/RagQueryRequest'
       responses:
         '200':
-          description: SSE 娴佸紡杩斿洖
+          description: SSE 流式返回
           content:
             text/event-stream:
               schema:
                 type: string
-                description: SSE 浜嬩欢娴侊紝浜嬩欢绫诲瀷涓?message銆乨one銆乪rror銆備簨浠惰浇鑽风粨鏋勮 `SseChunk`銆?
+                description: SSE 事件流，事件类型：message、done、error。事件载荷结构见 `SseChunk`。
         '400':
           $ref: '#/components/responses/ValidationError'
         '401':
@@ -768,16 +773,16 @@ paths:
   /interactions/targets/{targetType}/{targetId}/like:
     post:
       tags: [Interactions]
-      summary: 鐐硅禐
+      summary: 点赞
       operationId: likeTarget
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/TargetTypeParam'
         - $ref: '#/components/parameters/TargetIdParam'
       responses:
         '200':
-          description: 鐐硅禐鎴愬姛
+          description: 点赞成功
           content:
             application/json:
               schema:
@@ -795,16 +800,16 @@ paths:
           $ref: '#/components/responses/TooManyRequestsError'
     delete:
       tags: [Interactions]
-      summary: 鍙栨秷鐐硅禐
+      summary: 取消点赞
       operationId: unlikeTarget
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/TargetTypeParam'
         - $ref: '#/components/parameters/TargetIdParam'
       responses:
         '200':
-          description: 鍙栨秷鎴愬姛
+          description: 取消成功
           content:
             application/json:
               schema:
@@ -823,14 +828,14 @@ paths:
       tags: [Interactions]
       summary: 鏀惰棌
       operationId: favoriteTarget
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/TargetTypeParam'
         - $ref: '#/components/parameters/TargetIdParam'
       responses:
         '200':
-          description: 鏀惰棌鎴愬姛
+          description: 收藏成功
           content:
             application/json:
               schema:
@@ -846,16 +851,16 @@ paths:
           $ref: '#/components/responses/NotFoundError'
     delete:
       tags: [Interactions]
-      summary: 鍙栨秷鏀惰棌
+      summary: 取消收藏
       operationId: unfavoriteTarget
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/TargetTypeParam'
         - $ref: '#/components/parameters/TargetIdParam'
       responses:
         '200':
-          description: 鍙栨秷鎴愬姛
+          description: 取消成功
           content:
             application/json:
               schema:
@@ -872,16 +877,17 @@ paths:
   /interactions/targets/{targetType}/{targetId}/summary:
     get:
       tags: [Interactions]
-      summary: 鏌ヨ浜掑姩姹囨€?
+      summary: 查询互动汇总
       operationId: getInteractionSummary
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      security: []
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/TargetTypeParam'
         - $ref: '#/components/parameters/TargetIdParam'
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -895,18 +901,56 @@ paths:
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           $ref: '#/components/responses/NotFoundError'
+  /interactions/targets/{targetType}/summary-batch:
+    get:
+      tags: [Interactions]
+      summary: 批量查询互动汇总
+      operationId: getInteractionSummaryBatch
+      security: []
+      x-maturity: 已实现
+      x-source: 对齐 zhiguang 的批量回填能力
+      parameters:
+        - $ref: '#/components/parameters/TargetTypeParam'
+        - name: targetIds
+          in: query
+          required: true
+          schema:
+            type: array
+            items:
+              type: integer
+              format: int64
+          style: form
+          explode: true
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/InteractionSummaryBatchData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /follows/{followeeId}:
     post:
       tags: [Follows]
-      summary: 鍏虫敞鐢ㄦ埛
+      summary: 关注用户
       operationId: followUser
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/FolloweeIdParam'
       responses:
         '200':
-          description: 鍏虫敞鎴愬姛
+          description: 关注成功
           content:
             application/json:
               schema:
@@ -924,15 +968,15 @@ paths:
           $ref: '#/components/responses/ConflictError'
     delete:
       tags: [Follows]
-      summary: 鍙栨秷鍏虫敞
+      summary: 取消关注
       operationId: unfollowUser
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/FolloweeIdParam'
       responses:
         '200':
-          description: 鍙栨秷鎴愬姛
+          description: 取消成功
           content:
             application/json:
               schema:
@@ -949,17 +993,17 @@ paths:
   /follows/users/{userId}/following:
     get:
       tags: [Follows]
-      summary: 鏌ヨ鍏虫敞鍒楄〃
+      summary: 查询关注列表
       operationId: getFollowingList
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/UserIdParam'
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/SizeParam'
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -974,17 +1018,17 @@ paths:
   /follows/users/{userId}/followers:
     get:
       tags: [Follows]
-      summary: 鏌ヨ绮変笣鍒楄〃
+      summary: 查询粉丝列表
       operationId: getFollowersList
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 已实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/UserIdParam'
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/SizeParam'
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -996,13 +1040,71 @@ paths:
                         $ref: '#/components/schemas/FollowListData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /follows/status:
+    get:
+      tags: [Follows]
+      summary: 查询用户关系状态
+      operationId: getFollowRelationStatus
+      security: []
+      x-maturity: 已实现
+      x-source: 对齐 zhiguang relation/status
+      parameters:
+        - name: targetUserId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RelationStatusData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /social/counters/users/{userId}:
+    get:
+      tags: [Social]
+      summary: 查询用户社交计数
+      operationId: getUserSocialCounters
+      security: []
+      x-maturity: 已实现
+      x-source: 对齐 zhiguang relation/counter
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserSocialCounterData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /feed/home:
     get:
       tags: [Feed]
-      summary: 鏌ヨ棣栭〉 Feed
+      summary: 查询首页 Feed
       operationId: getHomeFeed
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      security: []
+      x-maturity: 已实现
+      x-source: 基于代码实现
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/SizeParam'
@@ -1014,7 +1116,7 @@ paths:
             type: string
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -1024,6 +1126,8 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/FeedData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '429':
@@ -1031,10 +1135,10 @@ paths:
   /trade/seckill/requests:
     post:
       tags: [Trade]
-      summary: 绉掓潃棰勬骞跺彈鐞嗚姹?
+      summary: 秒杀预检并受理请求
       operationId: createSeckillRequest
-      x-maturity: 瑙勫垝涓?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 规划中
+      x-source: 基于需求推导
       parameters:
         - name: X-Idempotency-Key
           in: header
@@ -1049,7 +1153,7 @@ paths:
               $ref: '#/components/schemas/SeckillRequest'
       responses:
         '200':
-          description: 鍙楃悊鎴愬姛
+          description: 受理成功
           content:
             application/json:
               schema:
@@ -1070,15 +1174,15 @@ paths:
   /trade/seckill/requests/{requestId}:
     get:
       tags: [Trade]
-      summary: 鏌ヨ绉掓潃鍙楃悊鐘舵€?
+      summary: 查询秒杀受理状态
       operationId: getSeckillRequestStatus
-      x-maturity: 瑙勫垝涓?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 规划中
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/RequestIdParam'
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -1095,15 +1199,15 @@ paths:
   /trade/orders/{orderId}:
     get:
       tags: [Trade]
-      summary: 鏌ヨ璁㈠崟璇︽儏
+      summary: 查询订单详情
       operationId: getOrderDetail
-      x-maturity: 瑙勫垝涓?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 规划中
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/OrderIdParam'
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -1120,15 +1224,15 @@ paths:
   /trade/orders/{orderId}/cancel:
     post:
       tags: [Trade]
-      summary: 涓诲姩鍙栨秷璁㈠崟
+      summary: 主动取消订单
       operationId: cancelOrder
-      x-maturity: 瑙勫垝涓?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 规划中
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/OrderIdParam'
       responses:
         '200':
-          description: 鍙栨秷鎴愬姛
+          description: 取消成功
           content:
             application/json:
               schema:
@@ -1147,15 +1251,15 @@ paths:
   /ops/rate-limits/scenes/{scene}:
     get:
       tags: [Ops]
-      summary: 鏌ヨ闄愭祦鍦烘櫙
+      summary: 查询限流场景
       operationId: getRateLimitScene
-      x-maturity: 閮ㄥ垎瀹炵幇
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 部分实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/SceneParam'
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -1172,15 +1276,15 @@ paths:
   /ops/thread-pools/{poolName}:
     get:
       tags: [Ops]
-      summary: 鏌ヨ绾跨▼姹犲揩鐓?
+      summary: 查询线程池快照
       operationId: getThreadPoolSnapshot
-      x-maturity: 閮ㄥ垎瀹炵幇
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 部分实现
+      x-source: 基于需求推导
       parameters:
         - $ref: '#/components/parameters/PoolNameParam'
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -1197,13 +1301,13 @@ paths:
   /ops/metrics/overview:
     get:
       tags: [Ops]
-      summary: 鏌ヨ鎸囨爣鎬昏
+      summary: 查询指标总览
       operationId: getMetricsOverview
-      x-maturity: 瑙勫垝涓?
-      x-source: 鍩轰簬闇€姹傛帹瀵?
+      x-maturity: 规划中
+      x-source: 基于需求推导
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -1242,7 +1346,7 @@ components:
       in: query
       schema:
         type: string
-      description: Base64 缂栫爜鐨?search_after 娓告爣
+      description: Base64 编码的 search_after 游标
     LatParam:
       name: lat
       in: query
@@ -1423,6 +1527,18 @@ components:
           type: string
         isTop:
           type: boolean
+        likeCount:
+          type: integer
+          format: int64
+        favoriteCount:
+          type: integer
+          format: int64
+        liked:
+          type: boolean
+          nullable: true
+        faved:
+          type: boolean
+          nullable: true
         publishedAt:
           type: string
           format: date-time
@@ -1639,7 +1755,7 @@ components:
           $ref: '#/components/schemas/PageMeta'
     CreateDraftRequest:
       type: object
-      description: 褰撳墠鐗堟湰鑽夌绫诲瀷鍥哄畾涓?image_text锛屾棤闇€棰濆瀛楁
+      description: 当前版本草稿类型固定为 image_text，无需额外字段
     DraftData:
       type: object
       properties:
@@ -1648,6 +1764,492 @@ components:
         status:
           type: string
         createdAt:
+          type: string
+          format: date-time
+    PresignRequest:
+      type: object
+      required: [postId, filename, contentType, purpose]
+      properties:
+        postId:
+          type: string
+        filename:
+          type: string
+        contentType:
+          type: string
+        purpose:
+          type: string
+          enum: [content, cover, image]
+    PresignData:
+      type: object
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+        objectKey:
+          type: string
+        expireAt:
+          type: string
+          format: date-time
+    ConfirmContentRequest:
+      type: object
+      required: [objectKey, etag, sha256, size]
+      properties:
+        objectKey:
+          type: string
+        etag:
+          type: string
+        sha256:
+          type: string
+        size:
+          type: integer
+    ConfirmContentData:
+      type: object
+      properties:
+        postId:
+          type: string
+        status:
+          type: string
+        objectKey:
+          type: string
+    UpdatePostMetadataRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        coverUrl:
+          type: string
+          format: uri
+        location:
+          $ref: '#/components/schemas/Location'
+    PublishPostRequest:
+      type: object
+      properties:
+        visibility:
+          type: string
+          enum: [public, followers, private]
+        publishAt:
+          type: string
+          format: date-time
+    InteractionCounters:
+      type: object
+      properties:
+        likeCount:
+          type: integer
+        favoriteCount:
+          type: integer
+        commentCount:
+          type: integer
+    PostDetail:
+      type: object
+      properties:
+        postId:
+          type: string
+        author:
+          $ref: '#/components/schemas/UserProfileBrief'
+        status:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        contentUrl:
+          type: string
+          format: uri
+        coverUrl:
+          type: string
+          format: uri
+        tags:
+          type: array
+          items:
+            type: string
+        location:
+          $ref: '#/components/schemas/Location'
+        interactionCounters:
+          $ref: '#/components/schemas/InteractionCounters'
+        likeCount:
+          type: integer
+          format: int64
+        favoriteCount:
+          type: integer
+          format: int64
+        liked:
+          type: boolean
+          nullable: true
+        faved:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          format: date-time
+    SearchResultItem:
+      type: object
+      properties:
+        postId:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        score:
+          type: number
+          format: double
+        distanceMeters:
+          type: number
+          format: double
+        searchAfter:
+          type: array
+          items:
+            type: string
+    SearchPostsData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResultItem'
+        page:
+          $ref: '#/components/schemas/CursorPageMeta'
+    SuggestItem:
+      type: object
+      properties:
+        text:
+          type: string
+        score:
+          type: number
+          format: double
+        source:
+          type: string
+    SuggestData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SuggestItem'
+    RagQueryRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+        postId:
+          type: string
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        topK:
+          type: integer
+          default: 8
+        sessionId:
+          type: string
+    RagReference:
+      type: object
+      properties:
+        postId:
+          type: string
+        chunkId:
+          type: string
+        title:
+          type: string
+    SseChunk:
+      type: object
+      properties:
+        event:
+          type: string
+          enum: [message, done, error]
+        seq:
+          type: integer
+        delta:
+          type: string
+        references:
+          type: array
+          items:
+            $ref: '#/components/schemas/RagReference'
+        finishReason:
+          type: string
+        errorCode:
+          type: string
+    InteractionActionData:
+      type: object
+      properties:
+        targetType:
+          type: string
+        targetId:
+          type: string
+        action:
+          type: string
+        active:
+          type: boolean
+        snapshotVersion:
+          type: integer
+    InteractionSummary:
+      type: object
+      properties:
+        targetType:
+          type: string
+        targetId:
+          type: string
+        likeCount:
+          type: integer
+        favoriteCount:
+          type: integer
+        viewerLiked:
+          type: boolean
+        viewerFavorited:
+          type: boolean
+    InteractionSummaryBatchData:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/InteractionSummary'
+    FollowActionData:
+      type: object
+      properties:
+        followeeId:
+          type: string
+        following:
+          type: boolean
+        followerCount:
+          type: integer
+        followCount:
+          type: integer
+    FollowUserItem:
+      type: object
+      properties:
+        userId:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: uri
+        followedAt:
+          type: string
+          format: date-time
+    FollowListData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowUserItem'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+    RelationStatusData:
+      type: object
+      properties:
+        following:
+          type: boolean
+        followedBy:
+          type: boolean
+        mutual:
+          type: boolean
+    UserSocialCounterData:
+      type: object
+      properties:
+        userId:
+          type: string
+        followings:
+          type: integer
+        followers:
+          type: integer
+        posts:
+          type: integer
+        likedPosts:
+          type: integer
+        favedPosts:
+          type: integer
+    UserProfileBrief:
+      type: object
+      properties:
+        userId:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: uri
+        socialCounters:
+          $ref: '#/components/schemas/UserSocialCounterData'
+        relationStatus:
+          $ref: '#/components/schemas/RelationStatusData'
+    FeedItem:
+      type: object
+      properties:
+        postId:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        coverUrl:
+          type: string
+          format: uri
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        author:
+          $ref: '#/components/schemas/UserProfileBrief'
+        likeCount:
+          type: integer
+          format: int64
+        favoriteCount:
+          type: integer
+          format: int64
+        liked:
+          type: boolean
+          nullable: true
+        faved:
+          type: boolean
+          nullable: true
+        distanceMeters:
+          type: number
+          format: double
+        hotScore:
+          type: number
+          format: double
+        isTop:
+          type: boolean
+        publishedAt:
+          type: string
+          format: date-time
+    FeedData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedItem'
+        page:
+          $ref: '#/components/schemas/PageMeta'
+        cacheLayer:
+          type: string
+          enum: [L1, L2, L3, DB]
+    SeckillRequest:
+      type: object
+      required: [activityId, productId, quantity]
+      properties:
+        activityId:
+          type: string
+        productId:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        skuAttrs:
+          type: object
+          additionalProperties:
+            type: string
+    SeckillAcceptedData:
+      type: object
+      properties:
+        requestId:
+          type: string
+        accepted:
+          type: boolean
+        queueStatus:
+          type: string
+          enum: [accepted, queued]
+        acceptedAt:
+          type: string
+          format: date-time
+    SeckillStatusData:
+      type: object
+      properties:
+        requestId:
+          type: string
+        status:
+          type: string
+          enum: [accepted, queued, ordering, ordered, failed, expired]
+        orderId:
+          type: string
+        failureReason:
+          type: string
+    OrderDetail:
+      type: object
+      properties:
+        orderId:
+          type: string
+        activityId:
+          type: string
+        productId:
+          type: string
+        status:
+          type: string
+          enum: [INIT, PENDING_PAY, PAID, CLOSED, CANCELLED]
+        amount:
+          type: number
+          format: double
+        expireAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+    RateLimitScene:
+      type: object
+      properties:
+        scene:
+          type: string
+        enabled:
+          type: boolean
+        dimensions:
+          type: array
+          items:
+            type: string
+            enum: [global, ip, user]
+        windowSeconds:
+          type: integer
+        threshold:
+          type: integer
+        degradeStrategy:
+          type: string
+    ThreadPoolSnapshot:
+      type: object
+      properties:
+        poolName:
+          type: string
+        corePoolSize:
+          type: integer
+        maxPoolSize:
+          type: integer
+        activeCount:
+          type: integer
+        queueSize:
+          type: integer
+        completedTaskCount:
+          type: integer
+        saturationLevel:
+          type: string
+          enum: [low, medium, high]
+    MetricsOverview:
+      type: object
+      properties:
+        availability:
+          type: number
+          format: double
+        feedP95Ms:
+          type: number
+          format: double
+        lbsP95Ms:
+          type: number
+          format: double
+        ragFirstTokenMs:
+          type: number
+          format: double
+        tradeAcceptP95Ms:
+          type: number
+          format: double
+        observedAt:
           type: string
           format: date-time
     CounterEventPayload:
@@ -1665,6 +2267,8 @@ components:
           type: string
         operatorId:
           type: string
+        delta:
+          type: integer
         occurredAt:
           type: string
           format: date-time

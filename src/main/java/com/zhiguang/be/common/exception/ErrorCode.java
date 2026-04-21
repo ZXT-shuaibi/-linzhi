@@ -7,6 +7,7 @@ package com.zhiguang.be.common.exception;
 public enum ErrorCode {
     VALIDATION_ERROR("COMMON_400_VALIDATION", "参数校验失败"),
     BAD_REQUEST("COMMON_400_BAD_REQUEST", "请求参数错误"),
+    CONFLICT("COMMON_409_CONFLICT", "资源状态冲突"),
     UNAUTHORIZED("AUTH_401_UNAUTHORIZED", "认证失败"),
     LOGIN_BLOCKED("AUTH_403_LOGIN_BLOCKED", "当前账号登录受限"),
     FORBIDDEN("COMMON_403_FORBIDDEN", "访问被拒绝"),
@@ -22,7 +23,6 @@ public enum ErrorCode {
     VERIFICATION_MISMATCH("AUTH_400_VERIFICATION_MISMATCH", "验证码错误"),
     VERIFICATION_TOO_MANY_ATTEMPTS("AUTH_429_VERIFICATION_ATTEMPTS", "验证码尝试次数过多"),
     NOT_FOUND("COMMON_404_NOT_FOUND", "资源不存在"),
-    CONFLICT("COMMON_409_CONFLICT", "资源状态冲突"),
     RATE_LIMITED("AUTH_429_RATE_LIMIT", "操作过于频繁"),
     INTERNAL_ERROR("COMMON_500_INTERNAL", "系统内部错误");
 

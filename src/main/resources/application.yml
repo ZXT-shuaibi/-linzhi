@@ -10,12 +10,25 @@ spring:
     redis:
       host: localhost
       port: 6379
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: zhiguang-be
+      auto-offset-reset: latest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
   sql:
     init:
       mode: always
 
 mybatis:
   mapper-locations: classpath:/mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
 
 server:
   port: 8080
@@ -30,6 +43,20 @@ storage:
   mock-upload-base-url: https://mock-oss.local/upload
   public-base-url: https://mock-oss.local/public
   presign-expire-seconds: 600
+
+social:
+  counter:
+    kafka:
+      enabled: false
+      flush-delay-ms: 1000
+    rebuild:
+      lock-ttl-ms: 5000
+      rate-permits: 3
+      rate-window-seconds: 10
+      backoff-base-ms: 500
+      backoff-max-ms: 30000
+  rebuild:
+    enabled: false
 
 security:
   user-store: jdbc

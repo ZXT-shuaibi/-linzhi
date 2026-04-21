@@ -1,3 +1,15 @@
 {
-    "java.compile.nullAnalysis.mode": "automatic"
+    "java.compile.nullAnalysis.mode": "automatic",
+    
+    // 关键配置：指定该项目使用的 JDK 运行环境路径
+    "java.jdt.ls.java.home": "D:\\JDK",
+
+    // 配置运行时列表，VS Code 会根据项目需求自动匹配
+    "java.configuration.runtimes": [
+        {
+            "name": "JavaSE-21",
+            "path": "D:\\JDK",
+            "default": true
+        }
+    ]
 }

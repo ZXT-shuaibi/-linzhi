@@ -23,6 +23,12 @@ import com.zhiguang.be.content.model.KnowPostFeedRow;
 import com.zhiguang.be.content.model.OutboxEventEntity;
 import com.zhiguang.be.content.model.PostSyncPayload;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
+import com.zhiguang.be.social.InteractionSummary;
+import com.zhiguang.be.social.RelationStatusData;
+import com.zhiguang.be.social.UserSocialCounterData;
+import com.zhiguang.be.social.service.FollowService;
+import com.zhiguang.be.social.service.InteractionService;
+import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,7 +41,9 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -67,6 +75,9 @@ public class ContentServiceImpl {
 
     private final KnowPostMapper knowPostMapper;
     private final LbsDiscoverService lbsDiscoverService;
+    private final FollowService followService;
+    private final InteractionService interactionService;
+    private final UserSocialCounterService userSocialCounterService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final ObjectMapper objectMapper;
     private final String mockUploadBaseUrl;
@@ -79,6 +90,9 @@ public class ContentServiceImpl {
     public ContentServiceImpl(
             KnowPostMapper knowPostMapper,
             LbsDiscoverService lbsDiscoverService,
+            FollowService followService,
+            InteractionService interactionService,
+            UserSocialCounterService userSocialCounterService,
             SnowflakeIdGenerator snowflakeIdGenerator,
             ObjectMapper objectMapper,
             @Value("${storage.mock-upload-base-url:https://mock-oss.local/upload}") String mockUploadBaseUrl,
@@ -87,6 +101,9 @@ public class ContentServiceImpl {
     ) {
         this.knowPostMapper = knowPostMapper;
         this.lbsDiscoverService = lbsDiscoverService;
+        this.followService = followService;
+        this.interactionService = interactionService;
+        this.userSocialCounterService = userSocialCounterService;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.objectMapper = objectMapper;
         this.mockUploadBaseUrl = mockUploadBaseUrl;
@@ -304,6 +321,7 @@ public class ContentServiceImpl {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章发布失败，请刷新后重试");
         }
 
+        incrementPublishedPostCounter(creatorId, 1);
         enqueuePostSyncEvent(postId, EVENT_POST_PUBLISHED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
         return getDetail(postId, creatorId);
@@ -360,6 +378,9 @@ public class ContentServiceImpl {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章删除失败，请刷新后重试");
         }
 
+        if (STATUS_PUBLISHED.equals(entity.status())) {
+            incrementPublishedPostCounter(creatorId, -1);
+        }
         enqueuePostSyncEvent(postId, EVENT_POST_DELETED, now);
         removeFromDiscover(postId);
     }
@@ -375,19 +396,24 @@ public class ContentServiceImpl {
         }
 
         boolean isOwner = Objects.equals(row.creatorId(), viewerId);
+        long viewerUserId = parseOptionalUserId(viewerId);
+        long creatorUserId = parseOptionalUserId(row.creatorId());
         boolean isPublicPublished = STATUS_PUBLISHED.equals(row.status()) && DEFAULT_VISIBILITY.equals(row.visible());
         boolean isFollowersVisible = STATUS_PUBLISHED.equals(row.status())
                 && FOLLOWERS_VISIBILITY.equals(row.visible())
-                && viewerId != null
-                && knowPostMapper.existsFollowingRelation(viewerId, row.creatorId());
+                && viewerUserId > 0L
+                && creatorUserId > 0L
+                && followService.isFollowing(viewerUserId, creatorUserId);
         if (!isPublicPublished && !isOwner && !isFollowersVisible) {
             throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "当前文章暂无访问权限");
         }
 
         List<String> imageUrls = parseStringList(row.imgUrlsJson());
+        InteractionSummary summary = loadDetailInteractionSummary(row, viewerUserId);
+        PostAuthor author = buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId);
         return new PostDetail(
                 row.postId(),
-                new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar()),
+                author,
                 row.status(),
                 row.title(),
                 row.description(),
@@ -398,6 +424,10 @@ public class ContentServiceImpl {
                 row.visible(),
                 row.type(),
                 row.isTop(),
+                summary == null ? 0L : summary.getLikeCount(),
+                summary == null ? 0L : summary.getFavoriteCount(),
+                viewerUserId > 0L && summary != null ? summary.isViewerLiked() : null,
+                viewerUserId > 0L && summary != null ? summary.isViewerFavorited() : null,
                 row.publishTime(),
                 row.createdAt(),
                 row.updatedAt()
@@ -570,26 +600,148 @@ public class ContentServiceImpl {
     private PostPageData toPageData(List<KnowPostFeedRow> rows, int page, int size, String viewerId) {
         boolean hasMore = rows.size() > size;
         List<KnowPostFeedRow> pageRows = hasMore ? rows.subList(0, size) : rows;
+        long viewerUserId = parseOptionalUserId(viewerId);
+        Map<String, InteractionSummary> summaryMap = loadPageInteractionSummaries(pageRows, viewerUserId);
+        Map<String, PostAuthor> authorMap = loadAuthors(pageRows, viewerUserId);
         List<PostCard> items = new ArrayList<>(pageRows.size());
         for (KnowPostFeedRow row : pageRows) {
             List<String> imageUrls = parseStringList(row.imgUrlsJson());
+            InteractionSummary summary = summaryMap.get(row.postId());
+            PostAuthor author = authorMap.get(row.creatorId());
+            if (author == null) {
+                author = buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId);
+            }
             items.add(new PostCard(
                     row.postId(),
                     row.title(),
                     row.description(),
                     imageUrls.isEmpty() ? null : imageUrls.get(0),
                     parseStringList(row.tagsJson()),
-                    new PostAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar()),
-                    0L,
-                    0L,
-                    viewerId == null ? null : Boolean.FALSE,
-                    viewerId == null ? null : Boolean.FALSE,
+                    author,
+                    summary == null ? 0L : summary.getLikeCount(),
+                    summary == null ? 0L : summary.getFavoriteCount(),
+                    viewerUserId > 0L && summary != null ? summary.isViewerLiked() : null,
+                    viewerUserId > 0L && summary != null ? summary.isViewerFavorited() : null,
                     row.visibility(),
                     row.isTop(),
                     row.publishTime()
             ));
         }
         return new PostPageData(items, page, size, hasMore);
+    }
+
+    /**
+     * 为详情页加载互动汇总。
+     * 只有已发布内容才接入社交互动，避免草稿态误走互动校验。
+     */
+    private InteractionSummary loadDetailInteractionSummary(KnowPostDetailRow row, long viewerUserId) {
+        if (!STATUS_PUBLISHED.equals(row.status())) {
+            return null;
+        }
+
+        long postId = parseOptionalUserId(row.postId());
+        if (postId <= 0L) {
+            return null;
+        }
+        return interactionService.summary(viewerUserId, "post", postId);
+    }
+
+    /**
+     * 批量加载列表页互动汇总。
+     * 内容卡片只补互动状态，不把用户态写回公共缓存。
+     */
+    private Map<String, InteractionSummary> loadPageInteractionSummaries(List<KnowPostFeedRow> rows, long viewerUserId) {
+        Map<String, InteractionSummary> summaryMap = new LinkedHashMap<String, InteractionSummary>();
+        if (rows == null || rows.isEmpty()) {
+            return summaryMap;
+        }
+
+        List<Long> targetIds = new ArrayList<Long>(rows.size());
+        for (KnowPostFeedRow row : rows) {
+            long postId = parseOptionalUserId(row.postId());
+            if (postId > 0L) {
+                targetIds.add(postId);
+            }
+        }
+        if (targetIds.isEmpty()) {
+            return summaryMap;
+        }
+        return interactionService.summaryBatch(viewerUserId, "post", targetIds);
+    }
+
+    /**
+     * 构建详情页作者信息。
+     *
+     * @param creatorId 作者 ID
+     * @param nickname 作者昵称
+     * @param avatar 作者头像
+     * @param viewerUserId 当前查看者 ID
+     * @return 作者信息
+     */
+    private PostAuthor buildAuthor(String creatorId, String nickname, String avatar, long viewerUserId) {
+        long creatorUserId = parseOptionalUserId(creatorId);
+        UserSocialCounterData socialCounters = creatorUserId > 0L
+                ? userSocialCounterService.getUserSocialCounter(creatorUserId)
+                : null;
+        RelationStatusData relationStatus = resolveRelationStatus(viewerUserId, creatorUserId);
+        return new PostAuthor(creatorId, nickname, avatar, socialCounters, relationStatus);
+    }
+
+    /**
+     * 批量装配列表中的作者信息，避免同一作者重复查询。
+     *
+     * @param rows 当前页面的内容行
+     * @param viewerUserId 当前查看者 ID
+     * @return 以作者 ID 为键的作者信息映射
+     */
+    private Map<String, PostAuthor> loadAuthors(List<KnowPostFeedRow> rows, long viewerUserId) {
+        Map<String, PostAuthor> authorMap = new LinkedHashMap<String, PostAuthor>();
+        if (rows == null || rows.isEmpty()) {
+            return authorMap;
+        }
+
+        for (KnowPostFeedRow row : rows) {
+            if (row == null || !hasText(row.creatorId()) || authorMap.containsKey(row.creatorId())) {
+                continue;
+            }
+            authorMap.put(
+                    row.creatorId(),
+                    buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId)
+            );
+        }
+        return authorMap;
+    }
+
+    /**
+     * 解析当前查看者与作者之间的关系态。
+     *
+     * @param viewerUserId 当前查看者 ID
+     * @param creatorUserId 作者用户 ID
+     * @return 关系态结果
+     */
+    private RelationStatusData resolveRelationStatus(long viewerUserId, long creatorUserId) {
+        if (creatorUserId <= 0L) {
+            return new RelationStatusData(false, false, false);
+        }
+        if (viewerUserId <= 0L) {
+            return new RelationStatusData(false, false, false);
+        }
+        return followService.relationStatus(viewerUserId, creatorUserId);
+    }
+
+    /**
+     * 同步作者已发布内容数。
+     * 这里对齐 zhiguang 的做法，发布和删除时直接维护用户维 posts 槽位。
+     *
+     * @param creatorId 作者用户 ID
+     * @param delta 计数变化量
+     */
+    private void incrementPublishedPostCounter(String creatorId, int delta) {
+        long creatorUserId = parseOptionalUserId(creatorId);
+        if (creatorUserId <= 0L || delta == 0) {
+            return;
+        }
+        userSocialCounterService.incrementPosts(creatorUserId, delta);
     }
 
     /**
@@ -604,6 +756,21 @@ public class ContentServiceImpl {
      */
     private int normalizePageSize(int size) {
         return Math.min(Math.max(size, 1), 50);
+    }
+
+    /**
+     * 解析可选用户 ID。
+     * 对匿名态或异常值统一回退为 0，避免影响公开读链路。
+     */
+    private long parseOptionalUserId(String rawUserId) {
+        if (!hasText(rawUserId)) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(rawUserId.trim());
+        } catch (Exception ex) {
+            return 0L;
+        }
     }
 
     /**

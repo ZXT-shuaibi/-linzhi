@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zhiguang.be.feed.mapper.FeedMapper">
+
+    <resultMap id="FeedPostRowMap" type="com.zhiguang.be.feed.FeedPostRow">
+        <constructor>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="creator_id" javaType="java.lang.String"/>
+            <arg column="author_nickname" javaType="java.lang.String"/>
+            <arg column="author_avatar" javaType="java.lang.String"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="description" javaType="java.lang.String"/>
+            <arg column="img_urls" javaType="java.lang.String"/>
+            <arg column="tags" javaType="java.lang.String"/>
+            <arg column="latitude" javaType="java.lang.Double"/>
+            <arg column="longitude" javaType="java.lang.Double"/>
+            <arg column="publish_time" javaType="java.time.Instant"/>
+            <arg column="is_top" javaType="java.lang.Boolean"/>
+        </constructor>
+    </resultMap>
+
+    <select id="listHomeFeedCandidates" resultMap="FeedPostRowMap">
+        select p.id,
+               p.creator_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               p.title,
+               p.description,
+               p.img_urls,
+               p.tags,
+               p.latitude,
+               p.longitude,
+               p.publish_time,
+               p.is_top
+          from know_posts p
+          join users u on u.id = p.creator_id
+         where p.status = 'published'
+           and p.visible = 'public'
+         order by p.is_top desc, p.publish_time desc, p.id desc
+         limit #{limit} offset #{offset}
+    </select>
+
+    <select id="countHomeFeed" resultType="long">
+        select count(1)
+          from know_posts
+         where status = 'published'
+           and visible = 'public'
+    </select>
+
+</mapper>

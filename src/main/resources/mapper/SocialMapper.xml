@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zhiguang.be.social.mapper.SocialMapper">
+
+    <select id="existsUser" resultType="int">
+        SELECT COUNT(1)
+        FROM users
+        WHERE id = #{userId}
+    </select>
+
+    <select id="findPostSnapshot" resultType="map">
+        SELECT id AS postId,
+               creator_id AS creatorId,
+               status,
+               visible
+        FROM know_posts
+        WHERE id = #{postId}
+    </select>
+
+    <select id="listPostSnapshotsByIds" resultType="map">
+        SELECT id AS postId,
+               creator_id AS creatorId,
+               status,
+               visible
+        FROM know_posts
+        WHERE id IN
+        <foreach collection="postIds" item="postId" open="(" separator="," close=")">
+            #{postId}
+        </foreach>
+    </select>
+
+    <select id="existsActiveFollowing" resultType="int">
+        SELECT COUNT(1)
+        FROM following
+        WHERE from_user_id = #{fromUserId}
+          AND to_user_id = #{toUserId}
+          AND rel_status = 1
+    </select>
+
+    <select id="existsActiveFollower" resultType="int">
+        SELECT COUNT(1)
+        FROM follower
+        WHERE to_user_id = #{toUserId}
+          AND from_user_id = #{fromUserId}
+          AND rel_status = 1
+    </select>
+
+    <update id="reactivateFollowing">
+        UPDATE following
+        SET rel_status = 1,
+            created_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE from_user_id = #{fromUserId}
+          AND to_user_id = #{toUserId}
+          AND rel_status = 0
+    </update>
+
+    <insert id="insertFollowing">
+        INSERT INTO following (id, from_user_id, to_user_id, rel_status, created_at, updated_at)
+        VALUES (#{id}, #{fromUserId}, #{toUserId}, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    </insert>
+
+    <update id="cancelFollowing">
+        UPDATE following
+        SET rel_status = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE from_user_id = #{fromUserId}
+          AND to_user_id = #{toUserId}
+          AND rel_status = 1
+    </update>
+
+    <update id="reactivateFollower">
+        UPDATE follower
+        SET rel_status = 1,
+            created_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE to_user_id = #{toUserId}
+          AND from_user_id = #{fromUserId}
+          AND rel_status = 0
+    </update>
+
+    <insert id="insertFollower">
+        INSERT INTO follower (id, to_user_id, from_user_id, rel_status, created_at, updated_at)
+        VALUES (#{id}, #{toUserId}, #{fromUserId}, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    </insert>
+
+    <update id="cancelFollower">
+        UPDATE follower
+        SET rel_status = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE to_user_id = #{toUserId}
+          AND from_user_id = #{fromUserId}
+          AND rel_status = 1
+    </update>
+
+    <select id="listFollowingItems" resultType="map">
+        SELECT CAST(u.id AS VARCHAR) AS userId,
+               u.nickname AS nickname,
+               u.avatar AS avatar,
+               f.created_at AS followedAt
+        FROM following f
+        INNER JOIN users u ON u.id = f.to_user_id
+        WHERE f.from_user_id = #{userId}
+          AND f.rel_status = 1
+        ORDER BY f.created_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="listFollowerItems" resultType="map">
+        SELECT CAST(u.id AS VARCHAR) AS userId,
+               u.nickname AS nickname,
+               u.avatar AS avatar,
+               f.created_at AS followedAt
+        FROM follower f
+        INNER JOIN users u ON u.id = f.from_user_id
+        WHERE f.to_user_id = #{userId}
+          AND f.rel_status = 1
+        ORDER BY f.created_at DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="listUsersByIds" resultType="map">
+        SELECT id AS userId,
+               nickname AS nickname,
+               avatar AS avatar
+        FROM users
+        WHERE id IN
+        <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+            #{userId}
+        </foreach>
+    </select>
+
+    <select id="countFollowingActive" resultType="long">
+        SELECT COUNT(1)
+        FROM following
+        WHERE from_user_id = #{fromUserId}
+          AND rel_status = 1
+    </select>
+
+    <select id="countFollowerActive" resultType="long">
+        SELECT COUNT(1)
+        FROM follower
+        WHERE to_user_id = #{toUserId}
+          AND rel_status = 1
+    </select>
+
+    <select id="countPublishedPostsByCreatorId" resultType="long">
+        SELECT COUNT(1)
+        FROM know_posts
+        WHERE creator_id = #{creatorId}
+          AND status = 'published'
+    </select>
+
+    <select id="listPublishedPostIdsByCreatorId" resultType="long">
+        SELECT id
+        FROM know_posts
+        WHERE creator_id = #{creatorId}
+          AND status = 'published'
+        ORDER BY publish_time DESC, id DESC
+    </select>
+
+    <select id="existsActiveInteraction" resultType="int">
+        SELECT COUNT(1)
+        FROM like_favorite
+        WHERE user_id = #{userId}
+          AND target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND action_type = #{actionType}
+          AND rel_status = 1
+    </select>
+
+    <update id="reactivateInteraction">
+        UPDATE like_favorite
+        SET rel_status = 1,
+            created_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = #{userId}
+          AND target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND action_type = #{actionType}
+          AND rel_status = 0
+    </update>
+
+    <insert id="insertInteraction">
+        INSERT INTO like_favorite (id, user_id, target_type, target_id, action_type, rel_status, created_at, updated_at)
+        VALUES (#{id}, #{userId}, #{targetType}, #{targetId}, #{actionType}, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    </insert>
+
+    <update id="deactivateInteraction">
+        UPDATE like_favorite
+        SET rel_status = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = #{userId}
+          AND target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND action_type = #{actionType}
+          AND rel_status = 1
+    </update>
+
+    <select id="aggregateActiveInteractionCount" resultType="long">
+        SELECT COUNT(1)
+        FROM like_favorite
+        WHERE target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND action_type = #{actionType}
+          AND rel_status = 1
+    </select>
+
+    <select id="aggregateActiveInteractionCountsBatch" resultType="map">
+        SELECT target_id AS targetId,
+               action_type AS actionType,
+               COUNT(1) AS total
+        FROM like_favorite
+        WHERE target_type = #{targetType}
+          AND target_id IN
+          <foreach collection="targetIds" item="targetId" open="(" separator="," close=")">
+              #{targetId}
+          </foreach>
+          AND rel_status = 1
+        GROUP BY target_id, action_type
+    </select>
+
+    <select id="listActiveInteractionsByUserAndTargets" resultType="map">
+        SELECT target_id AS targetId,
+               action_type AS actionType
+        FROM like_favorite
+        WHERE user_id = #{userId}
+          AND target_type = #{targetType}
+          AND target_id IN
+          <foreach collection="targetIds" item="targetId" open="(" separator="," close=")">
+              #{targetId}
+          </foreach>
+          AND rel_status = 1
+    </select>
+
+    <insert id="insertOutboxEvent">
+        INSERT INTO outbox (
+            id,
+            aggregate_type,
+            aggregate_id,
+            event_type,
+            payload,
+            status,
+            retry_count,
+            created_at
+        )
+        VALUES (
+            #{id},
+            #{aggregateType},
+            #{aggregateId},
+            #{eventType},
+            #{payload},
+            'pending',
+            0,
+            CURRENT_TIMESTAMP
+        )
+    </insert>
+</mapper>

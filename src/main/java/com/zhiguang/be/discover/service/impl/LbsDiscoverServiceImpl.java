@@ -19,6 +19,7 @@ import org.springframework.data.geo.Metrics;
 import org.springframework.data.geo.Point;
 import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.connection.RedisGeoCommands.GeoRadiusCommandArgs;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -160,7 +161,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private NearbySearchResponse performSearch(NearbySearchRequest request, String type) {
         String geoKey = GEO_KEY_PREFIX + type;
         Point center = toRedisPoint(request.lat(), request.lng());
-        Circle circle = new Circle(center, new Distance(request.radius(), Metrics.METERS));
+        Circle circle = new Circle(center, new Distance(request.radius(), Metrics.MILES));
         GeoRadiusCommandArgs searchArgs = buildSearchArgs(request);
 
         GeoResults<RedisGeoCommands.GeoLocation<String>> results;
@@ -267,11 +268,14 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         }
 
         try {
-            List<Object> pipelinedResults = redisTemplate.executePipelined((SessionCallback<Object>) operations -> {
-                for (String id : ids) {
-                    operations.opsForHash().entries(buildContentKey(type, id));
+            List<Object> pipelinedResults = redisTemplate.executePipelined(new SessionCallback<Object>() {
+                @Override
+                public Object execute(RedisOperations operations) {
+                    for (String id : ids) {
+                        operations.opsForHash().entries(buildContentKey(type, id));
+                    }
+                    return null;
                 }
-                return null;
             });
 
             Map<String, LbsContentMetadata> metadataById = new HashMap<>();

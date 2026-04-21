@@ -20,6 +20,10 @@ public record PostDetail(
         String visibility,
         String type,
         Boolean isTop,
+        Long likeCount,
+        Long favoriteCount,
+        Boolean liked,
+        Boolean faved,
         Instant publishedAt,
         Instant createdAt,
         Instant updatedAt

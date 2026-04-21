@@ -271,3 +271,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_follower_to_from ON follower(to_user_id, fr
 CREATE INDEX IF NOT EXISTS ix_follower_to_created ON follower(to_user_id, created_at, from_user_id, rel_status);
 -- 查某人关注了谁。
 CREATE INDEX IF NOT EXISTS ix_follower_from ON follower(from_user_id, to_user_id, rel_status);
+-- like_favorite：点赞与收藏关系表。
+-- 用于持久化用户对内容目标的点赞/收藏事实层数据，给 Redis 位图和计数 SDS 提供兜底来源。
+CREATE TABLE IF NOT EXISTS like_favorite (
+    -- 互动关系唯一 ID。
+    id BIGINT PRIMARY KEY,
+    -- 发起动作的用户 ID。
+    user_id BIGINT NOT NULL,
+    -- 目标类型，一期真实支持 post，merchant 先预留。
+    target_type VARCHAR(32) NOT NULL,
+    -- 目标实体 ID。
+    target_id BIGINT NOT NULL,
+    -- 动作类型，支持 like / favorite。
+    action_type VARCHAR(16) NOT NULL,
+    -- 关系状态，1 表示当前生效，0 表示已取消。
+    rel_status TINYINT NOT NULL DEFAULT 1,
+    -- 首次建立互动关系的时间。
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- 最近一次更新互动关系的时间。
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 防止同一用户对同一目标的同一动作产生重复关系。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_like_favorite_user_target_action
+    ON like_favorite(user_id, target_type, target_id, action_type);
+-- 便于按目标聚合点赞/收藏数量。
+CREATE INDEX IF NOT EXISTS ix_like_favorite_target_action_status
+    ON like_favorite(target_type, target_id, action_type, rel_status);
+-- 便于按用户查询自己的互动记录。
+CREATE INDEX IF NOT EXISTS ix_like_favorite_user_status
+    ON like_favorite(user_id, rel_status, updated_at);
