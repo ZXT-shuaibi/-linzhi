@@ -28,4 +28,20 @@ public class ThreadPoolConfiguration {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * RAG 流式问答执行线程池。
+     */
+    @Bean("ragQueryExecutor")
+    public Executor ragQueryExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("rag-query-");
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(100);
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
+        executor.initialize();
+        return executor;
+    }
 }

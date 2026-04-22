@@ -1,6 +1,8 @@
 package com.zhiguang.be.discover.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.cache.CacheRegions;
+import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.discover.model.NearbyItem;
@@ -59,6 +61,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private static final String CACHE_VERSION_KEY_PREFIX = "lbs:version:";
     private static final String CONTENT_KEY_PREFIX = "lbs:content:";
     private static final Duration CACHE_TTL = Duration.ofSeconds(120);
+    private static final Duration LOCAL_CACHE_TTL = Duration.ofSeconds(5);
     private static final Duration LOCK_TTL = Duration.ofSeconds(10);
     private static final Duration LOCK_WAIT_TIMEOUT = Duration.ofMillis(800);
     private static final Duration LOCK_RETRY_INTERVAL = Duration.ofMillis(40);
@@ -69,6 +72,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     );
 
     private final StringRedisTemplate redisTemplate;
+    private final CacheService cacheService;
     private final ObjectMapper objectMapper;
 
     @Value("${discover.lbs.fail-open-on-search-error:false}")
@@ -77,11 +81,17 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     /**
      * 构造 LBS 发现服务实现。
      *
-     * @param redisTemplate Redis 模板，用于 Geo、缓存和元数据操作
+     * @param redisTemplate Redis 模板，用于 Geo 和元数据操作
+     * @param cacheService 缓存服务
      * @param objectMapper JSON 序列化组件，用于缓存读写
      */
-    public LbsDiscoverServiceImpl(StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+    public LbsDiscoverServiceImpl(
+        StringRedisTemplate redisTemplate,
+        CacheService cacheService,
+        ObjectMapper objectMapper
+    ) {
         this.redisTemplate = redisTemplate;
+        this.cacheService = cacheService;
         this.objectMapper = objectMapper;
     }
 
@@ -97,6 +107,10 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         validateSearchRequest(request);
         String type = normalizeType(request.type());
         String cacheKey = buildCacheKey(request, type);
+        NearbySearchResponse localCached = cacheService.getLocal(CacheRegions.DISCOVER_NEARBY, cacheKey, NearbySearchResponse.class);
+        if (localCached != null) {
+            return localCached;
+        }
         Optional<NearbySearchResponse> cachedResponse = getCachedResponse(cacheKey);
         if (cachedResponse.isPresent()) {
             log.debug("LBS nearby cache hit. type={}, page={}, size={}, key={}", type, request.page(), request.size(), cacheKey);
@@ -163,6 +177,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         Point center = toRedisPoint(request.lat(), request.lng());
         Circle circle = new Circle(center, new Distance(request.radius(), Metrics.MILES));
         GeoRadiusCommandArgs searchArgs = buildSearchArgs(request);
+        String normalizedTag = normalizeOptionalTag(request.tag());
 
         GeoResults<RedisGeoCommands.GeoLocation<String>> results;
         try {
@@ -185,7 +200,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         Map<String, LbsContentMetadata> metadataById = batchReadContentMetadata(type, results.getContent());
         List<NearbyItem> sortedItems = new ArrayList<>();
         for (GeoResult<RedisGeoCommands.GeoLocation<String>> result : results.getContent()) {
-            Optional<NearbyItem> nearbyItem = toNearbyItem(type, result, metadataById);
+            Optional<NearbyItem> nearbyItem = toNearbyItem(type, result, metadataById, normalizedTag);
             nearbyItem.ifPresent(sortedItems::add);
         }
         sortedItems.sort(Comparator.comparingDouble(NearbyItem::score).reversed());
@@ -215,7 +230,8 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private Optional<NearbyItem> toNearbyItem(
         String type,
         GeoResult<RedisGeoCommands.GeoLocation<String>> result,
-        Map<String, LbsContentMetadata> metadataById
+        Map<String, LbsContentMetadata> metadataById,
+        String normalizedTag
     ) {
         RedisGeoCommands.GeoLocation<String> location = result.getContent();
         if (location == null || !StringUtils.hasText(location.getName())) {
@@ -224,6 +240,9 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
 
         String id = location.getName();
         LbsContentMetadata metadata = metadataById.getOrDefault(id, LbsContentMetadata.empty());
+        if (!matchesTag(normalizedTag, metadata.tags())) {
+            return Optional.empty();
+        }
         Point point = location.getPoint();
         Double lat = resolveLatitude(point, metadata);
         Double lng = resolveLongitude(point, metadata);
@@ -234,6 +253,12 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             id,
             type,
             metadata.title(),
+            metadata.summary(),
+            metadata.coverUrl(),
+            metadata.tags(),
+            metadata.authorId(),
+            metadata.authorName(),
+            metadata.authorAvatar(),
             lat,
             lng,
             distance,
@@ -346,16 +371,12 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      * @return 命中时返回结果对象，否则返回空
      */
     private Optional<NearbySearchResponse> getCachedResponse(String cacheKey) {
-        try {
-            String cached = redisTemplate.opsForValue().get(cacheKey);
-            if (!StringUtils.hasText(cached)) {
-                return Optional.empty();
-            }
-            return Optional.of(objectMapper.readValue(cached, NearbySearchResponse.class));
-        } catch (Exception ex) {
-            log.warn("Failed to read LBS nearby cache. key={}", cacheKey, ex);
+        NearbySearchResponse cachedResponse = cacheService.getRedisJson(cacheKey, NearbySearchResponse.class);
+        if (cachedResponse == null) {
             return Optional.empty();
         }
+        cacheService.putLocal(CacheRegions.DISCOVER_NEARBY, cacheKey, cachedResponse, LOCAL_CACHE_TTL);
+        return Optional.of(cachedResponse);
     }
 
     /**
@@ -366,11 +387,8 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      * @param response 搜索结果
      */
     private void cacheResponse(String cacheKey, NearbySearchResponse response) {
-        try {
-            redisTemplate.opsForValue().set(cacheKey, objectMapper.writeValueAsString(response), CACHE_TTL);
-        } catch (Exception ex) {
-            log.warn("Failed to write LBS nearby cache. key={}", cacheKey, ex);
-        }
+        cacheService.putRedisJson(cacheKey, response, CACHE_TTL);
+        cacheService.putLocal(CacheRegions.DISCOVER_NEARBY, cacheKey, response, LOCAL_CACHE_TTL);
     }
 
     /**
@@ -392,13 +410,33 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         Double lat,
         Double lng,
         String title,
+        String summary,
+        String coverUrl,
+        String authorId,
+        String authorName,
+        String authorAvatar,
+        String tagsJson,
         Long publishTime,
         Integer likeCount
     ) {
         String normalizedType = normalizeType(type);
         try {
             redisTemplate.opsForGeo().add(GEO_KEY_PREFIX + normalizedType, toRedisPoint(lat, lng), id);
-            saveContentMetadata(normalizedType, id, lat, lng, title, publishTime, likeCount);
+            saveContentMetadata(
+                    normalizedType,
+                    id,
+                    lat,
+                    lng,
+                    title,
+                    summary,
+                    coverUrl,
+                    authorId,
+                    authorName,
+                    authorAvatar,
+                    tagsJson,
+                    publishTime,
+                    likeCount
+            );
             bumpCacheVersion(normalizedType);
             log.info("Indexed LBS location. type={}, id={}, lat={}, lng={}", normalizedType, id, lat, lng);
         } catch (Exception ex) {
@@ -446,6 +484,12 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         Double lat,
         Double lng,
         String title,
+        String summary,
+        String coverUrl,
+        String authorId,
+        String authorName,
+        String authorAvatar,
+        String tagsJson,
         Long publishTime,
         Integer likeCount
     ) {
@@ -454,6 +498,24 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         values.put("lng", String.valueOf(lng));
         if (StringUtils.hasText(title)) {
             values.put("title", title.trim());
+        }
+        if (StringUtils.hasText(summary)) {
+            values.put("summary", summary.trim());
+        }
+        if (StringUtils.hasText(coverUrl)) {
+            values.put("coverUrl", coverUrl.trim());
+        }
+        if (StringUtils.hasText(authorId)) {
+            values.put("authorId", authorId.trim());
+        }
+        if (StringUtils.hasText(authorName)) {
+            values.put("authorName", authorName.trim());
+        }
+        if (StringUtils.hasText(authorAvatar)) {
+            values.put("authorAvatar", authorAvatar.trim());
+        }
+        if (StringUtils.hasText(tagsJson)) {
+            values.put("tagsJson", tagsJson.trim());
         }
         if (publishTime != null) {
             values.put("publishTime", String.valueOf(publishTime));
@@ -826,6 +888,12 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         }
 
         String title = null;
+        String summary = null;
+        String coverUrl = null;
+        String authorId = null;
+        String authorName = null;
+        String authorAvatar = null;
+        List<String> tags = Collections.emptyList();
         Long publishTime = null;
         Integer likeCount = null;
         Double lat = null;
@@ -839,6 +907,18 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
 
             if ("title".equals(key)) {
                 title = asString(entry.getValue());
+            } else if ("summary".equals(key)) {
+                summary = asString(entry.getValue());
+            } else if ("coverUrl".equals(key)) {
+                coverUrl = asString(entry.getValue());
+            } else if ("authorId".equals(key)) {
+                authorId = asString(entry.getValue());
+            } else if ("authorName".equals(key)) {
+                authorName = asString(entry.getValue());
+            } else if ("authorAvatar".equals(key)) {
+                authorAvatar = asString(entry.getValue());
+            } else if ("tagsJson".equals(key)) {
+                tags = parseTags(entry.getValue());
             } else if ("publishTime".equals(key)) {
                 publishTime = asLong(entry.getValue());
             } else if ("likeCount".equals(key)) {
@@ -850,7 +930,52 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             }
         }
 
-        return new LbsContentMetadata(title, publishTime, likeCount, lat, lng);
+        return new LbsContentMetadata(title, summary, coverUrl, tags, authorId, authorName, authorAvatar, publishTime, likeCount, lat, lng);
+    }
+
+    /**
+     * 解析标签 JSON。
+     */
+    private List<String> parseTags(Object value) {
+        String raw = asString(value);
+        if (!StringUtils.hasText(raw)) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(raw, objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+        } catch (Exception ex) {
+            log.debug("Failed to parse discover tags json: {}", raw, ex);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 标准化标签过滤条件。
+     */
+    private String normalizeOptionalTag(String tag) {
+        if (!StringUtils.hasText(tag)) {
+            return null;
+        }
+        String normalized = sanitizeSegment(tag);
+        return StringUtils.hasText(normalized) ? normalized : null;
+    }
+
+    /**
+     * 判断当前结果是否命中标签过滤。
+     */
+    private boolean matchesTag(String normalizedTag, List<String> tags) {
+        if (!StringUtils.hasText(normalizedTag)) {
+            return true;
+        }
+        if (tags == null || tags.isEmpty()) {
+            return false;
+        }
+        for (String tag : tags) {
+            if (normalizedTag.equals(normalizeOptionalTag(tag))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -907,6 +1032,12 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      */
     private static final class LbsContentMetadata {
         private final String title;
+        private final String summary;
+        private final String coverUrl;
+        private final List<String> tags;
+        private final String authorId;
+        private final String authorName;
+        private final String authorAvatar;
         private final Long publishTime;
         private final Integer likeCount;
         private final Double lat;
@@ -921,8 +1052,26 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
          * @param lat 纬度
          * @param lng 经度
          */
-        private LbsContentMetadata(String title, Long publishTime, Integer likeCount, Double lat, Double lng) {
+        private LbsContentMetadata(
+                String title,
+                String summary,
+                String coverUrl,
+                List<String> tags,
+                String authorId,
+                String authorName,
+                String authorAvatar,
+                Long publishTime,
+                Integer likeCount,
+                Double lat,
+                Double lng
+        ) {
             this.title = title;
+            this.summary = summary;
+            this.coverUrl = coverUrl;
+            this.tags = tags;
+            this.authorId = authorId;
+            this.authorName = authorName;
+            this.authorAvatar = authorAvatar;
             this.publishTime = publishTime;
             this.likeCount = likeCount;
             this.lat = lat;
@@ -935,7 +1084,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
          * @return 空元数据实例
          */
         private static LbsContentMetadata empty() {
-            return new LbsContentMetadata(null, null, null, null, null);
+            return new LbsContentMetadata(null, null, null, Collections.emptyList(), null, null, null, null, null, null, null);
         }
 
         /**
@@ -945,6 +1094,30 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
          */
         private String title() {
             return title;
+        }
+
+        private String summary() {
+            return summary;
+        }
+
+        private String coverUrl() {
+            return coverUrl;
+        }
+
+        private List<String> tags() {
+            return tags;
+        }
+
+        private String authorId() {
+            return authorId;
+        }
+
+        private String authorName() {
+            return authorName;
+        }
+
+        private String authorAvatar() {
+            return authorAvatar;
         }
 
         /**

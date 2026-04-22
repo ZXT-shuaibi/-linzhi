@@ -2,6 +2,8 @@ package com.zhiguang.be.trade.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.cache.CacheRegions;
+import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
@@ -58,9 +60,11 @@ public class TradeServiceImpl implements TradeService {
     private static final String ORDER_STATUS_PENDING_PAYMENT = "PENDING_PAYMENT";
     private static final String ORDER_STATUS_PAID = "PAID";
     private static final String ORDER_STATUS_CLOSED = "CLOSED";
+    private static final Duration ACTIVITY_LOCAL_CACHE_TTL = Duration.ofSeconds(5);
 
     private final TradeMapper tradeMapper;
     private final StringRedisTemplate stringRedisTemplate;
+    private final CacheService cacheService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final TradeOrderProducer tradeOrderProducer;
     private final Executor tradeOrderExecutor;
@@ -91,6 +95,7 @@ public class TradeServiceImpl implements TradeService {
     public TradeServiceImpl(
             TradeMapper tradeMapper,
             StringRedisTemplate stringRedisTemplate,
+            CacheService cacheService,
             SnowflakeIdGenerator snowflakeIdGenerator,
             TradeOrderProducer tradeOrderProducer,
             @Qualifier("tradeOrderExecutor") Executor tradeOrderExecutor,
@@ -99,6 +104,7 @@ public class TradeServiceImpl implements TradeService {
     ) {
         this.tradeMapper = tradeMapper;
         this.stringRedisTemplate = stringRedisTemplate;
+        this.cacheService = cacheService;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.tradeOrderProducer = tradeOrderProducer;
         this.tradeOrderExecutor = tradeOrderExecutor;
@@ -769,17 +775,22 @@ public class TradeServiceImpl implements TradeService {
      */
     private Map<String, Object> loadActivitySnapshot(long activityId) {
         String cacheKey = TradeRedisKeys.activityCacheKey(activityId);
+        Map<String, Object> localSnapshot = cacheService.getLocal(CacheRegions.TRADE_ACTIVITY, cacheKey, Map.class);
+        if (localSnapshot != null && !localSnapshot.isEmpty()) {
+            return localSnapshot;
+        }
         for (int attempt = 0; attempt < 3; attempt++) {
-            String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            String cached = cacheService.getRedisString(cacheKey);
             if (TradeRedisKeys.NULL_MARKER.equals(cached)) {
                 return null;
             }
             if (cached != null && !cached.isBlank()) {
                 Map<String, Object> snapshot = deserializeActivitySnapshot(cached);
                 if (snapshot != null) {
+                    cacheService.putLocal(CacheRegions.TRADE_ACTIVITY, cacheKey, snapshot, ACTIVITY_LOCAL_CACHE_TTL);
                     return snapshot;
                 }
-                stringRedisTemplate.delete(cacheKey);
+                cacheService.deleteRedis(cacheKey);
             }
 
             String lockKey = TradeRedisKeys.activityLockKey(activityId);
@@ -789,7 +800,7 @@ public class TradeServiceImpl implements TradeService {
                 try {
                     Map<String, Object> activity = tradeMapper.findActivityById(activityId);
                     if (activity == null || activity.isEmpty()) {
-                        stringRedisTemplate.opsForValue().set(cacheKey, TradeRedisKeys.NULL_MARKER, Duration.ofSeconds(activityNullTtlSeconds));
+                        cacheService.putRedisString(cacheKey, TradeRedisKeys.NULL_MARKER, Duration.ofSeconds(activityNullTtlSeconds));
                         return null;
                     }
                     cacheActivitySnapshot(activity);
@@ -815,11 +826,13 @@ public class TradeServiceImpl implements TradeService {
     private void cacheActivitySnapshot(Map<String, Object> activity) {
         long activityId = asLong(activity.get("activityId"));
         try {
-            stringRedisTemplate.opsForValue().set(
-                    TradeRedisKeys.activityCacheKey(activityId),
+            String cacheKey = TradeRedisKeys.activityCacheKey(activityId);
+            cacheService.putRedisString(
+                    cacheKey,
                     objectMapper.writeValueAsString(activity),
                     Duration.ofSeconds(activityTtlSeconds + randomJitter())
             );
+            cacheService.putLocal(CacheRegions.TRADE_ACTIVITY, cacheKey, activity, ACTIVITY_LOCAL_CACHE_TTL);
         } catch (JsonProcessingException ex) {
             log.warn("cache trade activity failed, activityId={}", activityId, ex);
         }

@@ -1,8 +1,9 @@
 package com.zhiguang.be.feed.service.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.cache.CacheRegions;
+import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.content.dto.PostAuthor;
@@ -18,7 +19,6 @@ import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -47,31 +47,30 @@ public class FeedServiceImpl implements FeedService {
     private static final double EARTH_RADIUS_METERS = 6_371_000D;
 
     private final FeedMapper feedMapper;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final CacheService cacheService;
     private final ObjectMapper objectMapper;
     private final FollowService followService;
     private final InteractionService interactionService;
     private final UserSocialCounterService userSocialCounterService;
-    private final ConcurrentHashMap<String, LocalCacheEntry> localPageCache = new ConcurrentHashMap<String, LocalCacheEntry>();
     private final ConcurrentHashMap<String, Object> singleFlightLocks = new ConcurrentHashMap<String, Object>();
 
     /**
      * 注入 Feed 服务依赖。
      *
      * @param knowPostMapper 内容模块 Mapper
-     * @param stringRedisTemplate Redis 模板
+     * @param cacheService 缓存服务
      * @param objectMapper JSON 组件
      */
     public FeedServiceImpl(
             FeedMapper feedMapper,
-            StringRedisTemplate stringRedisTemplate,
+            CacheService cacheService,
             ObjectMapper objectMapper,
             FollowService followService,
             InteractionService interactionService,
             UserSocialCounterService userSocialCounterService
     ) {
         this.feedMapper = feedMapper;
-        this.stringRedisTemplate = stringRedisTemplate;
+        this.cacheService = cacheService;
         this.objectMapper = objectMapper;
         this.followService = followService;
         this.interactionService = interactionService;
@@ -377,15 +376,7 @@ public class FeedServiceImpl implements FeedService {
      * @return 命中时返回缓存页，否则返回 null
      */
     private CachedFeedPage readCache(String cacheKey) {
-        try {
-            String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-            if (!StringUtils.hasText(cached)) {
-                return null;
-            }
-            return objectMapper.readValue(cached, CachedFeedPage.class);
-        } catch (Exception ex) {
-            return null;
-        }
+        return cacheService.getRedisJson(cacheKey, CachedFeedPage.class);
     }
 
     /**
@@ -395,15 +386,7 @@ public class FeedServiceImpl implements FeedService {
      * @param feedData Feed 结果
      */
     private void writeCache(String cacheKey, FeedData feedData) {
-        try {
-            CachedFeedPage cachedFeedPage = CachedFeedPage.from(feedData);
-            stringRedisTemplate.opsForValue().set(
-                    cacheKey,
-                    objectMapper.writeValueAsString(cachedFeedPage),
-                    PAGE_CACHE_TTL
-            );
-        } catch (JsonProcessingException ignored) {
-        }
+        cacheService.putRedisJson(cacheKey, CachedFeedPage.from(feedData), PAGE_CACHE_TTL);
     }
 
     /**
@@ -413,15 +396,7 @@ public class FeedServiceImpl implements FeedService {
      * @return 命中时返回页面结果，否则返回 null
      */
     private FeedData readLocalCache(String cacheKey) {
-        LocalCacheEntry localCacheEntry = localPageCache.get(cacheKey);
-        if (localCacheEntry == null) {
-            return null;
-        }
-        if (localCacheEntry.expireAtMillis() < System.currentTimeMillis()) {
-            localPageCache.remove(cacheKey);
-            return null;
-        }
-        return localCacheEntry.data();
+        return cacheService.getLocal(CacheRegions.FEED_HOME, cacheKey, FeedData.class);
     }
 
     /**
@@ -431,10 +406,7 @@ public class FeedServiceImpl implements FeedService {
      * @param feedData Feed 页面数据
      */
     private void writeLocalCache(String cacheKey, FeedData feedData) {
-        localPageCache.put(
-                cacheKey,
-                new LocalCacheEntry(feedData, System.currentTimeMillis() + LOCAL_CACHE_TTL_MILLIS)
-        );
+        cacheService.putLocal(CacheRegions.FEED_HOME, cacheKey, feedData, Duration.ofMillis(LOCAL_CACHE_TTL_MILLIS));
     }
 
     /**
@@ -640,15 +612,6 @@ public class FeedServiceImpl implements FeedService {
                     cacheLayer
             );
         }
-    }
-
-    /**
-     * 本地 L1 缓存条目。
-     */
-    private record LocalCacheEntry(
-            FeedData data,
-            long expireAtMillis
-    ) {
     }
 
     /**

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zhiguang.be.search.SearchMapper">
+
+    <resultMap id="SearchPostRowMap" type="com.zhiguang.be.search.SearchPostRow">
+        <constructor>
+            <arg column="post_id" javaType="java.lang.String"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="summary" javaType="java.lang.String"/>
+            <arg column="tags_json" javaType="java.lang.String"/>
+            <arg column="is_top" javaType="java.lang.Integer"/>
+            <arg column="publish_time" javaType="java.time.Instant"/>
+            <arg column="latitude" javaType="java.lang.Double"/>
+            <arg column="longitude" javaType="java.lang.Double"/>
+        </constructor>
+    </resultMap>
+
+    <select id="searchPosts" resultMap="SearchPostRowMap">
+        select cast(p.id as varchar) as post_id,
+               p.title,
+               p.description as summary,
+               p.tags as tags_json,
+               p.is_top,
+               p.publish_time,
+               p.latitude,
+               p.longitude
+          from know_posts p
+         where p.status = 'published'
+           and p.visible = 'public'
+           and (
+                lower(coalesce(p.title, '')) like #{keywordLike}
+                or lower(coalesce(p.description, '')) like #{keywordLike}
+                or lower(coalesce(p.tags, '')) like #{keywordLike}
+           )
+        <if test="tagLike != null and tagLike != ''">
+           and lower(coalesce(p.tags, '')) like #{tagLike}
+        </if>
+        <if test="afterIsTop != null and afterPublishTime != null and afterPostId != null">
+           and (
+                p.is_top &lt; #{afterIsTop}
+                or (
+                    p.is_top = #{afterIsTop}
+                    and (
+                        p.publish_time &lt; #{afterPublishTime}
+                        or (p.publish_time = #{afterPublishTime} and p.id &lt; #{afterPostId})
+                    )
+                )
+           )
+        </if>
+         order by p.is_top desc, p.publish_time desc, p.id desc
+         limit #{limit}
+        <if test="offset &gt; 0">
+         offset #{offset}
+        </if>
+    </select>
+
+    <select id="suggestTitles" resultType="string">
+        select p.title
+          from know_posts p
+         where p.status = 'published'
+           and p.visible = 'public'
+           and lower(coalesce(p.title, '')) like #{keywordLike}
+         order by p.is_top desc, p.publish_time desc, p.id desc
+         limit #{limit}
+    </select>
+</mapper>

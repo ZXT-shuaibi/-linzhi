@@ -13,8 +13,6 @@ import com.zhiguang.be.content.dto.PostCard;
 import com.zhiguang.be.content.dto.PostDetail;
 import com.zhiguang.be.content.dto.PostLocation;
 import com.zhiguang.be.content.dto.PostPageData;
-import com.zhiguang.be.content.dto.StoragePresignData;
-import com.zhiguang.be.content.dto.StoragePresignRequest;
 import com.zhiguang.be.content.dto.UpdatePostMetadataRequest;
 import com.zhiguang.be.content.mapper.KnowPostMapper;
 import com.zhiguang.be.content.model.KnowPostDetailRow;
@@ -23,6 +21,7 @@ import com.zhiguang.be.content.model.KnowPostFeedRow;
 import com.zhiguang.be.content.model.OutboxEventEntity;
 import com.zhiguang.be.content.model.PostSyncPayload;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
+import com.zhiguang.be.storage.StorageService;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.UserSocialCounterData;
@@ -31,21 +30,17 @@ import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * 内容模块核心服务。
@@ -78,11 +73,9 @@ public class ContentServiceImpl implements ContentService {
     private final FollowService followService;
     private final InteractionService interactionService;
     private final UserSocialCounterService userSocialCounterService;
+    private final StorageService storageService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final ObjectMapper objectMapper;
-    private final String mockUploadBaseUrl;
-    private final String publicBaseUrl;
-    private final long presignExpireSeconds;
 
     /**
      * 注入内容模块依赖。
@@ -93,22 +86,18 @@ public class ContentServiceImpl implements ContentService {
             FollowService followService,
             InteractionService interactionService,
             UserSocialCounterService userSocialCounterService,
+            StorageService storageService,
             SnowflakeIdGenerator snowflakeIdGenerator,
-            ObjectMapper objectMapper,
-            @Value("${storage.mock-upload-base-url:https://mock-oss.local/upload}") String mockUploadBaseUrl,
-            @Value("${storage.public-base-url:https://mock-oss.local/public}") String publicBaseUrl,
-            @Value("${storage.presign-expire-seconds:600}") long presignExpireSeconds
+            ObjectMapper objectMapper
     ) {
         this.knowPostMapper = knowPostMapper;
         this.lbsDiscoverService = lbsDiscoverService;
         this.followService = followService;
         this.interactionService = interactionService;
         this.userSocialCounterService = userSocialCounterService;
+        this.storageService = storageService;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.objectMapper = objectMapper;
-        this.mockUploadBaseUrl = mockUploadBaseUrl;
-        this.publicBaseUrl = publicBaseUrl;
-        this.presignExpireSeconds = presignExpireSeconds;
     }
 
     /**
@@ -195,23 +184,6 @@ public class ContentServiceImpl implements ContentService {
      * 创建预签名上传地址。
      * 当前阶段只区分正文与图片，封面统一走图片目录。
      */
-    public StoragePresignData createPresign(String creatorId, StoragePresignRequest request) {
-        KnowPostEntity entity = loadOwnedPost(request.postId(), creatorId);
-        assertMutable(entity);
-
-        Instant expireAt = Instant.now().plusSeconds(presignExpireSeconds);
-        String safeFilename = request.filename()
-                .replace("\\", "-")
-                .replace("/", "-")
-                .trim()
-                .replaceAll("[^a-zA-Z0-9._-]", "_");
-        String folder = "content".equals(request.purpose()) ? "content" : "images";
-        String objectKey = "posts/" + request.postId() + "/" + folder + "/"
-                + UUID.randomUUID().toString().replace("-", "") + "-" + safeFilename;
-        String uploadUrl = normalizeBaseUrl(mockUploadBaseUrl) + "/"
-                + URLEncoder.encode(objectKey, StandardCharsets.UTF_8);
-        return new StoragePresignData(uploadUrl, objectKey, expireAt);
-    }
 
     /**
      * 确认正文上传成功。
@@ -229,7 +201,7 @@ public class ContentServiceImpl implements ContentService {
                 postId,
                 creatorId,
                 nextStatus,
-                buildPublicUrl(request.objectKey()),
+                storageService.toPublicUrl(request.objectKey()),
                 request.objectKey(),
                 request.etag(),
                 request.size(),
@@ -268,7 +240,7 @@ public class ContentServiceImpl implements ContentService {
         if (request.imageUrls() != null) {
             List<String> normalizedImageUrls = new ArrayList<>();
             for (String rawImageUrl : request.imageUrls()) {
-                String normalizedImageUrl = normalizeOwnedImageUrl(postId, rawImageUrl);
+                String normalizedImageUrl = storageService.normalizeOwnedPostImageUrl(postId, rawImageUrl);
                 if (normalizedImageUrl != null && !normalizedImageUrls.contains(normalizedImageUrl)) {
                     normalizedImageUrls.add(normalizedImageUrl);
                 }
@@ -595,12 +567,24 @@ public class ContentServiceImpl implements ContentService {
             removeFromDiscoverStrict(postId);
             return;
         }
+        KnowPostDetailRow detailRow = knowPostMapper.findDetailById(postId);
+        if (detailRow == null || !STATUS_PUBLISHED.equals(detailRow.status())) {
+            removeFromDiscoverStrict(postId);
+            return;
+        }
+        List<String> imageUrls = parseStringList(detailRow.imgUrlsJson());
         lbsDiscoverService.addLocation(
                 postId,
                 DISCOVER_TYPE,
                 latitude,
                 longitude,
-                title,
+                detailRow.title(),
+                detailRow.description(),
+                imageUrls.isEmpty() ? null : imageUrls.get(0),
+                detailRow.creatorId(),
+                detailRow.authorNickname(),
+                detailRow.authorAvatar(),
+                detailRow.tagsJson(),
                 publishTime == null ? null : publishTime.toEpochMilli(),
                 0
         );
@@ -856,7 +840,7 @@ public class ContentServiceImpl implements ContentService {
      * 构建公开访问地址。
      */
     private String buildPublicUrl(String objectKey) {
-        return normalizeBaseUrl(publicBaseUrl) + "/" + objectKey;
+        return storageService.toPublicUrl(objectKey);
     }
 
     /**

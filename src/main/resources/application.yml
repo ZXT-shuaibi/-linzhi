@@ -44,6 +44,20 @@ storage:
   public-base-url: https://mock-oss.local/public
   presign-expire-seconds: 600
 
+cache:
+  local:
+    max-entries-per-region: 1024
+    cleanup-batch-size: 64
+
+llm:
+  provider: template
+  model-name: template-llm
+  fallback-to-template: true
+  http:
+    endpoint:
+    api-key:
+    timeout-seconds: 10
+
 social:
   counter:
     kafka:

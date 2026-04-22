@@ -1,30 +1,40 @@
 package com.zhiguang.be.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.llm.service.RagAnswerService;
 import com.zhiguang.be.rag.model.RagQueryRequest;
 import com.zhiguang.be.rag.model.SseChunk;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * RAG 问答服务。
- * 当前基础版通过内存索引做简化召回，再用模板化回答拼出 SSE 流。
+ * 当前基础版通过内存索引做简化召回，再交给 llm 模块组织回答内容。
  */
 @Service
 public class RagQueryService {
 
     private final RagIndexService ragIndexService;
+    private final RagAnswerService ragAnswerService;
     private final ObjectMapper objectMapper;
+    private final Executor ragQueryExecutor;
 
-    /**
-     * 注入 RAG 依赖。
-     */
-    public RagQueryService(RagIndexService ragIndexService, ObjectMapper objectMapper) {
+    public RagQueryService(
+            RagIndexService ragIndexService,
+            RagAnswerService ragAnswerService,
+            ObjectMapper objectMapper,
+            @Qualifier("ragQueryExecutor") Executor ragQueryExecutor
+    ) {
         this.ragIndexService = ragIndexService;
+        this.ragAnswerService = ragAnswerService;
         this.objectMapper = objectMapper;
+        this.ragQueryExecutor = ragQueryExecutor;
     }
 
     /**
@@ -32,18 +42,18 @@ public class RagQueryService {
      */
     public SseEmitter stream(RagQueryRequest request) {
         SseEmitter emitter = new SseEmitter(60_000L);
-        CompletableFuture.runAsync(() -> doStream(request, emitter));
+        CompletableFuture.runAsync(() -> doStream(request, emitter), ragQueryExecutor);
         return emitter;
     }
 
     /**
-     * 以后台异步方式输出 SSE 分片。
+     * 在后台异步输出 SSE 分片。
      */
     private void doStream(RagQueryRequest request, SseEmitter emitter) {
         try {
             int topK = request.topK() == null ? 5 : request.topK();
             RagIndexService.SearchResult searchResult = ragIndexService.search(request.question(), request.postId(), topK);
-            String answer = buildAnswer(request.question(), searchResult.hits());
+            String answer = ragAnswerService.buildAnswer(request.question(), toContexts(searchResult.hits()));
             List<com.zhiguang.be.rag.model.RagReference> references = searchResult.references();
 
             int seq = 1;
@@ -57,44 +67,28 @@ public class RagQueryService {
             try {
                 send(emitter, "error", new SseChunk("error", 1, "", List.of(), null, "RAG_INTERNAL_ERROR"));
             } catch (Exception ignored) {
-                // 这里不再向外抛，避免覆盖原始异常状态。
+                // 这里不再向外抛出，避免覆盖原始异常状态。
             }
             emitter.completeWithError(ex);
         }
     }
 
     /**
-     * 构造基础版回答。
+     * 将检索结果转换为回答上下文。
      */
-    private String buildAnswer(String question, List<RagIndexService.ChunkHit> hits) {
-        if (hits.isEmpty()) {
-            return "当前没有检索到和问题“" + question + "”直接相关的社区内容。"
-                    + "你可以换一个更具体的问法，或者先到邻里里发布相关内容后再来提问。";
+    private List<RagAnswerService.Context> toContexts(List<RagIndexService.ChunkHit> hits) {
+        List<RagAnswerService.Context> contexts = new ArrayList<RagAnswerService.Context>();
+        for (RagIndexService.ChunkHit hit : hits) {
+            contexts.add(new RagAnswerService.Context(hit.title(), hit.content()));
         }
-
-        StringBuilder answer = new StringBuilder();
-        answer.append("我先根据当前社区里已公开的内容做一个基础回答。\n");
-        answer.append("问题：").append(question).append("\n\n");
-        answer.append("结合已命中的帖子，可以先得到这些信息：\n");
-        int limit = Math.min(hits.size(), 3);
-        for (int i = 0; i < limit; i++) {
-            RagIndexService.ChunkHit hit = hits.get(i);
-            answer.append(i + 1)
-                    .append(". 来自《")
-                    .append(hit.title())
-                    .append("》：")
-                    .append(hit.content().replace('\n', ' ').trim())
-                    .append("\n");
-        }
-        answer.append("\n这版回答基于简化检索结果生成，后续接入真实向量检索和大模型后，回答会更自然也更完整。");
-        return answer.toString();
+        return contexts;
     }
 
     /**
      * 将回答切成多个小片段，便于 SSE 流式输出。
      */
     private List<String> splitAnswer(String answer, int chunkSize) {
-        List<String> parts = new java.util.ArrayList<>();
+        List<String> parts = new ArrayList<String>();
         int index = 0;
         while (index < answer.length()) {
             int end = Math.min(index + chunkSize, answer.length());

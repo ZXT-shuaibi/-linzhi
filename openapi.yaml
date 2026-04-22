@@ -923,6 +923,35 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /llm/posts/description:
+    post:
+      tags: [Llm]
+      summary: 根据正文生成帖子描述
+      operationId: generateKnowPostDescription
+      x-maturity: 宸插疄鐜?
+      x-source: 基于当前代码实现
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KnowPostDescriptionRequest'
+      responses:
+        '200':
+          description: 生成成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/KnowPostDescriptionData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /rag/queries/stream:
     post:
       tags: [Rag]
@@ -1788,17 +1817,19 @@ components:
           format: date-time
     PresignRequest:
       type: object
-      required: [postId, filename, contentType, purpose]
+      required: [scene, filename, contentType]
       properties:
+        scene:
+          type: string
+          enum: [knowpost_content, knowpost_image, profile_avatar]
         postId:
           type: string
         filename:
           type: string
         contentType:
           type: string
-        purpose:
+        ext:
           type: string
-          enum: [content, image]
     PresignData:
       type: object
       properties:
@@ -1807,9 +1838,16 @@ components:
           format: uri
         objectKey:
           type: string
+        publicUrl:
+          type: string
+          format: uri
         expireAt:
           type: string
           format: date-time
+        headers:
+          type: object
+          additionalProperties:
+            type: string
     ConfirmContentRequest:
       type: object
       required: [objectKey, etag, sha256, size]
@@ -2128,17 +2166,19 @@ components:
           format: date-time
     PresignRequest:
       type: object
-      required: [postId, filename, contentType, purpose]
+      required: [scene, filename, contentType]
       properties:
+        scene:
+          type: string
+          enum: [knowpost_content, knowpost_image, profile_avatar]
         postId:
           type: string
         filename:
           type: string
         contentType:
           type: string
-        purpose:
+        ext:
           type: string
-          enum: [content, cover, image]
     PresignData:
       type: object
       properties:
@@ -2147,9 +2187,16 @@ components:
           format: uri
         objectKey:
           type: string
+        publicUrl:
+          type: string
+          format: uri
         expireAt:
           type: string
           format: date-time
+        headers:
+          type: object
+          additionalProperties:
+            type: string
     ConfirmContentRequest:
       type: object
       required: [objectKey, etag, sha256, size]
@@ -2275,6 +2322,22 @@ components:
             $ref: '#/components/schemas/SearchResultItem'
         page:
           $ref: '#/components/schemas/CursorPageMeta'
+    CursorPageMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        hasMore:
+          type: boolean
+        nextAfter:
+          type: string
+          nullable: true
+        searchAfter:
+          type: array
+          items:
+            type: string
     SuggestItem:
       type: object
       properties:
@@ -2292,6 +2355,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SuggestItem'
+    KnowPostDescriptionRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          maxLength: 20000
+    KnowPostDescriptionData:
+      type: object
+      properties:
+        model:
+          type: string
+        description:
+          type: string
     RagQueryRequest:
       type: object
       required: [question]

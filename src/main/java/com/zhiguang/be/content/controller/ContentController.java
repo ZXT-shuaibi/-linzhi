@@ -7,8 +7,6 @@ import com.zhiguang.be.content.dto.ConfirmContentRequest;
 import com.zhiguang.be.content.dto.DraftData;
 import com.zhiguang.be.content.dto.PostDetail;
 import com.zhiguang.be.content.dto.PostPageData;
-import com.zhiguang.be.content.dto.StoragePresignData;
-import com.zhiguang.be.content.dto.StoragePresignRequest;
 import com.zhiguang.be.content.dto.UpdatePostMetadataRequest;
 import com.zhiguang.be.content.service.ContentServiceImpl;
 import jakarta.validation.Valid;
@@ -58,14 +56,6 @@ public class ContentController {
     /**
      * 申请对象存储预签名上传地址。
      */
-    @PostMapping("/storage/presign")
-    public ApiResponse<StoragePresignData> createPresign(
-            @Valid @RequestBody StoragePresignRequest request,
-            @AuthenticationPrincipal Jwt jwt
-    ) {
-        return ApiResponse.success(contentService.createPresign(requireUserId(jwt), request));
-    }
-
     /**
      * 确认正文上传成功。
      */

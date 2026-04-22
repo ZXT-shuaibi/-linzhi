@@ -20,6 +20,7 @@ import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
+import com.zhiguang.be.storage.StorageService;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +44,7 @@ public class ProfileServiceImpl implements ProfileService {
     private final FollowService followService;
     private final UserSocialCounterService userSocialCounterService;
     private final ContentService contentService;
+    private final StorageService storageService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -53,12 +55,14 @@ public class ProfileServiceImpl implements ProfileService {
             FollowService followService,
             UserSocialCounterService userSocialCounterService,
             ContentService contentService,
+            StorageService storageService,
             ObjectMapper objectMapper
     ) {
         this.profileMapper = profileMapper;
         this.followService = followService;
         this.userSocialCounterService = userSocialCounterService;
         this.contentService = contentService;
+        this.storageService = storageService;
         this.objectMapper = objectMapper;
     }
 
@@ -114,7 +118,7 @@ public class ProfileServiceImpl implements ProfileService {
         profileMapper.updateProfile(
                 currentUserId,
                 null,
-                normalizeNullableText(avatarUrl),
+                storageService.normalizeOwnedAvatarUrl(currentUserId, normalizeNullableText(avatarUrl)),
                 null,
                 null,
                 null,
