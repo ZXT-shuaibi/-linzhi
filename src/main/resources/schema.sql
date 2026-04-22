@@ -301,3 +301,99 @@ CREATE INDEX IF NOT EXISTS ix_like_favorite_target_action_status
 -- 便于按用户查询自己的互动记录。
 CREATE INDEX IF NOT EXISTS ix_like_favorite_user_status
     ON like_favorite(user_id, rel_status, updated_at);
+
+-- trade_activity：交易活动主表。
+-- 一期先承接秒杀/团购活动本身，库存最终以 MySQL 为准，Redis 做高并发预扣与热点视图。
+CREATE TABLE IF NOT EXISTS trade_activity (
+    -- 活动唯一 ID，业务层使用雪花算法生成。
+    id BIGINT PRIMARY KEY,
+    -- 活动标题。
+    title VARCHAR(128) NOT NULL,
+    -- 活动描述。
+    description VARCHAR(255),
+    -- 封面图地址。
+    cover VARCHAR(512),
+    -- 原价。
+    original_price DECIMAL(10, 2) NOT NULL,
+    -- 秒杀/团购价。
+    seckill_price DECIMAL(10, 2) NOT NULL,
+    -- 总库存。
+    total_stock INT NOT NULL,
+    -- 当前可用库存。
+    available_stock INT NOT NULL,
+    -- 单用户限购数。
+    per_user_limit INT NOT NULL DEFAULT 1,
+    -- 活动状态，published/disabled。
+    status VARCHAR(16) NOT NULL DEFAULT 'published',
+    -- 活动开始时间。
+    begin_time TIMESTAMP NOT NULL,
+    -- 活动结束时间。
+    end_time TIMESTAMP NOT NULL,
+    -- 订单支付超时时间，单位分钟。
+    pay_timeout_minutes INT NOT NULL DEFAULT 15,
+    -- 乐观锁版本号。
+    version BIGINT NOT NULL DEFAULT 0,
+    -- 创建时间。
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- 更新时间。
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 查询公开活动列表。
+CREATE INDEX IF NOT EXISTS ix_trade_activity_status_begin_end
+    ON trade_activity(status, begin_time, end_time);
+-- 扫描活动结束情况与库存。
+CREATE INDEX IF NOT EXISTS ix_trade_activity_end_stock
+    ON trade_activity(end_time, available_stock);
+
+-- trade_order：交易订单表。
+-- 当前一期只实现未支付、已支付、已关闭三种状态。
+CREATE TABLE IF NOT EXISTS trade_order (
+    -- 订单唯一 ID，业务层使用雪花算法生成。
+    id BIGINT PRIMARY KEY,
+    -- 对外展示订单号。
+    order_no VARCHAR(64) NOT NULL,
+    -- 关联活动 ID。
+    activity_id BIGINT NOT NULL,
+    -- 买家用户 ID。
+    buyer_id BIGINT NOT NULL,
+    -- 下单数量，一期固定支持 1，也为后续扩展保留。
+    quantity INT NOT NULL DEFAULT 1,
+    -- 下单金额。
+    amount DECIMAL(10, 2) NOT NULL,
+    -- 订单状态，PENDING_PAYMENT/PAID/CLOSED。
+    status VARCHAR(32) NOT NULL,
+    -- 模拟支付渠道。
+    pay_channel VARCHAR(32),
+    -- 下单时间。
+    order_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- 订单超时时间。
+    expire_at TIMESTAMP NOT NULL,
+    -- 支付完成时间。
+    pay_time TIMESTAMP,
+    -- 关闭时间。
+    close_time TIMESTAMP,
+    -- 关闭原因。
+    close_reason VARCHAR(64),
+    -- 乐观锁版本号。
+    version BIGINT NOT NULL DEFAULT 0,
+    -- 创建时间。
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- 更新时间。
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_trade_order_activity FOREIGN KEY (activity_id) REFERENCES trade_activity(id),
+    CONSTRAINT fk_trade_order_buyer FOREIGN KEY (buyer_id) REFERENCES users(id)
+);
+
+-- 订单号唯一。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_trade_order_order_no
+    ON trade_order(order_no);
+-- 查询用户订单列表。
+CREATE INDEX IF NOT EXISTS ix_trade_order_buyer_status_time
+    ON trade_order(buyer_id, status, order_time);
+-- 扫描过期未支付订单。
+CREATE INDEX IF NOT EXISTS ix_trade_order_status_expire
+    ON trade_order(status, expire_at);
+-- 防止同活动下用户存在多笔活跃订单。
+CREATE INDEX IF NOT EXISTS ix_trade_order_activity_buyer_status
+    ON trade_order(activity_id, buyer_id, status);

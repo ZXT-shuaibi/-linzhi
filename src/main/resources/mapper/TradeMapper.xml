@@ -1,0 +1,352 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zhiguang.be.trade.mapper.TradeMapper">
+
+    <select id="findActivityById" resultType="map">
+        SELECT id AS activityId,
+               title,
+               description,
+               cover,
+               original_price AS originalPrice,
+               seckill_price AS seckillPrice,
+               total_stock AS totalStock,
+               available_stock AS availableStock,
+               per_user_limit AS perUserLimit,
+               status,
+               begin_time AS beginTime,
+               end_time AS endTime,
+               pay_timeout_minutes AS payTimeoutMinutes,
+               version
+        FROM trade_activity
+        WHERE id = #{activityId}
+    </select>
+
+    <select id="listPublicActivities" resultType="map">
+        SELECT id AS activityId,
+               title,
+               description,
+               cover,
+               original_price AS originalPrice,
+               seckill_price AS seckillPrice,
+               total_stock AS totalStock,
+               available_stock AS availableStock,
+               per_user_limit AS perUserLimit,
+               status,
+               begin_time AS beginTime,
+               end_time AS endTime,
+               pay_timeout_minutes AS payTimeoutMinutes,
+               version
+        FROM trade_activity
+        WHERE status = 'published'
+          AND end_time > #{now}
+        ORDER BY CASE
+                     WHEN begin_time &lt;= #{now} AND end_time &gt; #{now} THEN 0
+                     ELSE 1
+                 END,
+                 begin_time ASC,
+                 id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countPublicActivities" resultType="long">
+        SELECT COUNT(1)
+        FROM trade_activity
+        WHERE status = 'published'
+          AND end_time > #{now}
+    </select>
+
+    <insert id="insertActivity">
+        INSERT INTO trade_activity (
+            id,
+            title,
+            description,
+            cover,
+            original_price,
+            seckill_price,
+            total_stock,
+            available_stock,
+            per_user_limit,
+            status,
+            begin_time,
+            end_time,
+            pay_timeout_minutes,
+            version,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            #{id},
+            #{title},
+            #{description},
+            #{cover},
+            #{originalPrice},
+            #{seckillPrice},
+            #{totalStock},
+            #{totalStock},
+            #{perUserLimit},
+            'published',
+            #{beginTime},
+            #{endTime},
+            #{payTimeoutMinutes},
+            0,
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        )
+    </insert>
+
+    <select id="findOrderByOrderNo" resultType="map">
+        SELECT o.id AS orderId,
+               o.order_no AS orderNo,
+               o.activity_id AS activityId,
+               o.buyer_id AS buyerId,
+               o.quantity,
+               o.amount,
+               o.status,
+               o.pay_channel AS payChannel,
+               o.order_time AS orderTime,
+               o.expire_at AS expireAt,
+               o.pay_time AS payTime,
+               o.close_time AS closeTime,
+               o.close_reason AS closeReason,
+               a.title AS activityTitle,
+               a.cover AS activityCover
+        FROM trade_order o
+        INNER JOIN trade_activity a ON a.id = o.activity_id
+        WHERE o.order_no = #{orderNo}
+    </select>
+
+    <select id="findOrderByOrderNoAndBuyer" resultType="map">
+        SELECT o.id AS orderId,
+               o.order_no AS orderNo,
+               o.activity_id AS activityId,
+               o.buyer_id AS buyerId,
+               o.quantity,
+               o.amount,
+               o.status,
+               o.pay_channel AS payChannel,
+               o.order_time AS orderTime,
+               o.expire_at AS expireAt,
+               o.pay_time AS payTime,
+               o.close_time AS closeTime,
+               o.close_reason AS closeReason,
+               a.title AS activityTitle,
+               a.cover AS activityCover
+        FROM trade_order o
+        INNER JOIN trade_activity a ON a.id = o.activity_id
+        WHERE o.order_no = #{orderNo}
+          AND o.buyer_id = #{buyerId}
+    </select>
+
+    <select id="listOrdersByBuyer" resultType="map">
+        SELECT o.id AS orderId,
+               o.order_no AS orderNo,
+               o.activity_id AS activityId,
+               o.buyer_id AS buyerId,
+               o.quantity,
+               o.amount,
+               o.status,
+               o.pay_channel AS payChannel,
+               o.order_time AS orderTime,
+               o.expire_at AS expireAt,
+               o.pay_time AS payTime,
+               o.close_time AS closeTime,
+               o.close_reason AS closeReason,
+               a.title AS activityTitle,
+               a.cover AS activityCover
+        FROM trade_order o
+        INNER JOIN trade_activity a ON a.id = o.activity_id
+        WHERE o.buyer_id = #{buyerId}
+        ORDER BY o.order_time DESC, o.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countOrdersByBuyer" resultType="long">
+        SELECT COUNT(1)
+        FROM trade_order
+        WHERE buyer_id = #{buyerId}
+    </select>
+
+    <select id="sumActiveOrderQuantity" resultType="int">
+        SELECT COALESCE(SUM(quantity), 0)
+        FROM trade_order
+        WHERE activity_id = #{activityId}
+          AND buyer_id = #{buyerId}
+          AND status IN ('PENDING_PAYMENT', 'PAID')
+    </select>
+
+    <update id="decreaseActivityStock">
+        UPDATE trade_activity
+        SET available_stock = available_stock - #{quantity},
+            version = version + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{activityId}
+          AND available_stock >= #{quantity}
+          AND version = #{version}
+    </update>
+
+    <update id="increaseActivityStock">
+        UPDATE trade_activity
+        SET available_stock = available_stock + #{quantity},
+            version = version + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{activityId}
+          AND version = #{version}
+    </update>
+
+    <insert id="insertOrder">
+        INSERT INTO trade_order (
+            id,
+            order_no,
+            activity_id,
+            buyer_id,
+            quantity,
+            amount,
+            status,
+            order_time,
+            expire_at,
+            version,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            #{id},
+            #{orderNo},
+            #{activityId},
+            #{buyerId},
+            #{quantity},
+            #{amount},
+            #{status},
+            #{orderTime},
+            #{expireAt},
+            0,
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        )
+    </insert>
+
+    <update id="markOrderPaid">
+        UPDATE trade_order
+        SET status = 'PAID',
+            pay_channel = #{payChannel},
+            pay_time = #{now},
+            updated_at = #{now},
+            version = version + 1
+        WHERE order_no = #{orderNo}
+          AND buyer_id = #{buyerId}
+          AND status = 'PENDING_PAYMENT'
+          AND expire_at &gt; #{now}
+    </update>
+
+    <update id="closeExpiredOrder">
+        UPDATE trade_order
+        SET status = 'CLOSED',
+            close_time = #{now},
+            close_reason = #{closeReason},
+            updated_at = #{now},
+            version = version + 1
+        WHERE id = #{orderId}
+          AND status = 'PENDING_PAYMENT'
+          AND expire_at &lt;= #{now}
+    </update>
+
+    <select id="listExpiredPendingOrders" resultType="map">
+        SELECT o.id AS orderId,
+               o.order_no AS orderNo,
+               o.activity_id AS activityId,
+               o.buyer_id AS buyerId,
+               o.quantity,
+               o.amount,
+               o.status,
+               o.pay_channel AS payChannel,
+               o.order_time AS orderTime,
+               o.expire_at AS expireAt,
+               o.pay_time AS payTime,
+               o.close_time AS closeTime,
+               o.close_reason AS closeReason,
+               a.title AS activityTitle,
+               a.cover AS activityCover
+        FROM trade_order o
+        INNER JOIN trade_activity a ON a.id = o.activity_id
+        WHERE o.status = 'PENDING_PAYMENT'
+          AND o.expire_at &lt;= #{now}
+        ORDER BY o.expire_at ASC, o.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listExpiredPendingOrdersByBuyer" resultType="map">
+        SELECT o.id AS orderId,
+               o.order_no AS orderNo,
+               o.activity_id AS activityId,
+               o.buyer_id AS buyerId,
+               o.quantity,
+               o.amount,
+               o.status,
+               o.pay_channel AS payChannel,
+               o.order_time AS orderTime,
+               o.expire_at AS expireAt,
+               o.pay_time AS payTime,
+               o.close_time AS closeTime,
+               o.close_reason AS closeReason,
+               a.title AS activityTitle,
+               a.cover AS activityCover
+        FROM trade_order o
+        INNER JOIN trade_activity a ON a.id = o.activity_id
+        WHERE o.buyer_id = #{buyerId}
+          AND o.status = 'PENDING_PAYMENT'
+          AND o.expire_at &lt;= #{now}
+        ORDER BY o.expire_at ASC, o.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <insert id="insertOutboxEvent">
+        INSERT INTO outbox (
+            id,
+            aggregate_type,
+            aggregate_id,
+            event_type,
+            payload,
+            status,
+            retry_count,
+            created_at
+        )
+        VALUES (
+            #{id},
+            #{aggregateType},
+            #{aggregateId},
+            #{eventType},
+            #{payload},
+            'pending',
+            0,
+            CURRENT_TIMESTAMP
+        )
+    </insert>
+
+    <select id="listPendingTradeOutbox" resultType="map">
+        SELECT id,
+               aggregate_id AS aggregateId,
+               payload
+        FROM outbox
+        WHERE aggregate_type = 'trade_order'
+          AND event_type = 'trade_redis_sync'
+          AND status IN ('pending', 'failed')
+          AND retry_count &lt; 10
+        ORDER BY created_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="markOutboxPublished">
+        UPDATE outbox
+        SET status = 'published',
+            published_at = CURRENT_TIMESTAMP,
+            last_error = NULL
+        WHERE id = #{id}
+    </update>
+
+    <update id="markOutboxFailed">
+        UPDATE outbox
+        SET status = 'failed',
+            retry_count = retry_count + 1,
+            last_error = #{lastError}
+        WHERE id = #{id}
+    </update>
+</mapper>

@@ -1340,25 +1340,106 @@ paths:
           $ref: '#/components/responses/UnauthorizedError'
         '429':
           $ref: '#/components/responses/TooManyRequestsError'
-  /trade/seckill/requests:
+  /trade/activities:
+    get:
+      tags: [Trade]
+      summary: 查询交易活动列表
+      operationId: listTradeActivities
+      x-maturity: 已实现
+      x-source: 当前代码
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TradeActivityListData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
     post:
       tags: [Trade]
-      summary: 秒杀预检并受理请求
-      operationId: createSeckillRequest
-      x-maturity: 规划中
-      x-source: 基于需求推导
-      parameters:
-        - name: X-Idempotency-Key
-          in: header
-          required: true
-          schema:
-            type: string
+      summary: 创建交易活动
+      operationId: createTradeActivity
+      x-maturity: 已实现（基础版）
+      x-source: 当前代码
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SeckillRequest'
+              $ref: '#/components/schemas/TradeCreateActivityRequest'
+      responses:
+        '200':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TradeActivityData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+  /trade/activities/{activityId}:
+    get:
+      tags: [Trade]
+      summary: 查询交易活动详情
+      operationId: getTradeActivity
+      x-maturity: 已实现
+      x-source: 当前代码
+      security: []
+      parameters:
+        - name: activityId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TradeActivityData'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /trade/activities/{activityId}/orders:
+    post:
+      tags: [Trade]
+      summary: 预扣库存并受理下单
+      operationId: placeTradeOrder
+      x-maturity: 已实现（基础版）
+      x-source: 当前代码
+      parameters:
+        - name: activityId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
       responses:
         '200':
           description: 受理成功
@@ -1370,24 +1451,23 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/SeckillAcceptedData'
-        '400':
-          $ref: '#/components/responses/ValidationError'
+                        $ref: '#/components/schemas/TradeSubmitData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '409':
           $ref: '#/components/responses/ConflictError'
         '429':
           $ref: '#/components/responses/TooManyRequestsError'
-  /trade/seckill/requests/{requestId}:
+  /trade/orders/me:
     get:
       tags: [Trade]
-      summary: 查询秒杀受理状态
-      operationId: getSeckillRequestStatus
-      x-maturity: 规划中
-      x-source: 基于需求推导
+      summary: 查询当前用户订单列表
+      operationId: listMyTradeOrders
+      x-maturity: 已实现
+      x-source: 当前代码
       parameters:
-        - $ref: '#/components/parameters/RequestIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
       responses:
         '200':
           description: 查询成功
@@ -1399,20 +1479,22 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/SeckillStatusData'
+                        $ref: '#/components/schemas/TradeOrderPageData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-  /trade/orders/{orderId}:
+  /trade/orders/{orderNo}:
     get:
       tags: [Trade]
-      summary: 查询订单详情
-      operationId: getOrderDetail
-      x-maturity: 规划中
-      x-source: 基于需求推导
+      summary: 查询当前用户订单详情
+      operationId: getMyTradeOrder
+      x-maturity: 已实现
+      x-source: 当前代码
       parameters:
-        - $ref: '#/components/parameters/OrderIdParam'
+        - name: orderNo
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         '200':
           description: 查询成功
@@ -1424,23 +1506,62 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/OrderDetail'
+                        $ref: '#/components/schemas/TradeOrderData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           $ref: '#/components/responses/NotFoundError'
-  /trade/orders/{orderId}/cancel:
+  /trade/orders/{orderNo}/status:
+    get:
+      tags: [Trade]
+      summary: 查询当前用户订单受理状态
+      operationId: getMyTradeOrderStatus
+      x-maturity: 已实现
+      x-source: 当前代码
+      parameters:
+        - name: orderNo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TradeOrderStatusData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /trade/orders/{orderNo}/pay:
     post:
       tags: [Trade]
-      summary: 主动取消订单
-      operationId: cancelOrder
-      x-maturity: 规划中
-      x-source: 基于需求推导
+      summary: 模拟支付订单
+      operationId: payTradeOrder
+      x-maturity: 已实现（基础版）
+      x-source: 当前代码
       parameters:
-        - $ref: '#/components/parameters/OrderIdParam'
+        - name: orderNo
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TradePayRequest'
       responses:
         '200':
-          description: 取消成功
+          description: 支付成功
           content:
             application/json:
               schema:
@@ -1449,7 +1570,7 @@ paths:
                   - type: object
                     properties:
                       data:
-                        $ref: '#/components/schemas/ActionResult'
+                        $ref: '#/components/schemas/TradeOrderData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '404':
@@ -2452,66 +2573,182 @@ components:
         cacheLayer:
           type: string
           enum: [L1, L2, L3, DB]
-    SeckillRequest:
+    TradeCreateActivityRequest:
       type: object
-      required: [activityId, productId, quantity]
+      required: [title, originalPrice, seckillPrice, totalStock, perUserLimit, beginTime, endTime, payTimeoutMinutes]
       properties:
-        activityId:
+        title:
           type: string
-        productId:
+        description:
           type: string
-        quantity:
+          nullable: true
+        cover:
+          type: string
+          format: uri
+          nullable: true
+        originalPrice:
+          type: number
+          format: double
+        seckillPrice:
+          type: number
+          format: double
+        totalStock:
           type: integer
           minimum: 1
-        skuAttrs:
-          type: object
-          additionalProperties:
-            type: string
-    SeckillAcceptedData:
-      type: object
-      properties:
-        requestId:
-          type: string
-        accepted:
-          type: boolean
-        queueStatus:
-          type: string
-          enum: [accepted, queued]
-        acceptedAt:
+        perUserLimit:
+          type: integer
+          minimum: 1
+        beginTime:
           type: string
           format: date-time
-    SeckillStatusData:
+        endTime:
+          type: string
+          format: date-time
+        payTimeoutMinutes:
+          type: integer
+          minimum: 1
+    TradeActivityData:
       type: object
       properties:
-        requestId:
+        activityId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        cover:
+          type: string
+          format: uri
+          nullable: true
+        originalPrice:
+          type: number
+          format: double
+        seckillPrice:
+          type: number
+          format: double
+        totalStock:
+          type: integer
+        availableStock:
+          type: integer
+        perUserLimit:
+          type: integer
+        status:
+          type: string
+        beginTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        payTimeoutMinutes:
+          type: integer
+        active:
+          type: boolean
+    TradeActivityListData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TradeActivityData'
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+          format: int64
+        hasMore:
+          type: boolean
+    TradeSubmitData:
+      type: object
+      properties:
+        orderNo:
           type: string
         status:
           type: string
-          enum: [accepted, queued, ordering, ordered, failed, expired]
-        orderId:
+        submittedAt:
           type: string
-        failureReason:
+          format: date-time
+        message:
           type: string
-    OrderDetail:
+    TradePayRequest:
+      type: object
+      required: [payChannel]
+      properties:
+        payChannel:
+          type: string
+    TradeOrderData:
       type: object
       properties:
-        orderId:
+        orderNo:
           type: string
         activityId:
           type: string
-        productId:
+        activityTitle:
           type: string
-        status:
+        activityCover:
           type: string
-          enum: [INIT, PENDING_PAY, PAID, CLOSED, CANCELLED]
+          format: uri
+          nullable: true
         amount:
           type: number
           format: double
+        quantity:
+          type: integer
+        status:
+          type: string
+          enum: [PENDING_PAYMENT, PAID, CLOSED]
+        payChannel:
+          type: string
+          nullable: true
+        orderTime:
+          type: string
+          format: date-time
         expireAt:
           type: string
           format: date-time
-        version:
+        payTime:
+          type: string
+          format: date-time
+          nullable: true
+        closeTime:
+          type: string
+          format: date-time
+          nullable: true
+        closeReason:
+          type: string
+          nullable: true
+    TradeOrderPageData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TradeOrderData'
+        page:
           type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+          format: int64
+        hasMore:
+          type: boolean
+    TradeOrderStatusData:
+      type: object
+      properties:
+        orderNo:
+          type: string
+        status:
+          type: string
+          enum: [ACCEPTED, FAILED, PENDING_PAYMENT, PAID, CLOSED]
+        message:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
     RateLimitScene:
       type: object
       properties:

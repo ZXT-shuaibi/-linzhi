@@ -58,6 +58,21 @@ social:
   rebuild:
     enabled: false
 
+trade:
+  kafka:
+    enabled: false
+  order:
+    pay-timeout-minutes: 15
+    close-scan-delay-ms: 60000
+    close-batch-size: 100
+    redis-reconcile-delay-ms: 10000
+    status-ttl-hours: 48
+  cache:
+    activity-ttl-seconds: 300
+    null-ttl-seconds: 60
+    rebuild-lock-seconds: 5
+    jitter-seconds: 120
+
 security:
   user-store: jdbc
   refresh-store: redis
