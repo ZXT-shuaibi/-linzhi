@@ -4,7 +4,9 @@ import com.zhiguang.be.common.api.ApiResponse;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.content.dto.PostPageData;
+import com.zhiguang.be.profile.model.ProfileAvatarRequest;
 import com.zhiguang.be.profile.model.ProfileData;
+import com.zhiguang.be.profile.model.ProfileListData;
 import com.zhiguang.be.profile.model.ProfilePatchRequest;
 import com.zhiguang.be.profile.service.ProfileService;
 import jakarta.validation.Valid;
@@ -16,6 +18,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -59,6 +62,17 @@ public class ProfileController {
     }
 
     /**
+     * 单独更新当前登录用户头像。
+     */
+    @PostMapping("/avatar")
+    public ApiResponse<ProfileData> updateAvatar(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody ProfileAvatarRequest request
+    ) {
+        return ApiResponse.success(profileService.updateAvatar(requireUserId(jwt), request.avatarUrl()));
+    }
+
+    /**
      * 查询指定用户主页资料。
      * 支持匿名访问；若携带合法 access token，会补充关系态与 self 信息。
      */
@@ -81,6 +95,32 @@ public class ProfileController {
             @AuthenticationPrincipal Jwt jwt
     ) {
         return ApiResponse.success(profileService.getPublishedPosts(optionalUserId(jwt), userId, page, size));
+    }
+
+    /**
+     * 查询指定用户的关注列表资料视图。
+     */
+    @GetMapping("/users/{userId}/following")
+    public ApiResponse<ProfileListData> getFollowingProfiles(
+            @PathVariable @Min(1) long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return ApiResponse.success(profileService.getFollowingProfiles(optionalUserId(jwt), userId, page, size));
+    }
+
+    /**
+     * 查询指定用户的粉丝列表资料视图。
+     */
+    @GetMapping("/users/{userId}/followers")
+    public ApiResponse<ProfileListData> getFollowerProfiles(
+            @PathVariable @Min(1) long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return ApiResponse.success(profileService.getFollowerProfiles(optionalUserId(jwt), userId, page, size));
     }
 
     /**

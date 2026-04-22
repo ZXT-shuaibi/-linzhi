@@ -2,6 +2,7 @@ package com.zhiguang.be.profile.service;
 
 import com.zhiguang.be.content.dto.PostPageData;
 import com.zhiguang.be.profile.model.ProfileData;
+import com.zhiguang.be.profile.model.ProfileListData;
 import com.zhiguang.be.profile.model.ProfilePatchRequest;
 
 /**
@@ -35,6 +36,37 @@ public interface ProfileService {
      * @return 更新后的个人资料
      */
     ProfileData updateProfile(long currentUserId, ProfilePatchRequest request);
+
+    /**
+     * 单独更新当前用户头像。
+     *
+     * @param currentUserId 当前登录用户 ID
+     * @param avatarUrl 新头像地址
+     * @return 更新后的个人资料
+     */
+    ProfileData updateAvatar(long currentUserId, String avatarUrl);
+
+    /**
+     * 查询指定用户的关注列表资料视图。
+     *
+     * @param viewerUserId 当前查看者 ID，匿名时可传 0
+     * @param targetUserId 目标用户 ID
+     * @param page 页码
+     * @param size 每页大小
+     * @return 关注列表
+     */
+    ProfileListData getFollowingProfiles(long viewerUserId, long targetUserId, int page, int size);
+
+    /**
+     * 查询指定用户的粉丝列表资料视图。
+     *
+     * @param viewerUserId 当前查看者 ID，匿名时可传 0
+     * @param targetUserId 目标用户 ID
+     * @param page 页码
+     * @param size 每页大小
+     * @return 粉丝列表
+     */
+    ProfileListData getFollowerProfiles(long viewerUserId, long targetUserId, int page, int size);
 
     /**
      * 查询指定用户主页可见的发布内容。

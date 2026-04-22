@@ -327,6 +327,35 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /profile/avatar:
+    post:
+      tags: [Profile]
+      summary: 单独更新当前登录用户头像
+      operationId: updateProfileAvatar
+      x-maturity: 已实现
+      x-source: 当前代码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileAvatarRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileData'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /profile/users/{userId}:
     get:
       tags: [Profile]
@@ -375,6 +404,58 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/PostPageData'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /profile/users/{userId}/following:
+    get:
+      tags: [Profile]
+      summary: 查询指定用户的关注列表资料视图
+      operationId: getProfileFollowing
+      security: []
+      x-maturity: 已实现
+      x-source: 当前代码
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileListData'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /profile/users/{userId}/followers:
+    get:
+      tags: [Profile]
+      summary: 查询指定用户的粉丝列表资料视图
+      operationId: getProfileFollowers
+      security: []
+      x-maturity: 已实现
+      x-source: 当前代码
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProfileListData'
         '404':
           $ref: '#/components/responses/NotFoundError'
   /discover/nearby:
@@ -871,6 +952,32 @@ paths:
           $ref: '#/components/responses/TooManyRequestsError'
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
+  /rag/posts/{postId}/reindex:
+    post:
+      tags: [Rag]
+      summary: 手动触发单篇帖子索引重建
+      operationId: reindexRagPost
+      x-maturity: 已实现
+      x-source: 当前代码
+      parameters:
+        - $ref: '#/components/parameters/PostIdParam'
+      responses:
+        '200':
+          description: 重建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: integer
+                        description: 本次重建出的分片数量
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
   /interactions/targets/{targetType}/{targetId}/like:
     post:
       tags: [Interactions]
@@ -2189,10 +2296,6 @@ components:
           type: string
           minLength: 1
           maxLength: 64
-        avatar:
-          type: string
-          maxLength: 512
-          nullable: true
         bio:
           type: string
           maxLength: 512
@@ -2215,6 +2318,13 @@ components:
           items:
             type: string
             maxLength: 32
+    ProfileAvatarRequest:
+      type: object
+      required: [avatarUrl]
+      properties:
+        avatarUrl:
+          type: string
+          maxLength: 512
     ProfileData:
       type: object
       properties:
@@ -2255,6 +2365,39 @@ components:
           $ref: '#/components/schemas/RelationStatusData'
         self:
           type: boolean
+    ProfileListItem:
+      type: object
+      properties:
+        userId:
+          type: string
+        nickname:
+          type: string
+        avatar:
+          type: string
+          format: uri
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        socialCounters:
+          $ref: '#/components/schemas/UserSocialCounterData'
+        relationStatus:
+          $ref: '#/components/schemas/RelationStatusData'
+        followedAt:
+          type: string
+          format: date-time
+          nullable: true
+        self:
+          type: boolean
+    ProfileListData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProfileListItem'
+        page:
+          $ref: '#/components/schemas/PageMeta'
     FeedItem:
       type: object
       properties:

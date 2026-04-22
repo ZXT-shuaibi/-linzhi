@@ -15,9 +15,6 @@ public record ProfilePatchRequest(
         @Size(min = 1, max = 64, message = "昵称长度需在 1-64 之间")
         String nickname,
 
-        @Size(max = 512, message = "头像地址长度不能超过 512")
-        String avatar,
-
         @Size(max = 512, message = "个人简介长度不能超过 512")
         String bio,
 

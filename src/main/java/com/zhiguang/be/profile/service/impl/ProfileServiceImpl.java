@@ -9,9 +9,13 @@ import com.zhiguang.be.content.dto.PostPageData;
 import com.zhiguang.be.content.service.ContentService;
 import com.zhiguang.be.profile.mapper.ProfileMapper;
 import com.zhiguang.be.profile.model.ProfileData;
+import com.zhiguang.be.profile.model.ProfileListData;
+import com.zhiguang.be.profile.model.ProfileListItem;
 import com.zhiguang.be.profile.model.ProfilePatchRequest;
 import com.zhiguang.be.profile.model.ProfileUserRow;
 import com.zhiguang.be.profile.service.ProfileService;
+import com.zhiguang.be.social.FollowListData;
+import com.zhiguang.be.social.FollowUserItem;
 import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.service.FollowService;
@@ -21,7 +25,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 个人模块服务实现。
@@ -80,7 +86,7 @@ public class ProfileServiceImpl implements ProfileService {
     @Override
     @Transactional
     public ProfileData updateProfile(long currentUserId, ProfilePatchRequest request) {
-        ProfileUserRow current = requireUser(currentUserId);
+        requireUser(currentUserId);
         if (!hasAnyUpdateField(request)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "未提交任何更新字段");
         }
@@ -88,7 +94,7 @@ public class ProfileServiceImpl implements ProfileService {
         profileMapper.updateProfile(
                 currentUserId,
                 normalizeNullableText(request.nickname()),
-                normalizeNullableText(request.avatar()),
+                null,
                 normalizeNullableText(request.bio()),
                 normalizeGender(request.gender()),
                 request.birthday(),
@@ -96,6 +102,48 @@ public class ProfileServiceImpl implements ProfileService {
                 request.tags() == null ? null : toJson(normalizeTags(request.tags()))
         );
         return buildProfileData(currentUserId, currentUserId);
+    }
+
+    /**
+     * 单独更新当前用户头像。
+     */
+    @Override
+    @Transactional
+    public ProfileData updateAvatar(long currentUserId, String avatarUrl) {
+        requireUser(currentUserId);
+        profileMapper.updateProfile(
+                currentUserId,
+                null,
+                normalizeNullableText(avatarUrl),
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+        return buildProfileData(currentUserId, currentUserId);
+    }
+
+    /**
+     * 查询指定用户的关注列表资料视图。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ProfileListData getFollowingProfiles(long viewerUserId, long targetUserId, int page, int size) {
+        requireUser(targetUserId);
+        FollowListData followListData = followService.following(targetUserId, page, size);
+        return toProfileListData(viewerUserId, followListData);
+    }
+
+    /**
+     * 查询指定用户的粉丝列表资料视图。
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ProfileListData getFollowerProfiles(long viewerUserId, long targetUserId, int page, int size) {
+        requireUser(targetUserId);
+        FollowListData followListData = followService.followers(targetUserId, page, size);
+        return toProfileListData(viewerUserId, followListData);
     }
 
     /**
@@ -114,6 +162,14 @@ public class ProfileServiceImpl implements ProfileService {
      */
     private ProfileData buildProfileData(long viewerUserId, long targetUserId) {
         ProfileUserRow row = requireUser(targetUserId);
+        return buildProfileData(viewerUserId, row);
+    }
+
+    /**
+     * 基于已读取的用户行对象构建个人资料结果。
+     */
+    private ProfileData buildProfileData(long viewerUserId, ProfileUserRow row) {
+        long targetUserId = row.userId();
         boolean self = viewerUserId > 0L && viewerUserId == targetUserId;
         UserSocialCounterData socialCounters = userSocialCounterService.getUserSocialCounter(targetUserId);
         RelationStatusData relationStatus = followService.relationStatus(viewerUserId, targetUserId);
@@ -121,6 +177,7 @@ public class ProfileServiceImpl implements ProfileService {
                 String.valueOf(row.userId()),
                 self ? row.phone() : null,
                 self ? row.account() : null,
+                self ? row.email() : null,
                 row.nickname(),
                 row.avatar(),
                 row.bio(),
@@ -150,7 +207,6 @@ public class ProfileServiceImpl implements ProfileService {
      */
     private boolean hasAnyUpdateField(ProfilePatchRequest request) {
         return request.nickname() != null
-                || request.avatar() != null
                 || request.bio() != null
                 || request.gender() != null
                 || request.birthday() != null
@@ -219,5 +275,43 @@ public class ProfileServiceImpl implements ProfileService {
         } catch (JsonProcessingException ex) {
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "标签序列化失败");
         }
+    }
+
+    /**
+     * 将社交模块关注列表转换成 profile 模块的资料卡片列表。
+     */
+    private ProfileListData toProfileListData(long viewerUserId, FollowListData followListData) {
+        List<Long> userIds = new ArrayList<>();
+        for (FollowUserItem item : followListData.getItems()) {
+            userIds.add(Long.parseLong(item.getUserId()));
+        }
+
+        Map<Long, ProfileUserRow> profileMap = new LinkedHashMap<>();
+        if (!userIds.isEmpty()) {
+            for (ProfileUserRow row : profileMapper.listByUserIds(userIds)) {
+                profileMap.put(row.userId(), row);
+            }
+        }
+
+        List<ProfileListItem> items = new ArrayList<>();
+        for (FollowUserItem item : followListData.getItems()) {
+            long targetUserId = Long.parseLong(item.getUserId());
+            ProfileUserRow row = profileMap.get(targetUserId);
+            if (row == null) {
+                continue;
+            }
+            ProfileData profileData = buildProfileData(viewerUserId, row);
+            items.add(new ProfileListItem(
+                    profileData.userId(),
+                    profileData.nickname(),
+                    profileData.avatar(),
+                    profileData.bio(),
+                    profileData.socialCounters(),
+                    profileData.relationStatus(),
+                    item.getFollowedAt(),
+                    profileData.self()
+            ));
+        }
+        return new ProfileListData(items, followListData.getPage());
     }
 }

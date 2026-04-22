@@ -10,6 +10,7 @@ public record ProfileUserRow(
         long userId,
         String phone,
         String account,
+        String email,
         String nickname,
         String avatar,
         String bio,

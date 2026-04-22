@@ -7,6 +7,7 @@
             <arg column="id" javaType="long"/>
             <arg column="phone" javaType="java.lang.String"/>
             <arg column="account" javaType="java.lang.String"/>
+            <arg column="email" javaType="java.lang.String"/>
             <arg column="nickname" javaType="java.lang.String"/>
             <arg column="avatar" javaType="java.lang.String"/>
             <arg column="bio" javaType="java.lang.String"/>
@@ -22,6 +23,7 @@
         select id,
                phone,
                account,
+               email,
                nickname,
                avatar,
                bio,
@@ -32,6 +34,26 @@
                status
           from users
          where id = #{userId}
+    </select>
+
+    <select id="listByUserIds" resultMap="ProfileUserRowMap">
+        select id,
+               phone,
+               account,
+               email,
+               nickname,
+               avatar,
+               bio,
+               gender,
+               birthday,
+               school,
+               tags_json,
+               status
+          from users
+         where id in
+         <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+             #{userId}
+         </foreach>
     </select>
 
     <update id="updateProfile">
