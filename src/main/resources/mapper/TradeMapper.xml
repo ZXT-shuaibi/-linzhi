@@ -237,6 +237,19 @@
           AND expire_at &gt; #{now}
     </update>
 
+    <update id="cancelPendingOrder">
+        UPDATE trade_order
+        SET status = 'CLOSED',
+            close_time = #{now},
+            close_reason = #{closeReason},
+            updated_at = #{now},
+            version = version + 1
+        WHERE order_no = #{orderNo}
+          AND buyer_id = #{buyerId}
+          AND status = 'PENDING_PAYMENT'
+          AND expire_at &gt; #{now}
+    </update>
+
     <update id="closeExpiredOrder">
         UPDATE trade_order
         SET status = 'CLOSED',

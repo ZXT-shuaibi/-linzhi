@@ -41,6 +41,11 @@ public interface TradeService {
     TradeOrderData pay(long currentUserId, String orderNo, TradePayRequest request);
 
     /**
+     * 取消我自己的未支付订单。
+     */
+    TradeOrderData cancelMyOrder(long currentUserId, String orderNo);
+
+    /**
      * 查询我的订单受理状态。
      */
     TradeOrderStatusData getMyOrderStatus(long currentUserId, String orderNo);

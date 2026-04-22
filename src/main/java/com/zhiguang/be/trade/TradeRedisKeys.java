@@ -55,4 +55,18 @@ public final class TradeRedisKeys {
     public static String orderStatusKey(long userId, String orderNo) {
         return "trade:order:status:" + userId + ":" + orderNo;
     }
+
+    /**
+     * 异步下单受理阶段的取消标记键。
+     */
+    public static String orderCancelMarkerKey(long userId, String orderNo) {
+        return "trade:order:cancel:" + userId + ":" + orderNo;
+    }
+
+    /**
+     * 订单异步落库过程锁。
+     */
+    public static String orderProcessLockKey(long userId, String orderNo) {
+        return "trade:order:process:" + userId + ":" + orderNo;
+    }
 }

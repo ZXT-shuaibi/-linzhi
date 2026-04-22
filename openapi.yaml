@@ -1540,6 +1540,37 @@ paths:
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           $ref: '#/components/responses/NotFoundError'
+  /trade/orders/{orderNo}/cancel:
+    post:
+      tags: [Trade]
+      summary: 取消当前用户自己的未支付订单
+      operationId: cancelTradeOrder
+      x-maturity: 宸插疄鐜帮紙鍩虹鐗堬級
+      x-source: 褰撳墠浠ｇ爜
+      parameters:
+        - name: orderNo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 鍙栨秷鎴愬姛
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TradeOrderData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
   /trade/orders/{orderNo}/pay:
     post:
       tags: [Trade]

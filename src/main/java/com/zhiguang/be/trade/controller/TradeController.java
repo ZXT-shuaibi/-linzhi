@@ -109,6 +109,17 @@ public class TradeController {
     }
 
     /**
+     * 主动取消当前用户自己的未支付订单。
+     */
+    @PostMapping("/orders/{orderNo}/cancel")
+    public ApiResponse<TradeOrderData> cancel(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable String orderNo
+    ) {
+        return ApiResponse.success(tradeService.cancelMyOrder(requireUserId(jwt), orderNo));
+    }
+
+    /**
      * 查询当前用户订单受理状态。
      */
     @GetMapping("/orders/{orderNo}/status")

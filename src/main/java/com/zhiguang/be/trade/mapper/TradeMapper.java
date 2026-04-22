@@ -108,6 +108,16 @@ public interface TradeMapper {
     );
 
     /**
+     * 主动取消未支付订单。
+     */
+    int cancelPendingOrder(
+            @Param("orderNo") String orderNo,
+            @Param("buyerId") long buyerId,
+            @Param("now") Instant now,
+            @Param("closeReason") String closeReason
+    );
+
+    /**
      * 关闭超时订单。
      */
     int closeExpiredOrder(

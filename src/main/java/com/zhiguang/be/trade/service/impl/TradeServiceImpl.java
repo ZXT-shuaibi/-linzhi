@@ -297,6 +297,104 @@ public class TradeServiceImpl implements TradeService {
     }
 
     /**
+     * 主动取消当前用户自己的未支付订单。
+     */
+    @Override
+    public TradeOrderData cancelMyOrder(long currentUserId, String orderNo) {
+        if (currentUserId <= 0L) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
+        }
+        closeExpiredOrdersForBuyer(currentUserId);
+        Map<String, Object> order = tradeMapper.findOrderByOrderNoAndBuyer(orderNo, currentUserId);
+        if (order == null || order.isEmpty()) {
+            TradeOrderStatusData pendingData = loadOrderStatus(currentUserId, orderNo);
+            if (pendingData != null && "ACCEPTED".equals(pendingData.status())) {
+                String processToken = tryAcquireOrderProcessLock(currentUserId, orderNo);
+                if (processToken == null) {
+                    throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "订单创建中，请稍后再试取消");
+                }
+                try {
+                    Map<String, Object> latestOrder = tradeMapper.findOrderByOrderNoAndBuyer(orderNo, currentUserId);
+                    if (latestOrder == null || latestOrder.isEmpty()) {
+                        markOrderCancelBeforeCreate(currentUserId, orderNo);
+                        markOrderStatus(currentUserId, orderNo, ORDER_STATUS_CLOSED, "订单已取消");
+                        return new TradeOrderData(
+                                orderNo,
+                                null,
+                                null,
+                                null,
+                                BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP),
+                                0,
+                                ORDER_STATUS_CLOSED,
+                                null,
+                                pendingData.updatedAt(),
+                                null,
+                                null,
+                                pendingData.updatedAt(),
+                                "USER_CANCEL"
+                        );
+                    }
+                    order = latestOrder;
+                } finally {
+                    releaseLock(TradeRedisKeys.orderProcessLockKey(currentUserId, orderNo), processToken);
+                }
+            }
+            if (order == null || order.isEmpty()) {
+                throw new BusinessException(ErrorCode.TRADE_ORDER_NOT_FOUND, HttpStatus.NOT_FOUND, "订单不存在");
+            }
+        }
+        String status = asText(order.get("status"));
+        if (ORDER_STATUS_PAID.equals(status)) {
+            throw new BusinessException(ErrorCode.TRADE_ORDER_PAID, HttpStatus.CONFLICT, "订单已支付");
+        }
+        if (ORDER_STATUS_CLOSED.equals(status)) {
+            return toOrderData(order);
+        }
+
+        Instant now = Instant.now();
+        Instant expireAt = asInstant(order.get("expireAt"));
+        if (ORDER_STATUS_PENDING_PAYMENT.equals(status) && expireAt != null && !now.isBefore(expireAt)) {
+            closeExpiredOrdersForBuyer(currentUserId);
+            return toOrderData(requireBuyerOrder(currentUserId, orderNo));
+        }
+
+        long activityId = asLong(order.get("activityId"));
+        int quantity = asInt(order.get("quantity"));
+        Boolean cancelled = transactionTemplate.execute(transactionStatus -> {
+            Instant cancelTime = Instant.now();
+            int updated = tradeMapper.cancelPendingOrder(orderNo, currentUserId, cancelTime, "USER_CANCEL");
+            if (updated != 1) {
+                return Boolean.FALSE;
+            }
+            increaseActivityStockWithRetry(activityId, quantity);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        syncRedisStockFromDbAndReleaseUser(activityId, currentUserId, quantity);
+                        markOrderStatus(currentUserId, orderNo, ORDER_STATUS_CLOSED, "订单已取消");
+                    } catch (Exception ex) {
+                        log.warn("sync redis after order cancel failed, orderNo={}", orderNo, ex);
+                        enqueueRedisReconcileEvent(activityId, currentUserId, quantity, orderNo, "USER_CANCEL");
+                        markOrderStatus(currentUserId, orderNo, ORDER_STATUS_CLOSED, "订单已取消");
+                    }
+                }
+            });
+            return Boolean.TRUE;
+        });
+
+        if (!Boolean.TRUE.equals(cancelled)) {
+            Map<String, Object> latest = requireBuyerOrder(currentUserId, orderNo);
+            String latestStatus = asText(latest.get("status"));
+            if (ORDER_STATUS_PAID.equals(latestStatus)) {
+                throw new BusinessException(ErrorCode.TRADE_ORDER_PAID, HttpStatus.CONFLICT, "订单已支付");
+            }
+            return toOrderData(latest);
+        }
+        return toOrderData(requireBuyerOrder(currentUserId, orderNo));
+    }
+
+    /**
      * 查询我的订单受理状态。
      */
     @Override
@@ -361,7 +459,15 @@ public class TradeServiceImpl implements TradeService {
      * Kafka 模式和本地线程池回退模式都会走这里。
      */
     public void acceptOrderEvent(TradeOrderEvent event) {
+        String processToken = waitForOrderProcessLock(event.buyerId(), event.orderNo());
+        if (processToken == null) {
+            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "订单处理繁忙，请稍后重试");
+        }
         try {
+            if (isOrderCancelledBeforeCreate(event.buyerId(), event.orderNo())) {
+                markOrderStatus(event.buyerId(), event.orderNo(), ORDER_STATUS_CLOSED, "订单已取消");
+                return;
+            }
             transactionTemplate.executeWithoutResult(status -> createOrderInTransaction(event));
             markOrderStatus(event.buyerId(), event.orderNo(), ORDER_STATUS_PENDING_PAYMENT, "订单已创建，等待支付");
         } catch (BusinessException ex) {
@@ -372,6 +478,8 @@ public class TradeServiceImpl implements TradeService {
             log.warn("accept trade order event failed, orderNo={}", event.orderNo(), ex);
             markOrderStatus(event.buyerId(), event.orderNo(), "FAILED", "下单失败，请稍后重试");
             reconcileRedisAfterFailure(event, "create-order-failed");
+        } finally {
+            releaseLock(TradeRedisKeys.orderProcessLockKey(event.buyerId(), event.orderNo()), processToken);
         }
     }
 
@@ -751,6 +859,35 @@ public class TradeServiceImpl implements TradeService {
     }
 
     /**
+     * 尝试获取订单异步处理锁，供取消前二次确认使用。
+     */
+    private String tryAcquireOrderProcessLock(long buyerId, String orderNo) {
+        String lockKey = TradeRedisKeys.orderProcessLockKey(buyerId, orderNo);
+        String token = UUID.randomUUID().toString();
+        Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, token, Duration.ofSeconds(5));
+        return Boolean.TRUE.equals(locked) ? token : null;
+    }
+
+    /**
+     * 轮询获取订单异步处理锁，避免消费线程和取消请求并发踩踏。
+     */
+    private String waitForOrderProcessLock(long buyerId, String orderNo) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            String token = tryAcquireOrderProcessLock(buyerId, orderNo);
+            if (token != null) {
+                return token;
+            }
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
      * 安全释放 Redis 锁。
      */
     private void releaseLock(String lockKey, String token) {
@@ -1014,6 +1151,24 @@ public class TradeServiceImpl implements TradeService {
         } catch (Exception ex) {
             log.warn("mark trade order status failed, orderNo={}, status={}", orderNo, status, ex);
         }
+    }
+
+    /**
+     * 标记订单在真正落库前已经被用户主动取消。
+     */
+    private void markOrderCancelBeforeCreate(long buyerId, String orderNo) {
+        stringRedisTemplate.opsForValue().set(
+                TradeRedisKeys.orderCancelMarkerKey(buyerId, orderNo),
+                "1",
+                Duration.ofHours(Math.max(orderStatusTtlHours, 1))
+        );
+    }
+
+    /**
+     * 判断订单是否在异步受理阶段已经被取消。
+     */
+    private boolean isOrderCancelledBeforeCreate(long buyerId, String orderNo) {
+        return Boolean.TRUE.equals(stringRedisTemplate.hasKey(TradeRedisKeys.orderCancelMarkerKey(buyerId, orderNo)));
     }
 
     /**
