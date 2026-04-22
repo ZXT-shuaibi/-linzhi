@@ -1,6 +1,8 @@
 package com.zhiguang.be.discover.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.cache.config.CacheProperties;
+import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.discover.model.NearbyItem;
 import com.zhiguang.be.discover.model.NearbySearchRequest;
@@ -53,6 +55,7 @@ class LbsDiscoverServiceImplTest {
     private ValueOperations<String, String> valueOperations;
     private GeoOperations<String, String> geoOperations;
     private HashOperations<String, Object, Object> hashOperations;
+    private CacheService cacheService;
     private LbsDiscoverServiceImpl service;
 
     /**
@@ -70,7 +73,8 @@ class LbsDiscoverServiceImplTest {
         doReturn(geoOperations).when(redisTemplate).opsForGeo();
         doReturn(hashOperations).when(redisTemplate).opsForHash();
 
-        service = new LbsDiscoverServiceImpl(redisTemplate, new ObjectMapper());
+        cacheService = new CacheService(redisTemplate, new ObjectMapper(), new CacheProperties());
+        service = new LbsDiscoverServiceImpl(redisTemplate, cacheService, new ObjectMapper());
     }
 
     /**
@@ -82,7 +86,23 @@ class LbsDiscoverServiceImplTest {
     void searchNearbyShouldReturnCachedResponseWhenCacheHit() throws Exception {
         NearbySearchRequest request = new NearbySearchRequest(31.2304, 121.4737, 500, 1, 20, "knowledge", null);
         NearbySearchResponse cached = new NearbySearchResponse(
-            Collections.singletonList(new NearbyItem("id-1", "knowledge", "Cached title", 31.2305, 121.4738, 66.0, 1_700_000_000_000L, 8, 0.92)),
+            Collections.singletonList(new NearbyItem(
+                    "id-1",
+                    "post",
+                    "Cached title",
+                    "Cached summary",
+                    "https://cdn.example/cached.png",
+                    Collections.singletonList("cached"),
+                    "author-1",
+                    "Cached author",
+                    "https://cdn.example/avatar.png",
+                    31.2305,
+                    121.4738,
+                    66.0,
+                    1_700_000_000_000L,
+                    8,
+                    0.92
+            )),
             1,
             1,
             20
@@ -139,8 +159,8 @@ class LbsDiscoverServiceImplTest {
         ArgumentCaptor<Circle> circleCaptor = ArgumentCaptor.forClass(Circle.class);
         ArgumentCaptor<String> cacheKeyCaptor = ArgumentCaptor.forClass(String.class);
         verify(geoOperations).radius(eq("geo:knowledge"), circleCaptor.capture(), any(GeoRadiusCommandArgs.class));
-        assertEquals(500.0, circleCaptor.getValue().getRadius().getValue());
-        assertEquals(Metrics.METERS, circleCaptor.getValue().getRadius().getMetric());
+        assertEquals(0.5, circleCaptor.getValue().getRadius().getValue());
+        assertEquals(Metrics.KILOMETERS, circleCaptor.getValue().getRadius().getMetric());
         verify(valueOperations).set(cacheKeyCaptor.capture(), anyString(), eq(Duration.ofSeconds(120)));
         assertTrue(cacheKeyCaptor.getValue().length() < 100);
         assertTrue(!cacheKeyCaptor.getValue().contains("31.2000"));
@@ -233,6 +253,30 @@ class LbsDiscoverServiceImplTest {
     }
 
     /**
+     * 楠岃瘉瀵瑰鐨?post/mixed 鍏ュ彛浼氬洖钀藉埌鍐呴儴 knowledge 绱㈠紩锛屽苟鍦ㄥ搷搴斾腑杩斿洖 post 鍙ｅ緞銆?
+     */
+    @Test
+    void searchNearbyShouldMapExternalPostTypeToKnowledgeIndex() {
+        NearbySearchRequest request = new NearbySearchRequest(31.2304, 121.4737, 500, 1, 20, "post", null);
+
+        when(valueOperations.get(anyString())).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0, String.class);
+            return key.startsWith("lbs:version:") ? "0" : null;
+        });
+        when(geoOperations.radius(eq("geo:knowledge"), any(Circle.class), any(GeoRadiusCommandArgs.class))).thenReturn(new GeoResults<>(Collections.singletonList(
+            geoResult("id-1", 121.4701, 31.2301, 120.0)
+        )));
+        doReturn(Collections.singletonList(singletonMetadata("title", "Mapped type")))
+            .when(redisTemplate).executePipelined(any(SessionCallback.class));
+
+        NearbySearchResponse response = service.searchNearby(request);
+
+        assertEquals(1, response.total());
+        assertEquals("post", response.items().get(0).type());
+        verify(geoOperations).radius(eq("geo:knowledge"), any(Circle.class), any(GeoRadiusCommandArgs.class));
+    }
+
+    /**
      * 验证新增位置时会同步写入元数据并递增缓存版本。
      */
     @Test
@@ -296,7 +340,7 @@ class LbsDiscoverServiceImplTest {
     private GeoResult<RedisGeoCommands.GeoLocation<String>> geoResult(String id, double lng, double lat, double distanceMeters) {
         return new GeoResult<>(
             new RedisGeoCommands.GeoLocation<>(id, new Point(lng, lat)),
-            new Distance(distanceMeters, Metrics.METERS)
+            new Distance(distanceMeters / 1000.0, Metrics.KILOMETERS)
         );
     }
 

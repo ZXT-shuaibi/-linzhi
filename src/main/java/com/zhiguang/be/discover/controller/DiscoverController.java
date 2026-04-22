@@ -6,6 +6,7 @@ import com.zhiguang.be.discover.model.NearbySearchResponse;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -40,6 +41,32 @@ public class DiscoverController {
      */
     @PostMapping("/nearby")
     public ApiResponse<NearbySearchResponse> searchNearby(@Valid @RequestBody NearbySearchRequest request) {
+        return ApiResponse.success(lbsDiscoverService.searchNearby(request));
+    }
+
+    /**
+     * 鎻愪緵鍖垮悕 GET 鏌ヨ鍏ュ彛锛屼究浜庡墠绔祻瑙堥〉鐩存帴鎸夋煡璇㈠弬鏁伴〉鍖栨媺鍙栭檮杩戠粨鏋溿€?
+     *
+     * @param lat 绾害
+     * @param lng 缁忓害
+     * @param radius 鎼滅储鍗婂緞锛堢背锛?
+     * @param page 椤电爜
+     * @param size 姣忛〉鏁伴噺
+     * @param entityType 瀵瑰鏆撮湶鐨勫疄浣撶被鍨嬶紝褰撳墠鍏煎 post / merchant / mixed
+     * @param tag 鍙€夋爣绛捐繃婊?
+     * @return 鏍囧噯鍝嶅簲鍖呰鐨勬悳绱㈢粨鏋?
+     */
+    @GetMapping("/nearby")
+    public ApiResponse<NearbySearchResponse> searchNearbyByQuery(
+            @RequestParam Double lat,
+            @RequestParam Double lng,
+            @RequestParam Integer radius,
+            @RequestParam(defaultValue = "1") Integer page,
+            @RequestParam(defaultValue = "20") Integer size,
+            @RequestParam(name = "entityType", required = false) String entityType,
+            @RequestParam(required = false) String tag
+    ) {
+        NearbySearchRequest request = new NearbySearchRequest(lat, lng, radius, page, size, entityType, tag);
         NearbySearchResponse response = lbsDiscoverService.searchNearby(request);
         return ApiResponse.success(response);
     }

@@ -25,8 +25,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 个人模块控制器。
- * 对外暴露“我的资料”、“TA 的主页”和“个人主页发布内容”三类接口。
+ * 个人资料控制器。
+ * 对外提供“我的资料”“用户主页”“用户已发布内容”等接口。
  */
 @Validated
 @RestController
@@ -36,7 +36,7 @@ public class ProfileController {
     private final ProfileService profileService;
 
     /**
-     * 注入个人模块服务。
+     * 注入个人资料服务。
      */
     public ProfileController(ProfileService profileService) {
         this.profileService = profileService;
@@ -69,12 +69,12 @@ public class ProfileController {
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody ProfileAvatarRequest request
     ) {
-        return ApiResponse.success(profileService.updateAvatar(requireUserId(jwt), request.avatarUrl()));
+        return ApiResponse.success(profileService.updateAvatar(requireUserId(jwt), request));
     }
 
     /**
      * 查询指定用户主页资料。
-     * 支持匿名访问；若携带合法 access token，会补充关系态与 self 信息。
+     * 支持匿名访问；如果携带合法 access token，则补充关系态与 self 信息。
      */
     @GetMapping("/users/{userId}")
     public ApiResponse<ProfileData> getProfile(

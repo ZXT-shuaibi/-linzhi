@@ -51,10 +51,11 @@ public class TradeController {
      */
     @GetMapping("/activities")
     public ApiResponse<TradeActivityListData> listActivities(
+            @RequestParam(required = false) String stage,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return ApiResponse.success(tradeService.listActivities(page, size));
+        return ApiResponse.success(tradeService.listActivities(stage, page, size));
     }
 
     /**
@@ -91,9 +92,10 @@ public class TradeController {
     )
     public ApiResponse<TradeSubmitData> placeOrder(
             @AuthenticationPrincipal Jwt jwt,
-            @PathVariable @Min(1) long activityId
+            @PathVariable @Min(1) long activityId,
+            @RequestParam(defaultValue = "1") @Min(1) int quantity
     ) {
-        return ApiResponse.success(tradeService.placeOrder(requireUserId(jwt), activityId));
+        return ApiResponse.success(tradeService.placeOrder(requireUserId(jwt), activityId, quantity));
     }
 
     /**
@@ -136,10 +138,11 @@ public class TradeController {
     @GetMapping("/orders/me")
     public ApiResponse<TradeOrderPageData> myOrders(
             @AuthenticationPrincipal Jwt jwt,
+            @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size
     ) {
-        return ApiResponse.success(tradeService.listMyOrders(requireUserId(jwt), page, size));
+        return ApiResponse.success(tradeService.listMyOrders(requireUserId(jwt), status, page, size));
     }
 
     /**

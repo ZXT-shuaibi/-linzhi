@@ -23,12 +23,17 @@ public interface TradeMapper {
     /**
      * 查询公开活动列表。
      */
-    List<Map<String, Object>> listPublicActivities(@Param("now") Instant now, @Param("limit") int limit, @Param("offset") int offset);
+    List<Map<String, Object>> listPublicActivities(
+            @Param("now") Instant now,
+            @Param("stage") String stage,
+            @Param("limit") int limit,
+            @Param("offset") int offset
+    );
 
     /**
      * 统计公开活动总数。
      */
-    long countPublicActivities(@Param("now") Instant now);
+    long countPublicActivities(@Param("now") Instant now, @Param("stage") String stage);
 
     /**
      * 新建活动。
@@ -60,12 +65,17 @@ public interface TradeMapper {
     /**
      * 查询用户订单列表。
      */
-    List<Map<String, Object>> listOrdersByBuyer(@Param("buyerId") long buyerId, @Param("limit") int limit, @Param("offset") int offset);
+    List<Map<String, Object>> listOrdersByBuyer(
+            @Param("buyerId") long buyerId,
+            @Param("status") String status,
+            @Param("limit") int limit,
+            @Param("offset") int offset
+    );
 
     /**
      * 统计用户订单数。
      */
-    long countOrdersByBuyer(@Param("buyerId") long buyerId);
+    long countOrdersByBuyer(@Param("buyerId") long buyerId, @Param("status") String status);
 
     /**
      * 查询用户已存在的活跃订单数量。

@@ -1,5 +1,7 @@
 package com.zhiguang.be.discover.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 /**
@@ -7,6 +9,7 @@ import java.util.List;
  */
 public record NearbyItem(
         String id,
+        @JsonProperty("entityType")
         String type,
         String title,
         String summary,

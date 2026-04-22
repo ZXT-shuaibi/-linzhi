@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 对象存储控制器。
- * 统一暴露预签名直传入口，供内容、头像等上传场景复用。
+ * 统一提供预签名上传入口，供正文、图片、头像等场景复用。
  */
 @Validated
 @RestController

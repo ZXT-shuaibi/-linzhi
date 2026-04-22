@@ -39,6 +39,18 @@
         FROM trade_activity
         WHERE status = 'published'
           AND end_time > #{now}
+        <choose>
+            <when test="stage == 'active'">
+                AND begin_time &lt;= #{now}
+                AND available_stock &gt; 0
+            </when>
+            <when test="stage == 'upcoming'">
+                AND begin_time &gt; #{now}
+            </when>
+            <when test="stage == 'sold_out'">
+                AND available_stock &lt;= 0
+            </when>
+        </choose>
         ORDER BY CASE
                      WHEN begin_time &lt;= #{now} AND end_time &gt; #{now} THEN 0
                      ELSE 1
@@ -53,6 +65,18 @@
         FROM trade_activity
         WHERE status = 'published'
           AND end_time > #{now}
+        <choose>
+            <when test="stage == 'active'">
+                AND begin_time &lt;= #{now}
+                AND available_stock &gt; 0
+            </when>
+            <when test="stage == 'upcoming'">
+                AND begin_time &gt; #{now}
+            </when>
+            <when test="stage == 'sold_out'">
+                AND available_stock &lt;= 0
+            </when>
+        </choose>
     </select>
 
     <insert id="insertActivity">
@@ -156,6 +180,9 @@
         FROM trade_order o
         INNER JOIN trade_activity a ON a.id = o.activity_id
         WHERE o.buyer_id = #{buyerId}
+        <if test="status != null">
+            AND o.status = #{status}
+        </if>
         ORDER BY o.order_time DESC, o.id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
@@ -164,6 +191,9 @@
         SELECT COUNT(1)
         FROM trade_order
         WHERE buyer_id = #{buyerId}
+        <if test="status != null">
+            AND status = #{status}
+        </if>
     </select>
 
     <select id="sumActiveOrderQuantity" resultType="int">

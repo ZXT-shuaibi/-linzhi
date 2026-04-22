@@ -175,7 +175,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private NearbySearchResponse performSearch(NearbySearchRequest request, String type) {
         String geoKey = GEO_KEY_PREFIX + type;
         Point center = toRedisPoint(request.lat(), request.lng());
-        Circle circle = new Circle(center, new Distance(request.radius(), Metrics.MILES));
+        Circle circle = new Circle(center, new Distance(request.radius() / 1000.0, Metrics.KILOMETERS));
         GeoRadiusCommandArgs searchArgs = buildSearchArgs(request);
         String normalizedTag = normalizeOptionalTag(request.tag());
 
@@ -251,7 +251,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
 
         return Optional.of(new NearbyItem(
             id,
-            type,
+            externalType(type),
             metadata.title(),
             metadata.summary(),
             metadata.coverUrl(),
@@ -592,7 +592,20 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         }
 
         String normalized = sanitizeSegment(type);
+        if ("post".equals(normalized) || "mixed".equals(normalized)) {
+            return DEFAULT_TYPE;
+        }
         return StringUtils.hasText(normalized) ? normalized : DEFAULT_TYPE;
+    }
+
+    /**
+     * 灏嗗唴閮ㄥ瓨鍌ㄧ被鍨嬫槧灏勪负瀵瑰 API 绾﹀畾鐨勫疄浣撶被鍨嬨€?
+     */
+    private String externalType(String normalizedType) {
+        if (DEFAULT_TYPE.equals(normalizedType)) {
+            return "post";
+        }
+        return normalizedType;
     }
 
     /**

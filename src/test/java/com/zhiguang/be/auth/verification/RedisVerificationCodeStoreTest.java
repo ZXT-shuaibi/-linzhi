@@ -24,7 +24,7 @@ class RedisVerificationCodeStoreTest {
     private static final String PHONE = "13800138000";
 
     private StringRedisTemplate redisTemplate;
-    private HashOperations<String, String, String> hashOperations;
+    private HashOperations<String, Object, Object> hashOperations;
     private ValueOperations<String, String> valueOperations;
     private RedisVerificationCodeStore store;
 
@@ -32,6 +32,7 @@ class RedisVerificationCodeStoreTest {
      * 初始化 Redis 模板相关桩，便于聚焦验证码状态判断逻辑。
      */
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         redisTemplate = mock(StringRedisTemplate.class);
         hashOperations = mock(HashOperations.class);

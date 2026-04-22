@@ -18,7 +18,7 @@ public interface TradeService {
     /**
      * 查询活动列表。
      */
-    TradeActivityListData listActivities(int page, int size);
+    TradeActivityListData listActivities(String stage, int page, int size);
 
     /**
      * 查询活动详情。
@@ -33,7 +33,7 @@ public interface TradeService {
     /**
      * 提交订单。
      */
-    TradeSubmitData placeOrder(long currentUserId, long activityId);
+    TradeSubmitData placeOrder(long currentUserId, long activityId, int quantity);
 
     /**
      * 支付订单。
@@ -53,7 +53,7 @@ public interface TradeService {
     /**
      * 查询我的订单列表。
      */
-    TradeOrderPageData listMyOrders(long currentUserId, int page, int size);
+    TradeOrderPageData listMyOrders(long currentUserId, String status, int page, int size);
 
     /**
      * 查询我的订单详情。

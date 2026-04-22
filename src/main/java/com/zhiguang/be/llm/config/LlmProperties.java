@@ -44,7 +44,7 @@ public class LlmProperties {
     }
 
     /**
-     * HTTP 接模配置。
+     * HTTP 模型接入配置。
      */
     public static class Http {
 

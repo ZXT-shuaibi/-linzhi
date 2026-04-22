@@ -270,7 +270,7 @@ class AuthServiceImplTest {
 
         ActionResult resultAfterReset = fixture.service.resetPassword(new PasswordResetRequest("13800138106", "123456", "NewPass123"));
 
-        assertEquals(result.userId(), resultAfterReset.userId());
+        assertEquals(result.userId(), resultAfterReset.resourceId());
         assertEquals(0, fixture.failureTracker.getFailureCount("13800138106"));
         assertEquals(0, fixture.failureTracker.getFailureCount("tester16"));
         verify(fixture.accessTokenBlocklistStore).block(eq(result.userId()), any(Instant.class), any(Duration.class));
@@ -287,7 +287,7 @@ class AuthServiceImplTest {
 
         ActionResult logoutResult = fixture.service.logout(session.tokens().refreshToken(), "current_device");
 
-        assertEquals(result.userId(), logoutResult.userId());
+        assertEquals(result.userId(), logoutResult.resourceId());
         verify(fixture.accessTokenBlocklistStore).block(eq(result.userId()), any(Instant.class), any(Duration.class));
     }
 

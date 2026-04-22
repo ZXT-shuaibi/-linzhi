@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * LLM 模块控制器。
+ * LLM 控制器。
  */
 @Validated
 @RestController

@@ -5,7 +5,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 对象存储配置。
- * 当前玩具项目先使用 mock 直传地址和公开访问地址，后续可平滑切换到真实 OSS。
+ * 当前默认使用 mock 上传地址和公开访问地址，后续可以平滑切换到真实存储服务。
  */
 @Component
 @ConfigurationProperties(prefix = "storage")

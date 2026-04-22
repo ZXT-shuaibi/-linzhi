@@ -7,8 +7,8 @@ import org.apache.ibatis.annotations.Param;
 import java.util.List;
 
 /**
- * 个人模块 Mapper。
- * 承担用户资料读取与局部更新能力。
+ * 个人资料模块 Mapper。
+ * 负责用户资料读取和局部更新。
  */
 @Mapper
 public interface ProfileMapper {

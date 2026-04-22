@@ -10,16 +10,17 @@ import org.springframework.stereotype.Service;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * 对象存储服务。
- * 统一负责预签名地址生成、公开 URL 规则和资源归属校验。
- */
 @Service
 public class StorageService {
+
+    private static final DateTimeFormatter DATE_FORMATTER =
+            DateTimeFormatter.BASIC_ISO_DATE.withZone(ZoneOffset.UTC);
 
     private final StorageProperties storageProperties;
     private final KnowPostMapper knowPostMapper;
@@ -29,30 +30,31 @@ public class StorageService {
         this.knowPostMapper = knowPostMapper;
     }
 
-    /**
-     * 生成上传预签名。
-     */
     public StoragePresignData createPresign(long currentUserId, StoragePresignRequest request) {
-        String scene = request.scene().trim();
+        String scene = normalizeScene(request.scene());
+        String contentType = normalizeContentType(request.contentType());
+        validateContentType(scene, contentType);
         String safeFilename = sanitizeFilename(request.filename());
+        String ext = normalizeExt(request.ext(), contentType, scene);
+
         String objectKey;
         if ("profile_avatar".equals(scene)) {
-            objectKey = "avatars/" + currentUserId + "/"
-                    + randomToken() + "-" + safeFilename;
+            objectKey = "avatars/" + currentUserId + "/" + currentDateSegment() + "/"
+                    + randomToken() + "-" + safeFilename + ext;
         } else {
             String postId = requireOwnedPostId(currentUserId, request.postId());
             if ("knowpost_content".equals(scene)) {
                 objectKey = "posts/" + postId + "/content/"
-                        + randomToken() + "-" + safeFilename;
+                        + randomToken() + "-" + safeFilename + ext;
             } else {
-                objectKey = "posts/" + postId + "/images/"
-                        + randomToken() + "-" + safeFilename;
+                objectKey = "posts/" + postId + "/images/" + currentDateSegment() + "/"
+                        + randomToken() + "-" + safeFilename + ext;
             }
         }
 
         Instant expireAt = Instant.now().plusSeconds(storageProperties.getPresignExpireSeconds());
-        Map<String, String> headers = new LinkedHashMap<String, String>();
-        headers.put("Content-Type", request.contentType().trim());
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Content-Type", contentType);
         return new StoragePresignData(
                 buildUploadUrl(objectKey),
                 objectKey,
@@ -62,16 +64,10 @@ public class StorageService {
         );
     }
 
-    /**
-     * 将对象键转换为公开访问地址。
-     */
     public String toPublicUrl(String objectKey) {
         return normalizeBaseUrl(storageProperties.getPublicBaseUrl()) + "/" + objectKey;
     }
 
-    /**
-     * 校验图片资源是否属于指定帖子，并统一返回公开地址。
-     */
     public String normalizeOwnedPostImageUrl(String postId, String rawValue) {
         if (rawValue == null) {
             return null;
@@ -88,12 +84,13 @@ public class StorageService {
         if (normalized.startsWith(publicPrefix)) {
             return normalized;
         }
-        throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "图片资源与当前帖子不匹配");
+        throw new BusinessException(
+                ErrorCode.BAD_REQUEST,
+                HttpStatus.BAD_REQUEST,
+                "Image resource does not belong to the current post"
+        );
     }
 
-    /**
-     * 校验头像资源是否属于当前用户，并统一返回公开地址。
-     */
     public String normalizeOwnedAvatarUrl(long currentUserId, String rawValue) {
         if (rawValue == null) {
             return null;
@@ -110,19 +107,27 @@ public class StorageService {
         if (normalized.startsWith(publicPrefix)) {
             return normalized;
         }
-        throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "头像资源与当前用户不匹配");
+        throw new BusinessException(
+                ErrorCode.BAD_REQUEST,
+                HttpStatus.BAD_REQUEST,
+                "Avatar resource does not belong to the current user"
+        );
     }
 
     private String requireOwnedPostId(long currentUserId, String postId) {
         if (postId == null || postId.isBlank() || !postId.matches("^\\d+$")) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "postId 非法");
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid postId");
         }
         KnowPostEntity entity = knowPostMapper.findById(postId);
         if (entity == null) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "帖子不存在");
+            throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "Post not found");
         }
         if (entity.creatorId() == null || !entity.creatorId().equals(String.valueOf(currentUserId))) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "无权为该帖子申请上传地址");
+            throw new BusinessException(
+                    ErrorCode.FORBIDDEN,
+                    HttpStatus.FORBIDDEN,
+                    "You do not have permission to upload files for this post"
+            );
         }
         return postId;
     }
@@ -132,26 +137,118 @@ public class StorageService {
                 + URLEncoder.encode(objectKey, StandardCharsets.UTF_8);
     }
 
+    private String normalizeScene(String scene) {
+        String normalized = scene == null ? null : scene.trim();
+        if (normalized == null || normalized.isEmpty()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Scene is required");
+        }
+        if (!"knowpost_content".equals(normalized)
+                && !"knowpost_image".equals(normalized)
+                && !"profile_avatar".equals(normalized)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Unsupported scene");
+        }
+        return normalized;
+    }
+
+    private String normalizeContentType(String contentType) {
+        String normalized = contentType == null ? null : contentType.trim().toLowerCase();
+        if (normalized == null || normalized.isEmpty()) {
+            throw new BusinessException(
+                    ErrorCode.BAD_REQUEST,
+                    HttpStatus.BAD_REQUEST,
+                    "Content type is required"
+            );
+        }
+        return normalized;
+    }
+
+    private void validateContentType(String scene, String contentType) {
+        if ("profile_avatar".equals(scene) || "knowpost_image".equals(scene)) {
+            if (!contentType.startsWith("image/")) {
+                throw new BusinessException(
+                        ErrorCode.BAD_REQUEST,
+                        HttpStatus.BAD_REQUEST,
+                        "This upload scene only supports image content types"
+                );
+            }
+            return;
+        }
+        if ("knowpost_content".equals(scene)) {
+            boolean allowed = contentType.startsWith("text/")
+                    || "application/json".equals(contentType)
+                    || "application/octet-stream".equals(contentType);
+            if (!allowed) {
+                throw new BusinessException(
+                        ErrorCode.BAD_REQUEST,
+                        HttpStatus.BAD_REQUEST,
+                        "knowpost_content only supports text, json, or octet-stream content types"
+                );
+            }
+        }
+    }
+
+    private String normalizeExt(String ext, String contentType, String scene) {
+        if (ext != null && !ext.isBlank()) {
+            String normalized = ext.trim().toLowerCase();
+            if (normalized.startsWith(".")) {
+                normalized = normalized.substring(1);
+            }
+            if (!normalized.matches("[a-z0-9]{1,15}")) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid ext");
+            }
+            return "." + normalized;
+        }
+        if ("knowpost_content".equals(scene)) {
+            return switch (contentType) {
+                case "text/markdown" -> ".md";
+                case "text/html" -> ".html";
+                case "text/plain" -> ".txt";
+                case "application/json" -> ".json";
+                default -> ".bin";
+            };
+        }
+        return switch (contentType) {
+            case "image/jpeg" -> ".jpg";
+            case "image/png" -> ".png";
+            case "image/webp" -> ".webp";
+            case "image/gif" -> ".gif";
+            default -> ".img";
+        };
+    }
+
     private String sanitizeFilename(String filename) {
-        String trimmed = filename.trim();
-        String safe = trimmed
+        String trimmed = filename == null ? "" : filename.trim();
+        if (trimmed.isEmpty()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Filename is required");
+        }
+        int lastDot = trimmed.lastIndexOf('.');
+        String stem = lastDot > 0 ? trimmed.substring(0, lastDot) : trimmed;
+        String safe = stem
                 .replace("\\", "-")
                 .replace("/", "-")
                 .replaceAll("[^a-zA-Z0-9._-]", "_");
         if (safe.isEmpty()) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "filename 非法");
+            return "file";
         }
         return safe;
     }
 
     private String normalizeBaseUrl(String baseUrl) {
         if (baseUrl == null || baseUrl.isBlank()) {
-            throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "对象存储基础地址未配置");
+            throw new BusinessException(
+                    ErrorCode.INTERNAL_ERROR,
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Storage base URL is not configured"
+            );
         }
         return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     }
 
     private String randomToken() {
         return UUID.randomUUID().toString().replace("-", "");
+    }
+
+    private String currentDateSegment() {
+        return DATE_FORMATTER.format(Instant.now());
     }
 }

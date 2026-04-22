@@ -6,7 +6,7 @@ package com.zhiguang.be.llm.service;
 public interface KnowPostDescriptionService {
 
     /**
-     * 基于正文生成简要描述。
+     * 根据正文生成摘要描述。
      */
     String generateDescription(String content);
 }

@@ -3,12 +3,12 @@ package com.zhiguang.be.llm.service;
 import java.util.List;
 
 /**
- * LLM 网关。
+ * LLM 网关接口。
  */
 public interface LlmGateway {
 
     /**
-     * 当前生效模型名。
+     * 获取当前生效的模型名。
      */
     String currentModelName();
 

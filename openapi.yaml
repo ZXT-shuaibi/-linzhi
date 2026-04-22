@@ -810,6 +810,12 @@ paths:
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/SizeParam'
+        - name: stage
+          in: query
+          schema:
+            type: string
+            enum: [active, upcoming, sold_out]
+          description: 可选活动阶段筛选
       responses:
         '200':
           description: 查询成功
@@ -1440,6 +1446,13 @@ paths:
             type: integer
             format: int64
             minimum: 1
+        - name: quantity
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: 下单数量，默认 1
       responses:
         '200':
           description: 查询成功
@@ -1497,6 +1510,12 @@ paths:
       parameters:
         - $ref: '#/components/parameters/PageParam'
         - $ref: '#/components/parameters/SizeParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING_PAYMENT, PAID, CLOSED]
+          description: 可选订单状态筛选
       responses:
         '200':
           description: 查询成功
@@ -1821,31 +1840,41 @@ components:
       properties:
         scene:
           type: string
+          description: 上传场景
           enum: [knowpost_content, knowpost_image, profile_avatar]
         postId:
           type: string
+          description: 帖子 ID；正文和图片上传时必填，头像上传时不需要
         filename:
           type: string
+          description: 原始文件名
         contentType:
           type: string
+          description: 文件内容类型
         ext:
           type: string
+          description: 文件扩展名；不传时由服务端按内容类型推断
     PresignData:
       type: object
       properties:
         uploadUrl:
           type: string
           format: uri
+          description: 预签名上传地址
         objectKey:
           type: string
+          description: 对象存储中的资源键
         publicUrl:
           type: string
           format: uri
+          description: 公开访问地址
         expireAt:
           type: string
           format: date-time
+          description: 预签名过期时间
         headers:
           type: object
+          description: 上传时需要附带的请求头
           additionalProperties:
             type: string
     ConfirmContentRequest:
@@ -2170,31 +2199,41 @@ components:
       properties:
         scene:
           type: string
+          description: 上传场景
           enum: [knowpost_content, knowpost_image, profile_avatar]
         postId:
           type: string
+          description: 帖子 ID；正文和图片上传时必填，头像上传时不需要
         filename:
           type: string
+          description: 原始文件名
         contentType:
           type: string
+          description: 文件内容类型
         ext:
           type: string
+          description: 文件扩展名；不传时由服务端按内容类型推断
     PresignData:
       type: object
       properties:
         uploadUrl:
           type: string
           format: uri
+          description: 预签名上传地址
         objectKey:
           type: string
+          description: 对象存储中的资源键
         publicUrl:
           type: string
           format: uri
+          description: 公开访问地址
         expireAt:
           type: string
           format: date-time
+          description: 预签名过期时间
         headers:
           type: object
+          description: 上传时需要附带的请求头
           additionalProperties:
             type: string
     ConfirmContentRequest:
@@ -2549,9 +2588,15 @@ components:
             maxLength: 32
     ProfileAvatarRequest:
       type: object
-      required: [avatarUrl]
+      description: avatarUrl 和 objectKey 至少传一个，服务端优先使用 objectKey
+      anyOf:
+        - required: [avatarUrl]
+        - required: [objectKey]
       properties:
         avatarUrl:
+          type: string
+          maxLength: 512
+        objectKey:
           type: string
           maxLength: 512
     ProfileData:

@@ -45,6 +45,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -162,13 +163,14 @@ public class TradeServiceImpl implements TradeService {
      * 查询活动列表。
      */
     @Override
-    public TradeActivityListData listActivities(int page, int size) {
+    public TradeActivityListData listActivities(String stage, int page, int size) {
         int normalizedPage = Math.max(page, 1);
         int normalizedSize = normalizeSize(size, 20);
         int offset = (normalizedPage - 1) * normalizedSize;
         Instant now = Instant.now();
-        List<Map<String, Object>> rows = tradeMapper.listPublicActivities(now, normalizedSize, offset);
-        long total = tradeMapper.countPublicActivities(now);
+        String normalizedStage = normalizeActivityStage(stage);
+        List<Map<String, Object>> rows = tradeMapper.listPublicActivities(now, normalizedStage, normalizedSize, offset);
+        long total = tradeMapper.countPublicActivities(now, normalizedStage);
         List<TradeActivityData> items = new ArrayList<>();
         for (Map<String, Object> row : rows) {
             items.add(toActivityData(row));
@@ -220,10 +222,12 @@ public class TradeServiceImpl implements TradeService {
      * 提交订单。
      */
     @Override
-    public TradeSubmitData placeOrder(long currentUserId, long activityId) {
+    public TradeSubmitData placeOrder(long currentUserId, long activityId, int quantity) {
         if (currentUserId <= 0L) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
         }
+
+        int normalizedQuantity = normalizeOrderQuantity(quantity);
 
         String lockKey = TradeRedisKeys.submitLockKey(activityId, currentUserId);
         String lockToken = UUID.randomUUID().toString();
@@ -242,17 +246,17 @@ public class TradeServiceImpl implements TradeService {
                     preDeductScript,
                     List.of(TradeRedisKeys.activityStockKey(activityId), TradeRedisKeys.activityBuyerCounterKey(activityId)),
                     String.valueOf(currentUserId),
-                    "1",
+                    String.valueOf(normalizedQuantity),
                     String.valueOf(asInt(activity.get("perUserLimit"))),
                     String.valueOf(computeBuyerCounterTtlSeconds(asInstant(activity.get("endTime"))))
             );
-            handlePrecheckResult(precheck);
+            handlePrecheckResult(precheck, normalizedQuantity);
 
             TradeOrderEvent event = new TradeOrderEvent(
                     String.valueOf(snowflakeIdGenerator.nextId()),
                     activityId,
                     currentUserId,
-                    1,
+                    normalizedQuantity,
                     now
             );
 
@@ -431,7 +435,7 @@ public class TradeServiceImpl implements TradeService {
      * 查询我的订单列表。
      */
     @Override
-    public TradeOrderPageData listMyOrders(long currentUserId, int page, int size) {
+    public TradeOrderPageData listMyOrders(long currentUserId, String status, int page, int size) {
         if (currentUserId <= 0L) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
         }
@@ -439,8 +443,9 @@ public class TradeServiceImpl implements TradeService {
         int normalizedPage = Math.max(page, 1);
         int normalizedSize = normalizeSize(size, 10);
         int offset = (normalizedPage - 1) * normalizedSize;
-        List<Map<String, Object>> rows = tradeMapper.listOrdersByBuyer(currentUserId, normalizedSize, offset);
-        long total = tradeMapper.countOrdersByBuyer(currentUserId);
+        String normalizedStatus = normalizeOrderStatus(status);
+        List<Map<String, Object>> rows = tradeMapper.listOrdersByBuyer(currentUserId, normalizedStatus, normalizedSize, offset);
+        long total = tradeMapper.countOrdersByBuyer(currentUserId, normalizedStatus);
         List<TradeOrderData> items = new ArrayList<>();
         for (Map<String, Object> row : rows) {
             items.add(toOrderData(row));
@@ -471,6 +476,7 @@ public class TradeServiceImpl implements TradeService {
         }
         try {
             if (isOrderCancelledBeforeCreate(event.buyerId(), event.orderNo())) {
+                reconcileRedisReservation(event, "USER_CANCEL_BEFORE_CREATE");
                 markOrderStatus(event.buyerId(), event.orderNo(), ORDER_STATUS_CLOSED, "订单已取消");
                 return;
             }
@@ -479,11 +485,11 @@ public class TradeServiceImpl implements TradeService {
         } catch (BusinessException ex) {
             log.info("accept trade order event failed by business, orderNo={}, message={}", event.orderNo(), ex.getMessage());
             markOrderStatus(event.buyerId(), event.orderNo(), "FAILED", ex.getMessage());
-            reconcileRedisAfterFailure(event, ex.getMessage());
+            reconcileRedisReservation(event, ex.getMessage());
         } catch (Exception ex) {
             log.warn("accept trade order event failed, orderNo={}", event.orderNo(), ex);
             markOrderStatus(event.buyerId(), event.orderNo(), "FAILED", "下单失败，请稍后重试");
-            reconcileRedisAfterFailure(event, "create-order-failed");
+            reconcileRedisReservation(event, "create-order-failed");
         } finally {
             releaseLock(TradeRedisKeys.orderProcessLockKey(event.buyerId(), event.orderNo()), processToken);
         }
@@ -660,7 +666,7 @@ public class TradeServiceImpl implements TradeService {
     /**
      * 处理 Lua 预扣结果。
      */
-    private void handlePrecheckResult(Long precheck) {
+    private void handlePrecheckResult(Long precheck, int quantity) {
         if (precheck == null) {
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "预扣库存失败");
         }
@@ -690,7 +696,7 @@ public class TradeServiceImpl implements TradeService {
     /**
      * 订单创建失败后，根据数据库当前值恢复 Redis 库存并释放用户预占资格。
      */
-    private void reconcileRedisAfterFailure(TradeOrderEvent event, String reason) {
+    private void reconcileRedisReservation(TradeOrderEvent event, String reason) {
         try {
             syncRedisStockFromDbAndReleaseUser(event.activityId(), event.buyerId(), event.quantity());
         } catch (Exception ex) {
@@ -1015,6 +1021,52 @@ public class TradeServiceImpl implements TradeService {
             return defaultSize;
         }
         return Math.min(size, 50);
+    }
+
+    /**
+     * 缁熶竴鏍￠獙涓嬪崟鏁伴噺銆?
+     */
+    private int normalizeOrderQuantity(int quantity) {
+        if (quantity <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "下单数量必须大于 0");
+        }
+        return quantity;
+    }
+
+    /**
+     * 缁熶竴娓呮礂娲诲姩闃舵绛涢€夊€笺€?
+     */
+    private String normalizeActivityStage(String stage) {
+        if (stage == null || stage.isBlank()) {
+            return null;
+        }
+        String normalized = stage.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "active", "upcoming", "sold_out" -> normalized;
+            default -> throw new BusinessException(
+                    ErrorCode.BAD_REQUEST,
+                    HttpStatus.BAD_REQUEST,
+                    "活动阶段只支持 active、upcoming、sold_out"
+            );
+        };
+    }
+
+    /**
+     * 缁熶竴娓呮礂璁㈠崟鐘舵€佺瓫閫夊€笺€?
+     */
+    private String normalizeOrderStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        String normalized = status.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case ORDER_STATUS_PENDING_PAYMENT, ORDER_STATUS_PAID, ORDER_STATUS_CLOSED -> normalized;
+            default -> throw new BusinessException(
+                    ErrorCode.BAD_REQUEST,
+                    HttpStatus.BAD_REQUEST,
+                    "订单状态只支持 PENDING_PAYMENT、PAID、CLOSED"
+            );
+        };
     }
 
     /**
