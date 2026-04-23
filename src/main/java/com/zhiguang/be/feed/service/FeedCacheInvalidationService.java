@@ -1,0 +1,78 @@
+package com.zhiguang.be.feed.service;
+
+import com.zhiguang.be.cache.CacheRegions;
+import com.zhiguang.be.cache.service.CacheService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Feed 缓存失效服务。
+ * 内容发生发布、删除、置顶或可见性变化时，统一负责清理 Feed 三层缓存。
+ */
+@Service
+public class FeedCacheInvalidationService {
+
+    private static final Logger log = LoggerFactory.getLogger(FeedCacheInvalidationService.class);
+
+    private static final String FEED_HOME_PAGE_PATTERN = "feed:page:home:*";
+    private static final String FEED_FRAGMENT_KEY_PREFIX = "feed:fragment:post:";
+    private static final long DOUBLE_DELETE_DELAY_MILLIS = 80L;
+
+    private final CacheService cacheService;
+
+    public FeedCacheInvalidationService(CacheService cacheService) {
+        this.cacheService = cacheService;
+    }
+
+    /**
+     * 在事务提交后失效指定文章相关的 Feed 缓存。
+     * 采用双删方式，降低并发回源把旧页面重新写回缓存的概率。
+     *
+     * @param postId 文章 ID
+     */
+    public void invalidatePostAfterCommit(String postId) {
+        if (!StringUtils.hasText(postId)) {
+            return;
+        }
+        Runnable task = () -> doubleDeletePost(postId.trim());
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            task.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                task.run();
+            }
+        });
+    }
+
+    /**
+     * 立即执行指定文章的双删失效。
+     *
+     * @param postId 文章 ID
+     */
+    private void doubleDeletePost(String postId) {
+        deletePostOnce(postId);
+        CompletableFuture.delayedExecutor(DOUBLE_DELETE_DELAY_MILLIS, TimeUnit.MILLISECONDS).execute(() -> deletePostOnce(postId));
+    }
+
+    /**
+     * 单次清理：删除本地完整页、Redis 页面骨架和当前文章碎片。
+     *
+     * @param postId 文章 ID
+     */
+    private void deletePostOnce(String postId) {
+        cacheService.evictLocalRegion(CacheRegions.FEED_HOME);
+        long pageDeleted = cacheService.deleteRedisByPattern(FEED_HOME_PAGE_PATTERN);
+        cacheService.deleteRedis(FEED_FRAGMENT_KEY_PREFIX + postId);
+        log.debug("feed cache invalidated, postId={}, pageDeleted={}", postId, pageDeleted);
+    }
+}

@@ -21,6 +21,7 @@ import com.zhiguang.be.content.model.KnowPostFeedRow;
 import com.zhiguang.be.content.model.OutboxEventEntity;
 import com.zhiguang.be.content.model.PostSyncPayload;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
+import com.zhiguang.be.feed.service.FeedCacheInvalidationService;
 import com.zhiguang.be.storage.StorageService;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.RelationStatusData;
@@ -70,6 +71,7 @@ public class ContentServiceImpl implements ContentService {
 
     private final KnowPostMapper knowPostMapper;
     private final LbsDiscoverService lbsDiscoverService;
+    private final FeedCacheInvalidationService feedCacheInvalidationService;
     private final FollowService followService;
     private final InteractionService interactionService;
     private final UserSocialCounterService userSocialCounterService;
@@ -83,6 +85,7 @@ public class ContentServiceImpl implements ContentService {
     public ContentServiceImpl(
             KnowPostMapper knowPostMapper,
             LbsDiscoverService lbsDiscoverService,
+            FeedCacheInvalidationService feedCacheInvalidationService,
             FollowService followService,
             InteractionService interactionService,
             UserSocialCounterService userSocialCounterService,
@@ -92,6 +95,7 @@ public class ContentServiceImpl implements ContentService {
     ) {
         this.knowPostMapper = knowPostMapper;
         this.lbsDiscoverService = lbsDiscoverService;
+        this.feedCacheInvalidationService = feedCacheInvalidationService;
         this.followService = followService;
         this.interactionService = interactionService;
         this.userSocialCounterService = userSocialCounterService;
@@ -316,6 +320,7 @@ public class ContentServiceImpl implements ContentService {
         incrementPublishedPostCounter(creatorId, 1);
         enqueuePostSyncEvent(postId, EVENT_POST_PUBLISHED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
+        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
         return getDetail(postId, creatorId);
     }
 
@@ -331,6 +336,7 @@ public class ContentServiceImpl implements ContentService {
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章置顶状态更新失败，请刷新后重试");
         }
+        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
         return getDetail(postId, creatorId);
     }
 
@@ -351,6 +357,7 @@ public class ContentServiceImpl implements ContentService {
 
         enqueuePostSyncEvent(postId, EVENT_POST_VISIBILITY_CHANGED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), normalizedVisibility, entity.publishTime());
+        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
         return getDetail(postId, creatorId);
     }
 
@@ -375,6 +382,7 @@ public class ContentServiceImpl implements ContentService {
         }
         enqueuePostSyncEvent(postId, EVENT_POST_DELETED, now);
         removeFromDiscover(postId);
+        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
     }
 
     /**

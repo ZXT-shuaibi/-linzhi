@@ -48,6 +48,18 @@ cache:
   local:
     max-entries-per-region: 1024
     cleanup-batch-size: 64
+  hotkey:
+    enabled: true
+    window-seconds: 60
+    segment-seconds: 10
+    level-low: 50
+    level-medium: 200
+    level-high: 500
+    extend-low-seconds: 20
+    extend-medium-seconds: 60
+    extend-high-seconds: 120
+    jitter-seconds: 5
+    max-tracked-keys: 10000
 
 llm:
   provider: template

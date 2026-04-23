@@ -3,6 +3,7 @@ package com.zhiguang.be.feed.service.impl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.cache.CacheRegions;
+import com.zhiguang.be.cache.hotkey.HotKeyDetector;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
@@ -27,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -34,20 +36,22 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 首页 Feed 服务。
- * 当前阶段先对齐技术文档中的基础版要求：
- * 匿名可浏览、支持分页、支持按时间与距离做轻量混排，并补一层 Redis 页面缓存。
+ * 负责匿名浏览、时间/距离混排、三层缓存装配以及用户态覆盖。
  */
 @Service
 public class FeedServiceImpl implements FeedService {
 
     private static final long LOCAL_CACHE_TTL_MILLIS = 5_000L;
     private static final Duration PAGE_CACHE_TTL = Duration.ofSeconds(30);
+    private static final Duration FRAGMENT_CACHE_TTL = Duration.ofSeconds(90);
+    private static final String FRAGMENT_CACHE_KEY_PREFIX = "feed:fragment:post:";
     private static final int DEFAULT_CANDIDATE_WINDOW = 100;
     private static final int MAX_CANDIDATE_WINDOW = 500;
     private static final double EARTH_RADIUS_METERS = 6_371_000D;
 
     private final FeedMapper feedMapper;
     private final CacheService cacheService;
+    private final HotKeyDetector hotKeyDetector;
     private final ObjectMapper objectMapper;
     private final FollowService followService;
     private final InteractionService interactionService;
@@ -64,6 +68,7 @@ public class FeedServiceImpl implements FeedService {
     public FeedServiceImpl(
             FeedMapper feedMapper,
             CacheService cacheService,
+            HotKeyDetector hotKeyDetector,
             ObjectMapper objectMapper,
             FollowService followService,
             InteractionService interactionService,
@@ -71,6 +76,7 @@ public class FeedServiceImpl implements FeedService {
     ) {
         this.feedMapper = feedMapper;
         this.cacheService = cacheService;
+        this.hotKeyDetector = hotKeyDetector;
         this.objectMapper = objectMapper;
         this.followService = followService;
         this.interactionService = interactionService;
@@ -96,16 +102,16 @@ public class FeedServiceImpl implements FeedService {
         validateLocation(lat, lng);
 
         String cacheKey = buildCacheKey(safePage, safeSize, lat, lng, geoHash);
+        hotKeyDetector.record(cacheKey);
         FeedData localCached = readLocalCache(cacheKey);
         if (localCached != null) {
-            return enrichFeedData(localCached, viewerId, "L1");
+            return enrichFeedData(localCached, viewerId, "L2");
         }
 
-        CachedFeedPage cachedPage = readCache(cacheKey);
-        if (cachedPage != null) {
-            FeedData l2Data = cachedPage.toFeedData("L2");
-            writeLocalCache(cacheKey, l2Data);
-            return enrichFeedData(l2Data, viewerId, "L2");
+        FeedData redisCached = readRedisPage(cacheKey, "L1+L0");
+        if (redisCached != null) {
+            writeLocalCache(cacheKey, redisCached);
+            return enrichFeedData(redisCached, viewerId, "L1+L0");
         }
 
         Object lock = singleFlightLocks.computeIfAbsent(cacheKey, key -> new Object());
@@ -113,20 +119,19 @@ public class FeedServiceImpl implements FeedService {
             try {
                 FeedData localCachedAgain = readLocalCache(cacheKey);
                 if (localCachedAgain != null) {
-                    return enrichFeedData(localCachedAgain, viewerId, "L1");
+                    return enrichFeedData(localCachedAgain, viewerId, "L2");
                 }
 
-                CachedFeedPage cachedPageAgain = readCache(cacheKey);
-                if (cachedPageAgain != null) {
-                    FeedData l2Data = cachedPageAgain.toFeedData("L2");
-                    writeLocalCache(cacheKey, l2Data);
-                    return enrichFeedData(l2Data, viewerId, "L2");
+                FeedData redisCachedAgain = readRedisPage(cacheKey, "L1+L0");
+                if (redisCachedAgain != null) {
+                    writeLocalCache(cacheKey, redisCachedAgain);
+                    return enrichFeedData(redisCachedAgain, viewerId, "L1+L0");
                 }
 
                 FeedData freshData = hasLocation(lat, lng)
                         ? buildMixedFeed(safePage, safeSize, lat, lng)
                         : buildLatestFeed(safePage, safeSize);
-                writeCache(cacheKey, freshData);
+                writeRedisCaches(cacheKey, freshData);
                 writeLocalCache(cacheKey, freshData);
                 return enrichFeedData(freshData, viewerId, "DB");
             } finally {
@@ -155,7 +160,7 @@ public class FeedServiceImpl implements FeedService {
 
     /**
      * 构建带位置的首页流。
-     * 当前阶段不直接上完整三级缓存和复杂召回，而是从公开内容中取一批候选后做轻量混排。
+     * 当前阶段先从公开内容中取一批候选后做轻量混排，后续可继续替换为更完整的召回策略。
      *
      * @param page 页码
      * @param size 每页大小
@@ -247,7 +252,10 @@ public class FeedServiceImpl implements FeedService {
             targetIds.add(Long.parseLong(item.postId()));
         }
 
-        Map<String, InteractionSummary> summaryMap = interactionService.summaryBatch(viewerId, "post", targetIds);
+        boolean needSummary = viewerId > 0L || !hasCompleteCachedCounts(baseItems);
+        Map<String, InteractionSummary> summaryMap = needSummary
+                ? interactionService.summaryBatch(viewerId, "post", targetIds)
+                : new HashMap<String, InteractionSummary>();
         Map<String, PostAuthor> authorMap = loadAuthors(baseItems, viewerId);
         List<FeedItem> enrichedItems = new ArrayList<FeedItem>(baseItems.size());
         for (FeedItem item : baseItems) {
@@ -263,8 +271,8 @@ public class FeedServiceImpl implements FeedService {
                     item.coverUrl(),
                     item.tags(),
                     author,
-                    summary == null ? 0L : summary.getLikeCount(),
-                    summary == null ? 0L : summary.getFavoriteCount(),
+                    resolveLikeCount(item, summary),
+                    resolveFavoriteCount(item, summary),
                     viewerId > 0L && summary != null ? summary.isViewerLiked() : null,
                     viewerId > 0L && summary != null ? summary.isViewerFavorited() : null,
                     item.distanceMeters(),
@@ -274,6 +282,54 @@ public class FeedServiceImpl implements FeedService {
             ));
         }
         return new FeedData(enrichedItems, baseFeedData.page(), cacheLayer);
+    }
+
+    /**
+     * 判断基础页面是否已经带有完整计数快照。
+     *
+     * @param items Feed 条目
+     * @return 计数完整返回 true
+     */
+    private boolean hasCompleteCachedCounts(List<FeedItem> items) {
+        if (items == null || items.isEmpty()) {
+            return true;
+        }
+        for (FeedItem item : items) {
+            if (item.likeCount() == null || item.favoriteCount() == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 解析点赞数。
+     * 优先使用实时互动汇总，缺失时回退到条目碎片中的计数快照。
+     *
+     * @param item Feed 条目
+     * @param summary 实时互动汇总
+     * @return 点赞数
+     */
+    private long resolveLikeCount(FeedItem item, InteractionSummary summary) {
+        if (summary != null) {
+            return summary.getLikeCount();
+        }
+        return item.likeCount() == null ? 0L : item.likeCount();
+    }
+
+    /**
+     * 解析收藏数。
+     * 优先使用实时互动汇总，缺失时回退到条目碎片中的计数快照。
+     *
+     * @param item Feed 条目
+     * @param summary 实时互动汇总
+     * @return 收藏数
+     */
+    private long resolveFavoriteCount(FeedItem item, InteractionSummary summary) {
+        if (summary != null) {
+            return summary.getFavoriteCount();
+        }
+        return item.favoriteCount() == null ? 0L : item.favoriteCount();
     }
 
     /**
@@ -370,27 +426,189 @@ public class FeedServiceImpl implements FeedService {
     }
 
     /**
-     * 读取页面缓存。
+     * 读取 Redis 页面骨架并通过条目碎片装配页面。
+     * L1 只保存 ID 列表和分页元数据，L0 保存条目轻量碎片，避免 Redis 页面缓存被用户态污染。
      *
-     * @param cacheKey 缓存 key
-     * @return 命中时返回缓存页，否则返回 null
+     * @param cacheKey 页面骨架缓存 key
+     * @param cacheLayer 命中层级标记
+     * @return 装配成功返回 Feed 数据；骨架或碎片缺失时返回 null
      */
-    private CachedFeedPage readCache(String cacheKey) {
-        return cacheService.getRedisJson(cacheKey, CachedFeedPage.class);
+    private FeedData readRedisPage(String cacheKey, String cacheLayer) {
+        CachedFeedPage cachedPage = cacheService.getRedisJson(cacheKey, CachedFeedPage.class);
+        if (cachedPage == null || cachedPage.items() == null) {
+            return null;
+        }
+        return assembleFromFragments(cachedPage, cacheLayer, hotKeyDetector.ttl(cacheKey, FRAGMENT_CACHE_TTL));
     }
 
     /**
-     * 写入页面缓存。
+     * 写入 Redis 三层缓存中的 L0 和 L1。
+     * 写入顺序遵循“先碎片、后骨架”，避免骨架可见但碎片还没准备好。
      *
-     * @param cacheKey 缓存 key
-     * @param feedData Feed 结果
+     * @param cacheKey 页面骨架缓存 key
+     * @param feedData Feed 数据
      */
-    private void writeCache(String cacheKey, FeedData feedData) {
-        cacheService.putRedisJson(cacheKey, CachedFeedPage.from(feedData), PAGE_CACHE_TTL);
+    private void writeRedisCaches(String cacheKey, FeedData feedData) {
+        Duration fragmentTtl = hotKeyDetector.ttl(cacheKey, FRAGMENT_CACHE_TTL);
+        writeFeedFragments(feedData.items(), fragmentTtl);
+        cacheService.putRedisJson(cacheKey, CachedFeedPage.from(feedData), hotKeyDetector.ttl(cacheKey, PAGE_CACHE_TTL));
     }
 
     /**
-     * 读取本地 L1 页面缓存。
+     * 使用 L0 条目碎片装配页面。
+     * 如果碎片部分缺失，会先尝试按缺失 ID 批量回源并回填；仍缺失则放弃本次缓存命中。
+     *
+     * @param cachedPage 页面骨架
+     * @param cacheLayer 命中层级标记
+     * @param fragmentTtl 条目碎片 TTL
+     * @return 装配成功返回 Feed 数据，否则返回 null
+     */
+    private FeedData assembleFromFragments(CachedFeedPage cachedPage, String cacheLayer, Duration fragmentTtl) {
+        if (cachedPage.items().isEmpty()) {
+            return cachedPage.toFeedData(new ArrayList<FeedItem>(), cacheLayer);
+        }
+
+        Map<String, CachedFeedFragment> fragmentMap = readFeedFragments(cachedPage.items());
+        List<String> missingIds = collectMissingIds(cachedPage.items(), fragmentMap);
+        if (!missingIds.isEmpty()) {
+            fragmentMap.putAll(refillMissingFragments(missingIds, fragmentTtl));
+        }
+
+        List<FeedItem> items = new ArrayList<FeedItem>(cachedPage.items().size());
+        for (CachedFeedPageItem pageItem : cachedPage.items()) {
+            CachedFeedFragment fragment = fragmentMap.get(pageItem.postId());
+            if (fragment == null) {
+                return null;
+            }
+            items.add(fragment.toFeedItem(pageItem.distanceMeters(), pageItem.hotScore()));
+        }
+        return cachedPage.toFeedData(items, cacheLayer);
+    }
+
+    /**
+     * 批量读取条目碎片。
+     *
+     * @param pageItems 页面骨架中的条目索引
+     * @return 以帖子 ID 为键的碎片映射
+     */
+    private Map<String, CachedFeedFragment> readFeedFragments(List<CachedFeedPageItem> pageItems) {
+        List<String> fragmentKeys = new ArrayList<String>(pageItems.size());
+        for (CachedFeedPageItem pageItem : pageItems) {
+            fragmentKeys.add(buildFragmentKey(pageItem.postId()));
+        }
+
+        List<String> rawFragments = cacheService.getRedisStrings(fragmentKeys);
+        Map<String, CachedFeedFragment> fragmentMap = new HashMap<String, CachedFeedFragment>();
+        for (int index = 0; index < pageItems.size(); index++) {
+            String raw = index < rawFragments.size() ? rawFragments.get(index) : null;
+            CachedFeedFragment fragment = parseFragment(raw);
+            if (fragment != null) {
+                fragmentMap.put(pageItems.get(index).postId(), fragment);
+            }
+        }
+        return fragmentMap;
+    }
+
+    /**
+     * 收集页面骨架中缺失的碎片 ID。
+     *
+     * @param pageItems 页面骨架条目
+     * @param fragmentMap 已命中的碎片
+     * @return 缺失的帖子 ID 列表
+     */
+    private List<String> collectMissingIds(List<CachedFeedPageItem> pageItems, Map<String, CachedFeedFragment> fragmentMap) {
+        List<String> missingIds = new ArrayList<String>();
+        for (CachedFeedPageItem pageItem : pageItems) {
+            if (!fragmentMap.containsKey(pageItem.postId())) {
+                missingIds.add(pageItem.postId());
+            }
+        }
+        return missingIds;
+    }
+
+    /**
+     * 按缺失 ID 批量回源条目碎片并写回 L0。
+     *
+     * @param missingIds 缺失帖子 ID
+     * @param fragmentTtl 条目碎片 TTL
+     * @return 成功回填的碎片映射
+     */
+    private Map<String, CachedFeedFragment> refillMissingFragments(List<String> missingIds, Duration fragmentTtl) {
+        Map<String, CachedFeedFragment> fragmentMap = new HashMap<String, CachedFeedFragment>();
+        if (missingIds == null || missingIds.isEmpty()) {
+            return fragmentMap;
+        }
+
+        List<FeedPostRow> rows = feedMapper.listHomeFeedRowsByIds(missingIds);
+        List<Long> targetIds = new ArrayList<Long>(rows.size());
+        for (FeedPostRow row : rows) {
+            targetIds.add(Long.parseLong(row.postId()));
+        }
+        Map<String, InteractionSummary> summaryMap = targetIds.isEmpty()
+                ? new HashMap<String, InteractionSummary>()
+                : interactionService.summaryBatch(0L, "post", targetIds);
+        for (FeedPostRow row : rows) {
+            FeedItem item = toFeedItem(row, null, calculateHotScore(null, row.publishTime(), row.isTop()));
+            CachedFeedFragment fragment = CachedFeedFragment.from(item, summaryMap.get(item.postId()));
+            fragmentMap.put(item.postId(), fragment);
+            cacheService.putRedisJson(buildFragmentKey(item.postId()), fragment, fragmentTtl);
+        }
+        return fragmentMap;
+    }
+
+    /**
+     * 写入条目级碎片缓存。
+     *
+     * @param items Feed 条目
+     * @param ttl 碎片 TTL
+     */
+    private void writeFeedFragments(List<FeedItem> items, Duration ttl) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        List<Long> targetIds = new ArrayList<Long>(items.size());
+        for (FeedItem item : items) {
+            targetIds.add(Long.parseLong(item.postId()));
+        }
+        Map<String, InteractionSummary> summaryMap = interactionService.summaryBatch(0L, "post", targetIds);
+        for (FeedItem item : items) {
+            cacheService.putRedisJson(
+                    buildFragmentKey(item.postId()),
+                    CachedFeedFragment.from(item, summaryMap.get(item.postId())),
+                    ttl
+            );
+        }
+    }
+
+    /**
+     * 解析 Redis 中的条目碎片。
+     *
+     * @param raw 原始 JSON
+     * @return 解析成功返回碎片，否则返回 null
+     */
+    private CachedFeedFragment parseFragment(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(raw, CachedFeedFragment.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 构造条目碎片缓存 key。
+     *
+     * @param postId 帖子 ID
+     * @return 碎片 key
+     */
+    private String buildFragmentKey(String postId) {
+        return FRAGMENT_CACHE_KEY_PREFIX + postId;
+    }
+
+    /**
+     * 读取本地 L2 完整页面缓存。
      *
      * @param cacheKey 缓存 key
      * @return 命中时返回页面结果，否则返回 null
@@ -400,13 +618,14 @@ public class FeedServiceImpl implements FeedService {
     }
 
     /**
-     * 写入本地 L1 页面缓存。
+     * 写入本地 L2 完整页面缓存。
      *
      * @param cacheKey 缓存 key
      * @param feedData Feed 页面数据
      */
     private void writeLocalCache(String cacheKey, FeedData feedData) {
-        cacheService.putLocal(CacheRegions.FEED_HOME, cacheKey, feedData, Duration.ofMillis(LOCAL_CACHE_TTL_MILLIS));
+        Duration localTtl = hotKeyDetector.ttl(cacheKey, Duration.ofMillis(LOCAL_CACHE_TTL_MILLIS));
+        cacheService.putLocal(CacheRegions.FEED_HOME, cacheKey, feedData, localTtl);
     }
 
     /**
@@ -570,11 +789,11 @@ public class FeedServiceImpl implements FeedService {
     }
 
     /**
-     * 页面缓存结构。
-     * 单独抽成内部记录，避免直接把 cacheLayer 也缓存进去。
+     * Redis 页面骨架缓存结构。
+     * 只保存页面 ID 顺序、分页元数据和页面级排序信息，不保存完整条目与用户态。
      */
     private record CachedFeedPage(
-            List<FeedItem> items,
+            List<CachedFeedPageItem> items,
             int page,
             int size,
             long total,
@@ -589,8 +808,14 @@ public class FeedServiceImpl implements FeedService {
          */
         private static CachedFeedPage from(FeedData feedData) {
             PageMeta pageMeta = feedData.page();
+            List<CachedFeedPageItem> pageItems = new ArrayList<CachedFeedPageItem>();
+            if (feedData.items() != null) {
+                for (FeedItem item : feedData.items()) {
+                    pageItems.add(CachedFeedPageItem.from(item));
+                }
+            }
             return new CachedFeedPage(
-                    feedData.items(),
+                    pageItems,
                     pageMeta.getPage(),
                     pageMeta.getSize(),
                     pageMeta.getTotal(),
@@ -605,11 +830,85 @@ public class FeedServiceImpl implements FeedService {
          * @param cacheLayer 当前命中的缓存层级
          * @return Feed 数据
          */
-        private FeedData toFeedData(String cacheLayer) {
+        private FeedData toFeedData(List<FeedItem> feedItems, String cacheLayer) {
             return new FeedData(
-                    items,
+                    feedItems,
                     new PageMeta(page, size, total, totalPages, hasNext),
                     cacheLayer
+            );
+        }
+    }
+
+    /**
+     * 页面骨架中的条目索引。
+     * 距离和热度分属于本次页面查询结果，因此放在页面骨架而不是通用碎片中。
+     */
+    private record CachedFeedPageItem(
+            String postId,
+            Double distanceMeters,
+            Double hotScore
+    ) {
+        private static CachedFeedPageItem from(FeedItem item) {
+            return new CachedFeedPageItem(item.postId(), item.distanceMeters(), item.hotScore());
+        }
+    }
+
+    /**
+     * Redis 条目碎片缓存结构。
+     * 只保存公共可复用字段，不保存 liked/faved 这类用户态。
+     */
+    private record CachedFeedFragment(
+            String postId,
+            String title,
+            String summary,
+            String coverUrl,
+            List<String> tags,
+            String authorId,
+            String authorNickname,
+            String authorAvatar,
+            Long likeCount,
+            Long favoriteCount,
+            Boolean isTop,
+            Instant publishedAt
+    ) {
+        private static CachedFeedFragment from(FeedItem item) {
+            return from(item, null);
+        }
+
+        private static CachedFeedFragment from(FeedItem item, InteractionSummary summary) {
+            PostAuthor author = item.author();
+            return new CachedFeedFragment(
+                    item.postId(),
+                    item.title(),
+                    item.summary(),
+                    item.coverUrl(),
+                    item.tags(),
+                    author == null ? null : author.userId(),
+                    author == null ? null : author.nickname(),
+                    author == null ? null : author.avatar(),
+                    summary == null ? item.likeCount() : summary.getLikeCount(),
+                    summary == null ? item.favoriteCount() : summary.getFavoriteCount(),
+                    item.isTop(),
+                    item.publishedAt()
+            );
+        }
+
+        private FeedItem toFeedItem(Double distanceMeters, Double hotScore) {
+            return new FeedItem(
+                    postId,
+                    title,
+                    summary,
+                    coverUrl,
+                    tags == null ? List.of() : tags,
+                    new PostAuthor(authorId, authorNickname, authorAvatar, null, null),
+                    likeCount,
+                    favoriteCount,
+                    null,
+                    null,
+                    distanceMeters,
+                    hotScore,
+                    isTop,
+                    publishedAt
             );
         }
     }

@@ -4,11 +4,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.cache.config.CacheProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -81,6 +87,17 @@ public class CacheService {
     }
 
     /**
+     * 清空指定本地缓存区域。
+     *
+     * @param region 缓存区域
+     */
+    public void evictLocalRegion(String region) {
+        if (region != null && !region.trim().isEmpty()) {
+            localRegions.remove(region);
+        }
+    }
+
+    /**
      * 读取 Redis 字符串缓存。
      */
     public String getRedisString(String key) {
@@ -89,6 +106,26 @@ public class CacheService {
         } catch (Exception ex) {
             log.warn("read redis cache failed, key={}", key, ex);
             return null;
+        }
+    }
+
+    /**
+     * 批量读取 Redis 字符串缓存。
+     * 用于 Feed 页面装配时一次性获取多个条目碎片，减少 Redis 网络往返。
+     *
+     * @param keys 缓存 key 列表
+     * @return 与 key 顺序一致的缓存值列表，读取失败时返回空列表
+     */
+    public List<String> getRedisStrings(List<String> keys) {
+        if (keys == null || keys.isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+            return values == null ? Collections.emptyList() : values;
+        } catch (Exception ex) {
+            log.warn("batch read redis cache failed, keyCount={}", keys.size(), ex);
+            return Collections.emptyList();
         }
     }
 
@@ -145,6 +182,52 @@ public class CacheService {
         } catch (Exception ex) {
             log.warn("delete redis cache failed, key={}", key, ex);
         }
+    }
+
+    /**
+     * 按 pattern 扫描并删除 Redis 缓存。
+     * 使用 SCAN 避免直接 KEYS 阻塞 Redis，适合 Feed 页面批量失效。
+     *
+     * @param pattern Redis key 匹配表达式
+     * @return 删除数量
+     */
+    public long deleteRedisByPattern(String pattern) {
+        if (pattern == null || pattern.trim().isEmpty()) {
+            return 0L;
+        }
+        try {
+            Long deleted = stringRedisTemplate.execute((RedisCallback<Long>) connection -> {
+                ScanOptions options = ScanOptions.scanOptions()
+                        .match(pattern)
+                        .count(500)
+                        .build();
+                long count = 0L;
+                List<byte[]> batch = new ArrayList<byte[]>();
+                try (Cursor<byte[]> cursor = connection.scan(options)) {
+                    while (cursor.hasNext()) {
+                        batch.add(cursor.next());
+                        if (batch.size() >= 500) {
+                            count += deleteBatch(connection, batch);
+                        }
+                    }
+                }
+                if (!batch.isEmpty()) {
+                    count += deleteBatch(connection, batch);
+                }
+                return count;
+            });
+            return deleted == null ? 0L : deleted;
+        } catch (Exception ex) {
+            log.warn("delete redis cache by pattern failed, pattern={}", pattern, ex);
+            return 0L;
+        }
+    }
+
+    private long deleteBatch(org.springframework.data.redis.connection.RedisConnection connection, List<byte[]> batch) {
+        byte[][] keys = batch.toArray(new byte[batch.size()][]);
+        Long deleted = connection.del(keys);
+        batch.clear();
+        return deleted == null ? 0L : deleted;
     }
 
     private void shrinkIfNecessary(ConcurrentHashMap<String, LocalCacheEntry> localCache) {

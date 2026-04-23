@@ -40,6 +40,29 @@
          limit #{limit} offset #{offset}
     </select>
 
+    <select id="listHomeFeedRowsByIds" resultMap="FeedPostRowMap">
+        select p.id,
+               p.creator_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               p.title,
+               p.description,
+               p.img_urls,
+               p.tags,
+               p.latitude,
+               p.longitude,
+               p.publish_time,
+               p.is_top
+          from know_posts p
+          join users u on u.id = p.creator_id
+         where p.status = 'published'
+           and p.visible = 'public'
+           and p.id in
+           <foreach collection="ids" item="id" open="(" separator="," close=")">
+               #{id}
+           </foreach>
+    </select>
+
     <select id="countHomeFeed" resultType="long">
         select count(1)
           from know_posts
