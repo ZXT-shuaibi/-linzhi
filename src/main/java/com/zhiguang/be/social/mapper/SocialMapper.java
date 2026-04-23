@@ -121,6 +121,24 @@ public interface SocialMapper {
     int cancelFollower(@Param("toUserId") long toUserId, @Param("fromUserId") long fromUserId);
 
     /**
+     * 查询 following 主表中尚未同步到 follower 投影的有效关系。
+     *
+     * @param lastId 上一批扫描到的关系 ID
+     * @param limit 返回数量
+     * @return 漂移关系行，包含 relationId、followerId、followeeId
+     */
+    List<Map<String, Object>> listMissingFollowerProjections(@Param("lastId") long lastId, @Param("limit") int limit);
+
+    /**
+     * 查询 follower 投影中已经不再对应有效 following 主表的陈旧关系。
+     *
+     * @param lastId 上一批扫描到的投影 ID
+     * @param limit 返回数量
+     * @return 陈旧投影行，包含 relationId、followerId、followeeId
+     */
+    List<Map<String, Object>> listStaleFollowerProjections(@Param("lastId") long lastId, @Param("limit") int limit);
+
+    /**
      * 查询关注列表条目。
      *
      * @param userId 用户 ID

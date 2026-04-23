@@ -72,12 +72,20 @@ llm:
 
 social:
   relation:
+    rate-limit:
+      capacity: 100
+      refill-per-second: 1
     outbox:
       local-projection-enabled: true
       kafka-enabled: false
       topic: canal-outbox
       group-id: relation-outbox-consumer
       dedup-ttl-minutes: 10
+    repair:
+      enabled: false
+      fixed-delay-ms: 60000
+      batch-size: 100
+      max-batches-per-run: 20
   counter:
     kafka:
       enabled: false

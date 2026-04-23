@@ -101,6 +101,38 @@
           AND rel_status = 1
     </update>
 
+    <select id="listMissingFollowerProjections" resultType="map">
+        SELECT f.id AS relationId,
+               f.from_user_id AS followerId,
+               f.to_user_id AS followeeId
+        FROM following f
+        LEFT JOIN follower r
+          ON r.to_user_id = f.to_user_id
+         AND r.from_user_id = f.from_user_id
+         AND r.rel_status = 1
+        WHERE f.rel_status = 1
+          AND f.id &gt; #{lastId}
+          AND r.id IS NULL
+        ORDER BY f.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listStaleFollowerProjections" resultType="map">
+        SELECT r.id AS relationId,
+               r.from_user_id AS followerId,
+               r.to_user_id AS followeeId
+        FROM follower r
+        LEFT JOIN following f
+          ON f.from_user_id = r.from_user_id
+         AND f.to_user_id = r.to_user_id
+         AND f.rel_status = 1
+        WHERE r.rel_status = 1
+          AND r.id &gt; #{lastId}
+          AND f.id IS NULL
+        ORDER BY r.id ASC
+        LIMIT #{limit}
+    </select>
+
     <select id="listFollowingItems" resultType="map">
         SELECT CAST(u.id AS VARCHAR) AS userId,
                u.nickname AS nickname,

@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +49,24 @@ public class FollowServiceImpl implements FollowService {
     private static final Logger log = LoggerFactory.getLogger(FollowServiceImpl.class);
 
     private static final Duration FOLLOW_CACHE_TTL = Duration.ofHours(2);
+    private static final String FOLLOW_RATE_LIMIT_LUA =
+            "local key = KEYS[1]\n"
+                    + "local capacity = tonumber(ARGV[1])\n"
+                    + "local rate = tonumber(ARGV[2])\n"
+                    + "local now = tonumber(redis.call('TIME')[1])\n"
+                    + "local last = tonumber(redis.call('HGET', key, 'last') or now)\n"
+                    + "local tokens = tonumber(redis.call('HGET', key, 'tokens') or capacity)\n"
+                    + "local elapsed = math.max(0, now - last)\n"
+                    + "tokens = math.min(capacity, tokens + elapsed * rate)\n"
+                    + "if tokens < 1 then\n"
+                    + "  redis.call('HSET', key, 'last', now, 'tokens', tokens)\n"
+                    + "  redis.call('PEXPIRE', key, 60000)\n"
+                    + "  return 0\n"
+                    + "end\n"
+                    + "tokens = tokens - 1\n"
+                    + "redis.call('HSET', key, 'last', now, 'tokens', tokens)\n"
+                    + "redis.call('PEXPIRE', key, 60000)\n"
+                    + "return 1\n";
 
     private final SocialMapper socialMapper;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
@@ -55,6 +74,9 @@ public class FollowServiceImpl implements FollowService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final boolean localProjectionEnabled;
+    private final int followRateLimitCapacity;
+    private final int followRateLimitRefillPerSecond;
+    private final DefaultRedisScript<Long> followRateLimitScript;
 
     /**
      * 构造关注服务。
@@ -65,6 +87,8 @@ public class FollowServiceImpl implements FollowService {
      * @param stringRedisTemplate Redis 模板
      * @param objectMapper JSON 序列化组件
      * @param localProjectionEnabled 是否启用本地投影兜底
+     * @param followRateLimitCapacity 关注令牌桶容量
+     * @param followRateLimitRefillPerSecond 关注令牌桶每秒恢复数量
      */
     public FollowServiceImpl(
             SocialMapper socialMapper,
@@ -72,7 +96,9 @@ public class FollowServiceImpl implements FollowService {
             RelationEventProcessor relationEventProcessor,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper,
-            @Value("${social.relation.outbox.local-projection-enabled:true}") boolean localProjectionEnabled
+            @Value("${social.relation.outbox.local-projection-enabled:true}") boolean localProjectionEnabled,
+            @Value("${social.relation.rate-limit.capacity:100}") int followRateLimitCapacity,
+            @Value("${social.relation.rate-limit.refill-per-second:1}") int followRateLimitRefillPerSecond
     ) {
         this.socialMapper = socialMapper;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
@@ -80,6 +106,11 @@ public class FollowServiceImpl implements FollowService {
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.localProjectionEnabled = localProjectionEnabled;
+        this.followRateLimitCapacity = Math.max(1, followRateLimitCapacity);
+        this.followRateLimitRefillPerSecond = Math.max(1, followRateLimitRefillPerSecond);
+        this.followRateLimitScript = new DefaultRedisScript<Long>();
+        this.followRateLimitScript.setResultType(Long.class);
+        this.followRateLimitScript.setScriptText(FOLLOW_RATE_LIMIT_LUA);
     }
 
     /**
@@ -92,6 +123,8 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public FollowActionData follow(long currentUserId, long followeeId) {
+        ensureAuthenticatedUser(currentUserId);
+        enforceFollowRateLimit(currentUserId);
         validateFollowTarget(currentUserId, followeeId);
         if (socialMapper.existsActiveFollowing(currentUserId, followeeId) > 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "请勿重复关注");
@@ -415,6 +448,29 @@ public class FollowServiceImpl implements FollowService {
     private void ensureAuthenticatedUser(long currentUserId) {
         if (currentUserId <= 0L) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
+        }
+    }
+
+    /**
+     * 使用 Redis Lua 令牌桶限制关注接口调用频率。
+     *
+     * @param currentUserId 当前操作用户 ID
+     */
+    private void enforceFollowRateLimit(long currentUserId) {
+        try {
+            Long allowed = stringRedisTemplate.execute(
+                    followRateLimitScript,
+                    Collections.singletonList("rl:follow:" + currentUserId),
+                    String.valueOf(followRateLimitCapacity),
+                    String.valueOf(followRateLimitRefillPerSecond)
+            );
+            if (allowed == null || allowed == 0L) {
+                throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "关注操作过于频繁，请稍后再试");
+            }
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("关注限流检查失败，采用放行策略，userId={}", currentUserId, ex);
         }
     }
 

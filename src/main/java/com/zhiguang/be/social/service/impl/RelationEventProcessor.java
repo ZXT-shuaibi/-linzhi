@@ -64,8 +64,9 @@ public class RelationEventProcessor {
         String eventId = event.getEventId() == null ? "0" : event.getEventId();
         String eventType = event.getEventType();
 
+        String dedupKey = SocialRedisKeys.relationEventDedupKey(eventType, followerId, followeeId, eventId);
         Boolean first = stringRedisTemplate.opsForValue().setIfAbsent(
-                SocialRedisKeys.relationEventDedupKey(eventType, followerId, followeeId, eventId),
+                dedupKey,
                 "1",
                 dedupTtl
         );
@@ -73,12 +74,17 @@ public class RelationEventProcessor {
             return;
         }
 
-        if (isFollowCreated(eventType)) {
-            projectFollowCreated(event, followerId, followeeId);
-            return;
-        }
-        if (isFollowRemoved(eventType)) {
-            projectFollowRemoved(followerId, followeeId);
+        try {
+            if (isFollowCreated(eventType)) {
+                projectFollowCreated(event, followerId, followeeId);
+                return;
+            }
+            if (isFollowRemoved(eventType)) {
+                projectFollowRemoved(followerId, followeeId);
+            }
+        } catch (RuntimeException ex) {
+            stringRedisTemplate.delete(dedupKey);
+            throw ex;
         }
     }
 
