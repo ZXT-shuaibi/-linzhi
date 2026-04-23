@@ -71,6 +71,13 @@ llm:
     timeout-seconds: 10
 
 social:
+  relation:
+    outbox:
+      local-projection-enabled: true
+      kafka-enabled: false
+      topic: canal-outbox
+      group-id: relation-outbox-consumer
+      dedup-ttl-minutes: 10
   counter:
     kafka:
       enabled: false

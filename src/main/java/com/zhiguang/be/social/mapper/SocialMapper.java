@@ -47,6 +47,15 @@ public interface SocialMapper {
     int existsActiveFollowing(@Param("fromUserId") long fromUserId, @Param("toUserId") long toUserId);
 
     /**
+     * 查询 following 主表关系 ID。
+     *
+     * @param fromUserId 关注者用户 ID
+     * @param toUserId 被关注者用户 ID
+     * @return 关系 ID
+     */
+    Long findFollowingRelationId(@Param("fromUserId") long fromUserId, @Param("toUserId") long toUserId);
+
+    /**
      * 判断是否已存在有效粉丝关系。
      *
      * @param toUserId 被关注者用户 ID
@@ -162,6 +171,14 @@ public interface SocialMapper {
      * @return 粉丝数
      */
     long countFollowerActive(@Param("toUserId") long toUserId);
+
+    /**
+     * 基于 following 主表统计粉丝数。
+     *
+     * @param toUserId 被关注者用户 ID
+     * @return 粉丝数
+     */
+    long countFollowersFromFollowing(@Param("toUserId") long toUserId);
 
     /**
      * 统计用户已发布帖子数。

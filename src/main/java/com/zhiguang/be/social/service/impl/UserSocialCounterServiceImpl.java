@@ -169,7 +169,7 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
         ensureUserExists(userId);
 
         long followings = socialMapper.countFollowingActive(userId);
-        long followers = socialMapper.countFollowerActive(userId);
+        long followers = socialMapper.countFollowersFromFollowing(userId);
         long posts = socialMapper.countPublishedPostsByCreatorId(userId);
         List<Long> publishedPostIds = socialMapper.listPublishedPostIdsByCreatorId(userId);
 
@@ -246,7 +246,7 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
         long cachedFollowers = readInt32BE(raw, OFFSET_FOLLOWERS);
         long cachedPosts = readInt32BE(raw, OFFSET_POSTS);
         long dbFollowings = socialMapper.countFollowingActive(userId);
-        long dbFollowers = socialMapper.countFollowerActive(userId);
+        long dbFollowers = socialMapper.countFollowersFromFollowing(userId);
         long dbPosts = socialMapper.countPublishedPostsByCreatorId(userId);
         return cachedFollowings == dbFollowings
                 && cachedFollowers == dbFollowers

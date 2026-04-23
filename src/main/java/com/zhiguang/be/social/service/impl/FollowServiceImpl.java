@@ -14,9 +14,9 @@ import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.SocialRedisKeys;
 import com.zhiguang.be.social.mapper.SocialMapper;
 import com.zhiguang.be.social.service.FollowService;
-import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -51,31 +51,35 @@ public class FollowServiceImpl implements FollowService {
 
     private final SocialMapper socialMapper;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
-    private final UserSocialCounterService userSocialCounterService;
+    private final RelationEventProcessor relationEventProcessor;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+    private final boolean localProjectionEnabled;
 
     /**
      * 构造关注服务。
      *
      * @param socialMapper 社交模块 Mapper
      * @param snowflakeIdGenerator 雪花 ID 生成器
-     * @param userSocialCounterService 用户维社交计数服务
+     * @param relationEventProcessor 关系事件投影处理器
      * @param stringRedisTemplate Redis 模板
      * @param objectMapper JSON 序列化组件
+     * @param localProjectionEnabled 是否启用本地投影兜底
      */
     public FollowServiceImpl(
             SocialMapper socialMapper,
             SnowflakeIdGenerator snowflakeIdGenerator,
-            UserSocialCounterService userSocialCounterService,
+            RelationEventProcessor relationEventProcessor,
             StringRedisTemplate stringRedisTemplate,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            @Value("${social.relation.outbox.local-projection-enabled:true}") boolean localProjectionEnabled
     ) {
         this.socialMapper = socialMapper;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
-        this.userSocialCounterService = userSocialCounterService;
+        this.relationEventProcessor = relationEventProcessor;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+        this.localProjectionEnabled = localProjectionEnabled;
     }
 
     /**
@@ -93,40 +97,22 @@ public class FollowServiceImpl implements FollowService {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "请勿重复关注");
         }
 
-        if (!activateFollowRelation(currentUserId, followeeId)) {
+        long relationId = activateFollowRelation(currentUserId, followeeId);
+        if (relationId <= 0L) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "关注关系写入失败");
         }
 
         long eventId = snowflakeIdGenerator.nextId();
+        FollowEventPayload payload = FollowEventPayload.of(eventId, "FOLLOW_CREATED", currentUserId, followeeId, relationId);
         socialMapper.insertOutboxEvent(
                 eventId,
-                "follow",
-                followeeId,
+                "following",
+                relationId,
                 "FOLLOW_CREATED",
-                serialize(FollowEventPayload.of(eventId, "FOLLOW_CREATED", currentUserId, followeeId))
+                serialize(payload)
         );
 
-        runAfterCommit(() -> {
-            try {
-                long score = System.currentTimeMillis();
-                stringRedisTemplate.opsForZSet().add(
-                        SocialRedisKeys.followingKey(currentUserId),
-                        String.valueOf(followeeId),
-                        score
-                );
-                stringRedisTemplate.opsForZSet().add(
-                        SocialRedisKeys.followerKey(followeeId),
-                        String.valueOf(currentUserId),
-                        score
-                );
-                stringRedisTemplate.expire(SocialRedisKeys.followingKey(currentUserId), FOLLOW_CACHE_TTL);
-                stringRedisTemplate.expire(SocialRedisKeys.followerKey(followeeId), FOLLOW_CACHE_TTL);
-                userSocialCounterService.incrementFollowings(currentUserId, 1);
-                userSocialCounterService.incrementFollowers(followeeId, 1);
-            } catch (Exception ex) {
-                log.warn("refresh follow cache failed, followerId={}, followeeId={}", currentUserId, followeeId, ex);
-            }
-        });
+        runAfterCommit(() -> projectRelationEvent(payload));
 
         return buildFollowActionData(currentUserId, followeeId, true);
     }
@@ -143,34 +129,26 @@ public class FollowServiceImpl implements FollowService {
     public FollowActionData unfollow(long currentUserId, long followeeId) {
         validateFollowTarget(currentUserId, followeeId);
 
+        Long relationId = socialMapper.findFollowingRelationId(currentUserId, followeeId);
         int affected = socialMapper.cancelFollowing(currentUserId, followeeId);
         if (affected > 0) {
-            socialMapper.cancelFollower(followeeId, currentUserId);
             long eventId = snowflakeIdGenerator.nextId();
+            FollowEventPayload payload = FollowEventPayload.of(
+                    eventId,
+                    "FOLLOW_REMOVED",
+                    currentUserId,
+                    followeeId,
+                    relationId == null ? 0L : relationId
+            );
             socialMapper.insertOutboxEvent(
                     eventId,
-                    "follow",
-                    followeeId,
+                    "following",
+                    relationId,
                     "FOLLOW_REMOVED",
-                    serialize(FollowEventPayload.of(eventId, "FOLLOW_REMOVED", currentUserId, followeeId))
+                    serialize(payload)
             );
 
-            runAfterCommit(() -> {
-                try {
-                    stringRedisTemplate.opsForZSet().remove(
-                            SocialRedisKeys.followingKey(currentUserId),
-                            String.valueOf(followeeId)
-                    );
-                    stringRedisTemplate.opsForZSet().remove(
-                            SocialRedisKeys.followerKey(followeeId),
-                            String.valueOf(currentUserId)
-                    );
-                    userSocialCounterService.incrementFollowings(currentUserId, -1);
-                    userSocialCounterService.incrementFollowers(followeeId, -1);
-                } catch (Exception ex) {
-                    log.warn("refresh unfollow cache failed, followerId={}, followeeId={}", currentUserId, followeeId, ex);
-                }
-            });
+            runAfterCommit(() -> projectRelationEvent(payload));
         }
 
         return buildFollowActionData(currentUserId, followeeId, false);
@@ -249,7 +227,7 @@ public class FollowServiceImpl implements FollowService {
      * @return 关注动作结果
      */
     private FollowActionData buildFollowActionData(long currentUserId, long followeeId, boolean following) {
-        long followerCount = socialMapper.countFollowerActive(followeeId);
+        long followerCount = socialMapper.countFollowersFromFollowing(followeeId);
         long followCount = socialMapper.countFollowingActive(currentUserId);
         return new FollowActionData(String.valueOf(followeeId), following, followerCount, followCount);
     }
@@ -441,16 +419,15 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * 激活关注与粉丝双向关系。
+     * 激活正向关注关系。
+     * 主写路径只维护 following 主表，follower、缓存和计数由 outbox 事件异步投影。
      *
      * @param currentUserId 当前用户 ID
      * @param followeeId 目标用户 ID
-     * @return 本次是否真的发生了状态变化
+     * @return following 主表关系 ID
      */
-    private boolean activateFollowRelation(long currentUserId, long followeeId) {
-        boolean followingChanged = activateFollowingRow(currentUserId, followeeId);
-        boolean followerChanged = activateFollowerRow(followeeId, currentUserId);
-        return followingChanged || followerChanged;
+    private long activateFollowRelation(long currentUserId, long followeeId) {
+        return activateFollowingRow(currentUserId, followeeId);
     }
 
     /**
@@ -458,48 +435,43 @@ public class FollowServiceImpl implements FollowService {
      *
      * @param currentUserId 当前用户 ID
      * @param followeeId 目标用户 ID
-     * @return 本次是否真的发生了状态变化
+     * @return following 主表关系 ID；未发生变化时返回 0
      */
-    private boolean activateFollowingRow(long currentUserId, long followeeId) {
+    private long activateFollowingRow(long currentUserId, long followeeId) {
         if (socialMapper.reactivateFollowing(currentUserId, followeeId) > 0) {
-            return true;
+            Long relationId = socialMapper.findFollowingRelationId(currentUserId, followeeId);
+            return relationId == null ? 0L : relationId;
         }
         if (socialMapper.existsActiveFollowing(currentUserId, followeeId) > 0) {
-            return false;
+            return 0L;
         }
         try {
-            socialMapper.insertFollowing(snowflakeIdGenerator.nextId(), currentUserId, followeeId);
-            return true;
+            long relationId = snowflakeIdGenerator.nextId();
+            socialMapper.insertFollowing(relationId, currentUserId, followeeId);
+            return relationId;
         } catch (DuplicateKeyException ex) {
             if (socialMapper.existsActiveFollowing(currentUserId, followeeId) > 0) {
-                return false;
+                return 0L;
             }
             throw ex;
         }
     }
 
     /**
-     * 激活反向粉丝关系。
+     * 在本地开发模式下直接执行 outbox 投影。
+     * 真实 Canal + Kafka 模式可关闭该兜底，让 Kafka 消费器负责投影。
      *
-     * @param followeeId 目标用户 ID
-     * @param currentUserId 当前用户 ID
-     * @return 本次是否真的发生了状态变化
+     * @param payload 关注事件载荷
      */
-    private boolean activateFollowerRow(long followeeId, long currentUserId) {
-        if (socialMapper.reactivateFollower(followeeId, currentUserId) > 0) {
-            return true;
-        }
-        if (socialMapper.existsActiveFollower(followeeId, currentUserId) > 0) {
-            return false;
+    private void projectRelationEvent(FollowEventPayload payload) {
+        if (!localProjectionEnabled) {
+            return;
         }
         try {
-            socialMapper.insertFollower(snowflakeIdGenerator.nextId(), followeeId, currentUserId);
-            return true;
-        } catch (DuplicateKeyException ex) {
-            if (socialMapper.existsActiveFollower(followeeId, currentUserId) > 0) {
-                return false;
-            }
-            throw ex;
+            relationEventProcessor.process(payload);
+        } catch (Exception ex) {
+            log.warn("本地关系投影失败，eventId={}, eventType={}",
+                    payload.getEventId(), payload.getEventType(), ex);
         }
     }
 

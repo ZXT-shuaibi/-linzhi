@@ -146,6 +146,19 @@ public final class SocialRedisKeys {
     }
 
     /**
+     * 返回关系事件幂等去重键。
+     *
+     * @param eventType 事件类型
+     * @param followerId 关注者 ID
+     * @param followeeId 被关注者 ID
+     * @param eventId 事件 ID
+     * @return Redis 键
+     */
+    public static String relationEventDedupKey(String eventType, long followerId, long followeeId, String eventId) {
+        return "dedup:rel:" + eventType + ":" + followerId + ":" + followeeId + ":" + eventId;
+    }
+
+    /**
      * 返回分片位图键。
      *
      * @param metric 指标名称
