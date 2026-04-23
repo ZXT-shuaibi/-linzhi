@@ -69,29 +69,45 @@ UPDATE auth_user SET account = phone WHERE account IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uk_auth_user_account ON auth_user(account);
 
 -- 将历史 auth_user 数据迁移到新的 users 表。
+-- 兼容两类旧 user_id：
+-- 1. 能安全转成数值的旧 ID，直接沿用；
+-- 2. 历史 UUID / 非数字 ID，映射到保留的高位数值区间，避免启动时 CAST 失败。
 INSERT INTO users (id, phone, account, password_hash, nickname, created_at, updated_at)
 SELECT
-    -- 旧字符串 ID 转为数值 ID。
-    CAST(legacy.user_id AS BIGINT),
+    -- 迁移后的数值 ID。
+    migrated.migrated_id,
     -- 迁移手机号。
-    legacy.phone,
+    migrated.phone,
     -- 迁移登录账号。
-    legacy.account,
+    migrated.account,
     -- 迁移密码哈希。
-    legacy.password_hash,
+    migrated.password_hash,
     -- 迁移昵称。
-    legacy.nickname,
+    migrated.nickname,
     -- 保留原始创建时间。
-    legacy.created_at,
+    migrated.created_at,
     -- 保留原始更新时间。
-    legacy.updated_at
-FROM auth_user legacy
+    migrated.updated_at
+FROM (
+    SELECT
+        CASE
+            WHEN TRY_CAST(legacy.user_id AS BIGINT) IS NOT NULL THEN TRY_CAST(legacy.user_id AS BIGINT)
+            ELSE CAST(8000000000000000000 AS BIGINT) + ROW_NUMBER() OVER (ORDER BY legacy.user_id)
+        END AS migrated_id,
+        legacy.phone,
+        legacy.account,
+        legacy.password_hash,
+        legacy.nickname,
+        legacy.created_at,
+        legacy.updated_at
+    FROM auth_user legacy
+) migrated
 WHERE NOT EXISTS (
     SELECT 1
     FROM users current_users
-    WHERE current_users.id = CAST(legacy.user_id AS BIGINT)
-       OR current_users.phone = legacy.phone
-       OR current_users.account = legacy.account
+    WHERE current_users.id = migrated.migrated_id
+       OR current_users.phone = migrated.phone
+       OR current_users.account = migrated.account
 );
 
 -- login_logs：登录日志表。
