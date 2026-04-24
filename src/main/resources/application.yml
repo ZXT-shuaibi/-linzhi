@@ -44,6 +44,36 @@ storage:
   public-base-url: https://mock-oss.local/public
   presign-expire-seconds: 600
 
+threadpool:
+  trade-order:
+    thread-name-prefix: trade-order-
+    core-pool-size: 4
+    maximum-pool-size: 8
+    queue-capacity: 200
+    keep-alive-seconds: 60
+    buffer-degree: 0.5
+    prevent-rejection: true
+    thread-load-judge: 5
+    cpu-load-judge: 0.7
+    spin-wait-millis: 10
+    block-timeout-millis: 100
+    max-retry-attempts: 3
+    allow-core-thread-timeout: false
+  rag-query:
+    thread-name-prefix: rag-query-
+    core-pool-size: 2
+    maximum-pool-size: 4
+    queue-capacity: 100
+    keep-alive-seconds: 60
+    buffer-degree: 0.5
+    prevent-rejection: true
+    thread-load-judge: 4
+    cpu-load-judge: 0.7
+    spin-wait-millis: 10
+    block-timeout-millis: 100
+    max-retry-attempts: 3
+    allow-core-thread-timeout: false
+
 cache:
   local:
     max-entries-per-region: 1024

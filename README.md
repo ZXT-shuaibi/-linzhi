@@ -273,7 +273,7 @@ feed:segment:{geo_hash}:{timestamp}
 ### 基础支持模块
 
 ### 8. threadpool - 线程池模块 ✅
-**状态**：已实现（基础版）
+**状态**：已实现（自适应缓冲版）
 
 **功能**：异步任务编排
 
@@ -285,7 +285,7 @@ feed:segment:{geo_hash}:{timestamp}
 **技术实现**：
 - Buffer Factor 决定扩容强度
 - 重载可强制入队 + 降级
-- 配置中心动态调整参数
+- `application.yml` 可配置 trade / rag 两类线程池参数
 - 指标暴露（队列长度、执行时间、拒绝次数）
 
 ### 9. guard - 防护模块 ✅
