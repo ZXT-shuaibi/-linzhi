@@ -54,7 +54,7 @@ public class ThreadPoolConfiguration {
                 TimeUnit.SECONDS,
                 new ArrayBlockingQueue<Runnable>(Math.max(1, properties.getQueueCapacity())),
                 new NamedThreadFactory(properties.getThreadNamePrefix()),
-                new AdaptiveBufferedThreadPoolExecutor.CallerRunsPolicy(),
+                resolveRejectedExecutionHandler(properties),
                 properties.getBufferDegree(),
                 properties.isPreventRejection(),
                 properties.getThreadLoadJudge(),
@@ -66,5 +66,24 @@ public class ThreadPoolConfiguration {
         );
         executor.allowCoreThreadTimeOut(properties.isAllowCoreThreadTimeout());
         return executor;
+    }
+
+    /**
+     * 按配置装配拒绝策略。
+     * 默认使用 count，保持与原始线程池实验代码一致，便于统计拒绝次数与观察吞吐变化。
+     */
+    private AdaptiveRejectedExecutionHandler resolveRejectedExecutionHandler(ThreadPoolProperties.PoolProperties properties) {
+        String policy = properties.getRejectionPolicy();
+        if (policy == null) {
+            return new AdaptiveBufferedThreadPoolExecutor.CountPolicy();
+        }
+
+        if ("discard".equalsIgnoreCase(policy)) {
+            return new AdaptiveBufferedThreadPoolExecutor.DiscardPolicy();
+        }
+        if ("caller-runs".equalsIgnoreCase(policy) || "callerRuns".equalsIgnoreCase(policy)) {
+            return new AdaptiveBufferedThreadPoolExecutor.CallerRunsPolicy();
+        }
+        return new AdaptiveBufferedThreadPoolExecutor.CountPolicy();
     }
 }

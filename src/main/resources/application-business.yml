@@ -1,0 +1,10 @@
+spring:
+  config:
+    activate:
+      on-profile: business
+
+threadpool:
+  trade-order:
+    rejection-policy: caller-runs
+  rag-query:
+    rejection-policy: caller-runs

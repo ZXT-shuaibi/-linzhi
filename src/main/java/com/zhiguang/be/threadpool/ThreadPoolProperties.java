@@ -58,6 +58,7 @@ public class ThreadPoolProperties {
         private long blockTimeoutMillis = 100L;
         private int maxRetryAttempts = 3;
         private boolean allowCoreThreadTimeout = false;
+        private String rejectionPolicy = "caller-runs";
 
         public String getThreadNamePrefix() {
             return threadNamePrefix;
@@ -161,6 +162,14 @@ public class ThreadPoolProperties {
 
         public void setAllowCoreThreadTimeout(boolean allowCoreThreadTimeout) {
             this.allowCoreThreadTimeout = allowCoreThreadTimeout;
+        }
+
+        public String getRejectionPolicy() {
+            return rejectionPolicy;
+        }
+
+        public void setRejectionPolicy(String rejectionPolicy) {
+            this.rejectionPolicy = rejectionPolicy;
         }
     }
 }

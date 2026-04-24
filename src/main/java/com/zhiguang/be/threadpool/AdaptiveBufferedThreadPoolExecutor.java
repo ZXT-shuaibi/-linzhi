@@ -1,10 +1,10 @@
 package com.zhiguang.be.threadpool;
 
-import com.sun.management.OperatingSystemMXBean;
+import oshi.SystemInfo;
+import oshi.hardware.CentralProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.ConcurrentModificationException;
 import java.util.HashSet;
@@ -91,7 +91,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
     private final long spinWaitMillis;
     private final long blockTimeoutMillis;
     private final int maxRetryAttempts;
-    private final CpuLoadMonitor cpuLoadMonitor;
+    private final BasicCalculate basicCalculate;
 
     private int largestPoolSize;
     private long completedTaskCount;
@@ -152,7 +152,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
         this.spinWaitMillis = Math.max(1L, spinWaitMillis);
         this.blockTimeoutMillis = Math.max(1L, blockTimeoutMillis);
         this.maxRetryAttempts = Math.max(1, maxRetryAttempts);
-        this.cpuLoadMonitor = new CpuLoadMonitor(monitorThreadPrefix);
+        this.basicCalculate = new BasicCalculate(monitorThreadPrefix);
     }
 
     /**
@@ -255,6 +255,10 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
             return;
         }
 
+        if (offerToQueueNormally(command, ctl.get())) {
+            return;
+        }
+
         if (!forceEnqueue(command, currentCtl)) {
             reject(command);
         }
@@ -274,6 +278,26 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
     }
 
     /**
+     * 在线程扩容失败后，仍按原始实现再尝试一次普通入队。
+     * 这样在“线程打满但队列还有空间”的场景下，不会过早进入兜底逻辑或拒绝路径。
+     */
+    private boolean offerToQueueNormally(Runnable command, int currentCtl) {
+        if (!isRunning(currentCtl) || !workQueue.offer(command)) {
+            return false;
+        }
+
+        int recheck = ctl.get();
+        if (!isRunning(recheck) && remove(command)) {
+            reject(command);
+            return true;
+        }
+        if (workerCountOf(recheck) == 0) {
+            addWorker(null, false);
+        }
+        return true;
+    }
+
+    /**
      * 启用防拒绝能力后，在高峰期尝试继续接纳任务。
      * 根据线程负载和 CPU 负载决定是直接试探入队、阻塞等待还是空转重试。
      */
@@ -284,7 +308,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
 
         int currentLoad = threadLoad.incrementAndGet();
         try {
-            double cpuLoad = cpuLoadMonitor.getCpuLoad();
+            double cpuLoad = basicCalculate.getCPULoad();
             if (currentLoad > threadLoadJudge && cpuLoad > cpuLoadJudge) {
                 return offerOnce(command);
             }
@@ -340,9 +364,10 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
                 return false;
             }
 
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(currentWaitMillis);
-            while (System.nanoTime() < deadline) {
-                Thread.onSpinWait();
+            long startTime = System.currentTimeMillis();
+            long elapsedTime = 0L;
+            while (elapsedTime < currentWaitMillis) {
+                elapsedTime = System.currentTimeMillis() - startTime;
             }
 
             if (workQueue.offer(command)) {
@@ -674,6 +699,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
         final ReentrantLock mainLock = this.mainLock;
         mainLock.lock();
         try {
+            basicCalculate.shutdown();
             advanceRunState(SHUTDOWN);
             interruptIdleWorkers();
             onShutdown();
@@ -689,13 +715,13 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
         final ReentrantLock mainLock = this.mainLock;
         mainLock.lock();
         try {
+            basicCalculate.shutdown();
             advanceRunState(STOP);
             interruptWorkers();
             tasks = drainQueue();
         } finally {
             mainLock.unlock();
         }
-        cpuLoadMonitor.shutdown();
         tryTerminate();
         return tasks;
     }
@@ -899,7 +925,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
      * 获取最新 CPU 负载缓存值。
      */
     public double getCpuLoad() {
-        return cpuLoadMonitor.getCpuLoad();
+        return basicCalculate.getCPULoad();
     }
 
     @Override
@@ -960,7 +986,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
      * 线程池彻底终止后钩子。
      */
     protected void terminated() {
-        cpuLoadMonitor.shutdown();
+        basicCalculate.shutdown();
     }
 
     /**
@@ -986,7 +1012,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
     public static class DiscardPolicy implements AdaptiveRejectedExecutionHandler {
         @Override
         public void rejectedExecution(Runnable task, AdaptiveBufferedThreadPoolExecutor executor) {
-            log.warn("线程池任务被丢弃，executor={}", executor);
+            // 与原始实现保持一致：丢弃任务但不额外处理。
         }
     }
 
@@ -1024,49 +1050,43 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
 
     /**
      * CPU 负载监控器。
-     * 使用 JDK 自带管理接口周期刷新系统 CPU 负载，避免为线程池模块额外引入第三方依赖。
+     * 使用 OSHI 周期刷新系统 CPU 负载，尽量贴近原始线程池实现的采样方式。
      */
-    static final class CpuLoadMonitor {
+    static final class BasicCalculate {
 
-        private final OperatingSystemMXBean operatingSystemMXBean;
+        private final CentralProcessor processor;
         private final ScheduledExecutorService scheduler;
-        private volatile double cpuLoad = 0D;
+        private volatile double cpuLoadCache = 0D;
 
-        CpuLoadMonitor(String threadNamePrefix) {
-            OperatingSystemMXBean bean = null;
-            if (ManagementFactory.getOperatingSystemMXBean() instanceof OperatingSystemMXBean) {
-                bean = (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
-            }
-            this.operatingSystemMXBean = bean;
+        BasicCalculate(String threadNamePrefix) {
+            SystemInfo systemInfo = new SystemInfo();
+            this.processor = systemInfo.getHardware().getProcessor();
             this.scheduler = Executors.newSingleThreadScheduledExecutor(
                     new NamedThreadFactory((threadNamePrefix == null ? "pool-monitor-" : threadNamePrefix) + "monitor-")
             );
-            this.scheduler.scheduleAtFixedRate(this::refreshCpuLoad, 0L, 5L, TimeUnit.SECONDS);
+            this.scheduler.scheduleAtFixedRate(this::updateCpuLoad, 0L, 5L, TimeUnit.SECONDS);
         }
 
         /**
          * 刷新 CPU 负载缓存。
+         * 这里保持原始线程池的采样思路：取前后两次 tick 的差值计算系统 CPU 负载。
          */
-        private void refreshCpuLoad() {
-            if (operatingSystemMXBean == null) {
-                cpuLoad = 0D;
+        private void updateCpuLoad() {
+            long[] previousTicks = processor.getSystemCpuLoadTicks();
+            try {
+                Thread.sleep(1000L);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
                 return;
             }
-            try {
-                double value = operatingSystemMXBean.getCpuLoad();
-                if (!Double.isNaN(value) && value >= 0D) {
-                    cpuLoad = Math.min(1D, value);
-                }
-            } catch (Exception ex) {
-                cpuLoad = 0D;
-            }
+            cpuLoadCache = processor.getSystemCpuLoadBetweenTicks(previousTicks);
         }
 
         /**
          * 获取 CPU 负载。
          */
-        double getCpuLoad() {
-            return cpuLoad;
+        double getCPULoad() {
+            return cpuLoadCache;
         }
 
         /**

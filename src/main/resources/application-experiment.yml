@@ -1,0 +1,10 @@
+spring:
+  config:
+    activate:
+      on-profile: experiment
+
+threadpool:
+  trade-order:
+    rejection-policy: count
+  rag-query:
+    rejection-policy: count
