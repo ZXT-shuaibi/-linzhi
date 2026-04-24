@@ -1033,7 +1033,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
 
     /**
      * 仅计数不执行策略。
-     * 主要用于压测和实验观察。
+     * 主要用于压测和实验观察，不建议作为真实业务链路的默认策略。
      */
     public static class CountPolicy implements AdaptiveRejectedExecutionHandler {
         private final AtomicInteger count = new AtomicInteger(0);

@@ -1,10 +1,10 @@
-# 邻里知光 - 基于 LBS 的智能社区生活服务平台
+# 邻里知光 - 基于地理 LBS 动态感知算法的知识分享
 
 > 打通"本地知识发布 → 本地发现 → AI 问答 → 社交裂变 → 交易转化"的完整闭环
 
 ## 项目简介
 
-邻里知光是一个基于地理位置的智能社区知识生活服务平台，解决传统 O2O 在高并发下的性能瓶颈、周边检索效率低、本地知识服务缺失等问题。
+邻里知光是一个基于地理位置的智能社区知识生活服务分享，解决传统 O2O 在高并发下的性能瓶颈、周边检索效率低、本地知识服务缺失等问题。
 
 ### 核心特性
 
@@ -281,12 +281,23 @@ feed:segment:{geo_hash}:{timestamp}
 - 动态线程池配置（LADBTP）
 - 任务监控与告警
 - 轻/中/重负载三态入队策略
+- 业务模式 / 实验模式双配置切换
 
 **技术实现**：
 - Buffer Factor 决定扩容强度
 - 重载可强制入队 + 降级
 - `application.yml` 可配置 trade / rag 两类线程池参数
+- 默认走 `business` 配置，拒绝策略使用 `caller-runs`
+- 可切到 `experiment` 配置，拒绝策略使用 `count` 便于压测统计
 - 指标暴露（队列长度、执行时间、拒绝次数）
+
+**模式切换**：
+- 默认模式：`business`
+- 业务模式配置文件：`src/main/resources/application-business.yml`
+- 实验模式配置文件：`src/main/resources/application-experiment.yml`
+- IDEA 启动参数：`--spring.profiles.active=experiment`
+- 命令行启动：`java -jar target/zhiguang-be-0.0.1-SNAPSHOT.jar --spring.profiles.active=experiment`
+- 切回业务模式时，将 `experiment` 改成 `business`，或者不传 profile 直接启动
 
 ### 9. guard - 防护模块 ✅
 **状态**：已实现（基础版）

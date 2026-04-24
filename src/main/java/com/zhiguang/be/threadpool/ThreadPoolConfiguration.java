@@ -70,12 +70,13 @@ public class ThreadPoolConfiguration {
 
     /**
      * 按配置装配拒绝策略。
-     * 默认使用 count，保持与原始线程池实验代码一致，便于统计拒绝次数与观察吞吐变化。
+     * 当前默认值由配置属性控制：业务模式默认 caller-runs，实验模式显式切换为 count。
+     * 如果配置了未知策略，直接在启动期失败，避免静默回落到不符合预期的行为。
      */
     private AdaptiveRejectedExecutionHandler resolveRejectedExecutionHandler(ThreadPoolProperties.PoolProperties properties) {
         String policy = properties.getRejectionPolicy();
-        if (policy == null) {
-            return new AdaptiveBufferedThreadPoolExecutor.CountPolicy();
+        if (policy == null || policy.isBlank()) {
+            return new AdaptiveBufferedThreadPoolExecutor.CallerRunsPolicy();
         }
 
         if ("discard".equalsIgnoreCase(policy)) {
@@ -84,6 +85,9 @@ public class ThreadPoolConfiguration {
         if ("caller-runs".equalsIgnoreCase(policy) || "callerRuns".equalsIgnoreCase(policy)) {
             return new AdaptiveBufferedThreadPoolExecutor.CallerRunsPolicy();
         }
-        return new AdaptiveBufferedThreadPoolExecutor.CountPolicy();
+        if ("count".equalsIgnoreCase(policy)) {
+            return new AdaptiveBufferedThreadPoolExecutor.CountPolicy();
+        }
+        throw new IllegalArgumentException("不支持的线程池拒绝策略: " + policy + "，可选值为 caller-runs / count / discard");
     }
 }
