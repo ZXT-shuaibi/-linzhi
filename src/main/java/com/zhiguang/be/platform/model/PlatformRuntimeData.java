@@ -11,12 +11,16 @@ public record PlatformRuntimeData(
         Instant generatedAt,
         String llmProvider,
         String llmModel,
+        String searchProvider,
+        int ragDefaultTopK,
         boolean socialKafkaEnabled,
         boolean socialRebuildEnabled,
         boolean tradeKafkaEnabled,
         boolean discoverFailOpenEnabled,
         boolean loginBlacklistEnabled,
+        boolean cacheHotkeyEnabled,
         int localCacheMaxEntriesPerRegion,
+        int localCacheRegionCount,
         List<PlatformModuleStatusData> modules
 ) {
 }

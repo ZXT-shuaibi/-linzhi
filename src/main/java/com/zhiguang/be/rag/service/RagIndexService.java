@@ -6,6 +6,7 @@ import com.zhiguang.be.content.dto.PostDetail;
 import com.zhiguang.be.content.dto.PostLocation;
 import com.zhiguang.be.content.dto.PostPageData;
 import com.zhiguang.be.content.service.ContentService;
+import com.zhiguang.be.rag.config.RagProperties;
 import com.zhiguang.be.rag.model.RagReference;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -21,24 +22,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * Lightweight in-memory RAG index.
- * It keeps the current toy-project shape, but improves recall and fallback behavior
- * so we can evolve toward a real vector index later without changing the API surface.
+ * 轻量内存版 RAG 索引服务。
+ * 当前阶段不直接引入向量库，但会把索引切块、召回范围和位置加权整理成可配置形态，
+ * 让后续切到真正的向量检索时不需要改控制器和服务接口。
  */
 @Service
 public class RagIndexService {
 
-    private static final int MAX_TOP_K = 10;
-    private static final int PUBLIC_SEARCH_PAGE_SIZE = 20;
-    private static final int PUBLIC_SEARCH_MAX_PAGES = 3;
-    private static final int MAX_CHUNK_LENGTH = 200;
-    private static final int CHUNK_STEP = 160;
-
     private final ContentService contentService;
+    private final RagProperties ragProperties;
     private final Map<String, IndexedPost> indexStore = new ConcurrentHashMap<String, IndexedPost>();
 
-    public RagIndexService(ContentService contentService) {
+    public RagIndexService(ContentService contentService, RagProperties ragProperties) {
         this.contentService = contentService;
+        this.ragProperties = ragProperties;
     }
 
     public int ensureIndexed(String postId) {
@@ -55,12 +52,22 @@ public class RagIndexService {
     public int reindexSinglePost(String postId) {
         PostDetail detail = contentService.getDetail(postId, null);
         List<IndexedChunk> chunks = buildChunks(detail);
-        indexStore.put(postId, new IndexedPost(postId, detail.title(), chunks));
+        PostLocation location = detail.location();
+        indexStore.put(
+                postId,
+                new IndexedPost(
+                        postId,
+                        detail.title(),
+                        location == null ? null : location.lat(),
+                        location == null ? null : location.lng(),
+                        chunks
+                )
+        );
         return chunks.size();
     }
 
-    public SearchResult search(String question, String postId, int topK) {
-        int safeTopK = Math.max(1, Math.min(topK, MAX_TOP_K));
+    public SearchResult search(String question, String postId, Double lat, Double lng, int topK) {
+        int safeTopK = Math.max(1, Math.min(topK, ragProperties.getQuery().getMaxTopK()));
         String normalizedQuestion = normalizeText(question);
         Set<String> queryTokens = tokenize(normalizedQuestion);
         List<IndexedPost> candidates = StringUtils.hasText(postId)
@@ -74,7 +81,8 @@ public class RagIndexService {
         List<ChunkHit> hits = new ArrayList<ChunkHit>();
         for (IndexedPost post : candidates) {
             for (IndexedChunk chunk : post.chunks()) {
-                int score = score(normalizedQuestion, queryTokens, chunk);
+                int score = score(normalizedQuestion, queryTokens, chunk)
+                        + locationBoost(lat, lng, post.latitude(), post.longitude());
                 if (score > 0) {
                     hits.add(new ChunkHit(post.postId(), post.title(), chunk.chunkId(), chunk.content(), score));
                 }
@@ -111,8 +119,8 @@ public class RagIndexService {
     private List<IndexedPost> searchPublicPosts() {
         List<IndexedPost> posts = new ArrayList<IndexedPost>();
         Set<String> seenPostIds = new HashSet<String>();
-        for (int page = 1; page <= PUBLIC_SEARCH_MAX_PAGES; page++) {
-            PostPageData pageData = contentService.getPublicFeed(null, page, PUBLIC_SEARCH_PAGE_SIZE);
+        for (int page = 1; page <= ragProperties.getQuery().getPublicSearchMaxPages(); page++) {
+            PostPageData pageData = contentService.getPublicFeed(null, page, ragProperties.getQuery().getPublicSearchPageSize());
             if (pageData == null || pageData.items() == null || pageData.items().isEmpty()) {
                 break;
             }
@@ -150,7 +158,6 @@ public class RagIndexService {
         appendSectionChunks(chunks, detail.postId(), "title", detail.title(), 4);
         appendSectionChunks(chunks, detail.postId(), "summary", detail.summary(), 3);
         appendSectionChunks(chunks, detail.postId(), "tags", detail.tags() == null ? null : String.join(" ", detail.tags()), 2);
-        appendSectionChunks(chunks, detail.postId(), "content_url", detail.contentUrl(), 1);
         appendAuthorChunks(chunks, detail.postId(), detail.author());
         appendLocationChunks(chunks, detail.postId(), detail.location());
 
@@ -211,13 +218,15 @@ public class RagIndexService {
     private List<String> splitIntoChunks(String text) {
         List<String> parts = new ArrayList<String>();
         int index = 0;
+        int maxChunkLength = Math.max(32, ragProperties.getIndex().getMaxChunkLength());
+        int chunkStep = Math.max(8, Math.min(ragProperties.getIndex().getChunkStep(), maxChunkLength));
         while (index < text.length()) {
-            int end = Math.min(index + MAX_CHUNK_LENGTH, text.length());
+            int end = Math.min(index + maxChunkLength, text.length());
             parts.add(text.substring(index, end));
             if (end >= text.length()) {
                 break;
             }
-            index += CHUNK_STEP;
+            index += chunkStep;
         }
         return parts;
     }
@@ -237,9 +246,6 @@ public class RagIndexService {
         }
         if ("location".equals(section)) {
             return "Location: " + value;
-        }
-        if ("content_url".equals(section)) {
-            return "Content URL: " + value;
         }
         return value;
     }
@@ -288,6 +294,30 @@ public class RagIndexService {
         return score;
     }
 
+    private int locationBoost(Double queryLat, Double queryLng, Double postLat, Double postLng) {
+        if (queryLat == null || queryLng == null || postLat == null || postLng == null) {
+            return 0;
+        }
+        double radius = Math.max(1D, ragProperties.getQuery().getNearbyBoostRadiusMeters());
+        double distanceMeters = computeDistanceMeters(queryLat.doubleValue(), queryLng.doubleValue(), postLat.doubleValue(), postLng.doubleValue());
+        if (distanceMeters > radius) {
+            return 0;
+        }
+        double ratio = 1D - (distanceMeters / radius);
+        return (int) Math.round(ratio * ragProperties.getQuery().getNearbyBoostScore());
+    }
+
+    private double computeDistanceMeters(double lat1, double lng1, double lat2, double lng2) {
+        double earthRadius = 6371000D;
+        double dLat = Math.toRadians(lat2 - lat1);
+        double dLng = Math.toRadians(lng2 - lng1);
+        double a = Math.sin(dLat / 2D) * Math.sin(dLat / 2D)
+                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                * Math.sin(dLng / 2D) * Math.sin(dLng / 2D);
+        double c = 2D * Math.atan2(Math.sqrt(a), Math.sqrt(1D - a));
+        return earthRadius * c;
+    }
+
     private boolean containsCjk(String token) {
         return token.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
     }
@@ -302,6 +332,8 @@ public class RagIndexService {
     private record IndexedPost(
             String postId,
             String title,
+            Double latitude,
+            Double longitude,
             List<IndexedChunk> chunks
     ) {
     }

@@ -2,6 +2,7 @@ package com.zhiguang.be.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.llm.service.RagAnswerService;
+import com.zhiguang.be.rag.config.RagProperties;
 import com.zhiguang.be.rag.model.RagQueryRequest;
 import com.zhiguang.be.rag.model.SseChunk;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -24,24 +25,27 @@ public class RagQueryService {
     private final RagAnswerService ragAnswerService;
     private final ObjectMapper objectMapper;
     private final Executor ragQueryExecutor;
+    private final RagProperties ragProperties;
 
     public RagQueryService(
             RagIndexService ragIndexService,
             RagAnswerService ragAnswerService,
             ObjectMapper objectMapper,
-            @Qualifier("ragQueryExecutor") Executor ragQueryExecutor
+            @Qualifier("ragQueryExecutor") Executor ragQueryExecutor,
+            RagProperties ragProperties
     ) {
         this.ragIndexService = ragIndexService;
         this.ragAnswerService = ragAnswerService;
         this.objectMapper = objectMapper;
         this.ragQueryExecutor = ragQueryExecutor;
+        this.ragProperties = ragProperties;
     }
 
     /**
      * 发起流式问答。
      */
     public SseEmitter stream(RagQueryRequest request) {
-        SseEmitter emitter = new SseEmitter(60_000L);
+        SseEmitter emitter = new SseEmitter(ragProperties.getStream().getTimeoutMillis());
         CompletableFuture.runAsync(() -> doStream(request, emitter), ragQueryExecutor);
         return emitter;
     }
@@ -51,15 +55,21 @@ public class RagQueryService {
      */
     private void doStream(RagQueryRequest request, SseEmitter emitter) {
         try {
-            int topK = request.topK() == null ? 5 : request.topK();
-            RagIndexService.SearchResult searchResult = ragIndexService.search(request.question(), request.postId(), topK);
+            int topK = normalizeTopK(request.topK());
+            RagIndexService.SearchResult searchResult = ragIndexService.search(
+                    request.question(),
+                    request.postId(),
+                    request.lat(),
+                    request.lng(),
+                    topK
+            );
             String answer = ragAnswerService.buildAnswer(request.question(), toContexts(searchResult.hits()));
             List<com.zhiguang.be.rag.model.RagReference> references = searchResult.references();
 
             int seq = 1;
-            for (String piece : splitAnswer(answer, 48)) {
+            for (String piece : splitAnswer(answer, ragProperties.getStream().getChunkSize())) {
                 send(emitter, "message", new SseChunk("message", seq++, piece, references, null, null));
-                sleep(80L);
+                sleep(ragProperties.getStream().getChunkDelayMillis());
             }
             send(emitter, "done", new SseChunk("done", seq, "", references, "stop", null));
             emitter.complete();
@@ -71,6 +81,18 @@ public class RagQueryService {
             }
             emitter.completeWithError(ex);
         }
+    }
+
+    /**
+     * 规范化 topK，避免调用方传入过大值导致基础版检索退化。
+     */
+    private int normalizeTopK(Integer topK) {
+        int defaultTopK = Math.max(1, ragProperties.getQuery().getDefaultTopK());
+        int maxTopK = Math.max(defaultTopK, ragProperties.getQuery().getMaxTopK());
+        if (topK == null || topK.intValue() <= 0) {
+            return defaultTopK;
+        }
+        return Math.min(topK.intValue(), maxTopK);
     }
 
     /**

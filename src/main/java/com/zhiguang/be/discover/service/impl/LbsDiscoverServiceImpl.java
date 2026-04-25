@@ -5,6 +5,7 @@ import com.zhiguang.be.cache.CacheRegions;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.discover.config.DiscoverProperties;
 import com.zhiguang.be.discover.model.NearbyItem;
 import com.zhiguang.be.discover.model.NearbySearchRequest;
 import com.zhiguang.be.discover.model.NearbySearchResponse;
@@ -54,18 +55,11 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
 
     private static final Logger log = LoggerFactory.getLogger(LbsDiscoverServiceImpl.class);
 
-    private static final String DEFAULT_TYPE = "knowledge";
     private static final String GEO_KEY_PREFIX = "geo:";
     private static final String CACHE_KEY_PREFIX = "lbs:result:";
     private static final String CACHE_LOCK_KEY_PREFIX = "lbs:lock:";
     private static final String CACHE_VERSION_KEY_PREFIX = "lbs:version:";
     private static final String CONTENT_KEY_PREFIX = "lbs:content:";
-    private static final Duration CACHE_TTL = Duration.ofSeconds(120);
-    private static final Duration LOCAL_CACHE_TTL = Duration.ofSeconds(5);
-    private static final Duration LOCK_TTL = Duration.ofSeconds(10);
-    private static final Duration LOCK_WAIT_TIMEOUT = Duration.ofMillis(800);
-    private static final Duration LOCK_RETRY_INTERVAL = Duration.ofMillis(40);
-    private static final int MAX_REDIS_FETCH_COUNT = 1_000;
     private static final DefaultRedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
         "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
         Long.class
@@ -74,6 +68,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private final StringRedisTemplate redisTemplate;
     private final CacheService cacheService;
     private final ObjectMapper objectMapper;
+    private final DiscoverProperties discoverProperties;
 
     @Value("${discover.lbs.fail-open-on-search-error:false}")
     private boolean failOpenOnSearchError;
@@ -88,11 +83,13 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     public LbsDiscoverServiceImpl(
         StringRedisTemplate redisTemplate,
         CacheService cacheService,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        DiscoverProperties discoverProperties
     ) {
         this.redisTemplate = redisTemplate;
         this.cacheService = cacheService;
         this.objectMapper = objectMapper;
+        this.discoverProperties = discoverProperties;
     }
 
     /**
@@ -132,7 +129,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private NearbySearchResponse searchWithLock(NearbySearchRequest request, String type, String cacheKey) {
         String lockKey = CACHE_LOCK_KEY_PREFIX + cacheKey;
         String lockValue = UUID.randomUUID().toString();
-        long deadlineNanos = System.nanoTime() + LOCK_WAIT_TIMEOUT.toNanos();
+        long deadlineNanos = System.nanoTime() + Duration.ofMillis(discoverProperties.getLockWaitTimeoutMillis()).toNanos();
 
         while (System.nanoTime() < deadlineNanos) {
             if (tryLock(lockKey, lockValue)) {
@@ -155,7 +152,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                 return cachedResponse.get();
             }
 
-            sleepQuietly(LOCK_RETRY_INTERVAL);
+            sleepQuietly(Duration.ofMillis(discoverProperties.getLockRetryIntervalMillis()));
         }
 
         log.warn("LBS nearby search lock wait timed out. key={}, page={}, size={}", cacheKey, request.page(), request.size());
@@ -375,7 +372,12 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         if (cachedResponse == null) {
             return Optional.empty();
         }
-        cacheService.putLocal(CacheRegions.DISCOVER_NEARBY, cacheKey, cachedResponse, LOCAL_CACHE_TTL);
+        cacheService.putLocal(
+                CacheRegions.DISCOVER_NEARBY,
+                cacheKey,
+                cachedResponse,
+                Duration.ofSeconds(discoverProperties.getLocalCacheTtlSeconds())
+        );
         return Optional.of(cachedResponse);
     }
 
@@ -387,8 +389,13 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      * @param response 搜索结果
      */
     private void cacheResponse(String cacheKey, NearbySearchResponse response) {
-        cacheService.putRedisJson(cacheKey, response, CACHE_TTL);
-        cacheService.putLocal(CacheRegions.DISCOVER_NEARBY, cacheKey, response, LOCAL_CACHE_TTL);
+        cacheService.putRedisJson(cacheKey, response, Duration.ofSeconds(discoverProperties.getCacheTtlSeconds()));
+        cacheService.putLocal(
+                CacheRegions.DISCOVER_NEARBY,
+                cacheKey,
+                response,
+                Duration.ofSeconds(discoverProperties.getLocalCacheTtlSeconds())
+        );
     }
 
     /**
@@ -588,21 +595,21 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      */
     private String normalizeType(String type) {
         if (!StringUtils.hasText(type)) {
-            return DEFAULT_TYPE;
+            return discoverProperties.getDefaultType();
         }
 
         String normalized = sanitizeSegment(type);
         if ("post".equals(normalized) || "mixed".equals(normalized)) {
-            return DEFAULT_TYPE;
+            return discoverProperties.getDefaultType();
         }
-        return StringUtils.hasText(normalized) ? normalized : DEFAULT_TYPE;
+        return StringUtils.hasText(normalized) ? normalized : discoverProperties.getDefaultType();
     }
 
     /**
      * 灏嗗唴閮ㄥ瓨鍌ㄧ被鍨嬫槧灏勪负瀵瑰 API 绾﹀畾鐨勫疄浣撶被鍨嬨€?
      */
     private String externalType(String normalizedType) {
-        if (DEFAULT_TYPE.equals(normalizedType)) {
+        if (discoverProperties.getDefaultType().equals(normalizedType)) {
             return "post";
         }
         return normalizedType;
@@ -656,7 +663,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private int calculateRedisCount(NearbySearchRequest request) {
         long requestedWindow = Math.max(1L, (long) request.page() * request.size());
         long bufferedWindow = requestedWindow + request.size();
-        return Math.min(safeToInt(bufferedWindow), MAX_REDIS_FETCH_COUNT);
+        return Math.min(safeToInt(bufferedWindow), discoverProperties.getMaxRedisFetchCount());
     }
 
     /**
@@ -714,9 +721,9 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
 
         validateCoordinate("lat", request.lat(), -90.0, 90.0);
         validateCoordinate("lng", request.lng(), -180.0, 180.0);
-        validateIntegerRange("radius", request.radius(), 100, 50_000);
+        validateIntegerRange("radius", request.radius(), discoverProperties.getMinRadiusMeters(), discoverProperties.getMaxRadiusMeters());
         validateIntegerRange("page", request.page(), 1, Integer.MAX_VALUE);
-        validateIntegerRange("size", request.size(), 1, 100);
+        validateIntegerRange("size", request.size(), 1, discoverProperties.getMaxPageSize());
     }
 
     /**
@@ -767,7 +774,11 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      */
     private boolean tryLock(String lockKey, String lockValue) {
         try {
-            Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, lockValue, LOCK_TTL);
+            Boolean locked = redisTemplate.opsForValue().setIfAbsent(
+                    lockKey,
+                    lockValue,
+                    Duration.ofSeconds(discoverProperties.getLockTtlSeconds())
+            );
             return Boolean.TRUE.equals(locked);
         } catch (Exception ex) {
             log.warn("Failed to acquire LBS cache lock. key={}", lockKey, ex);

@@ -1727,6 +1727,79 @@ paths:
                         $ref: '#/components/schemas/MetricsOverview'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /platform/runtime:
+    get:
+      tags: [Ops]
+      summary: 查询平台运行摘要
+      operationId: getPlatformRuntime
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PlatformRuntimeData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/cache/regions:
+    get:
+      tags: [Ops]
+      summary: 查询本地缓存区域摘要
+      operationId: listPlatformCacheRegions
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PlatformCacheRegionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/cache/evict:
+    post:
+      tags: [Ops]
+      summary: 手动清理缓存
+      operationId: evictPlatformCache
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformCacheEvictRequest'
+      responses:
+        '200':
+          description: 清理成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
 components:
   securitySchemes:
     BearerAuth:
@@ -2959,6 +3032,67 @@ components:
         observedAt:
           type: string
           format: date-time
+    PlatformModuleStatusData:
+      type: object
+      properties:
+        module:
+          type: string
+        status:
+          type: string
+        note:
+          type: string
+    PlatformRuntimeData:
+      type: object
+      properties:
+        applicationName:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        llmProvider:
+          type: string
+        llmModel:
+          type: string
+        searchProvider:
+          type: string
+        ragDefaultTopK:
+          type: integer
+        socialKafkaEnabled:
+          type: boolean
+        socialRebuildEnabled:
+          type: boolean
+        tradeKafkaEnabled:
+          type: boolean
+        discoverFailOpenEnabled:
+          type: boolean
+        loginBlacklistEnabled:
+          type: boolean
+        cacheHotkeyEnabled:
+          type: boolean
+        localCacheMaxEntriesPerRegion:
+          type: integer
+        localCacheRegionCount:
+          type: integer
+        modules:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformModuleStatusData'
+    PlatformCacheRegionData:
+      type: object
+      properties:
+        region:
+          type: string
+        size:
+          type: integer
+    PlatformCacheEvictRequest:
+      type: object
+      properties:
+        region:
+          type: string
+        localKey:
+          type: string
+        redisKey:
+          type: string
     CounterEventPayload:
       type: object
       properties:

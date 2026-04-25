@@ -102,6 +102,47 @@ llm:
     api-key:
     timeout-seconds: 10
 
+search:
+  provider: db
+  default-page-size: 20
+  max-page-size: 20
+  fetch-multiplier: 3
+  max-fetch-limit: 100
+  default-suggest-size: 10
+  max-suggest-size: 20
+  snippet-length: 80
+  enable-tag-suggest: true
+
+rag:
+  query:
+    default-top-k: 5
+    max-top-k: 10
+    public-search-page-size: 20
+    public-search-max-pages: 3
+    nearby-boost-radius-meters: 3000
+    nearby-boost-score: 8
+  stream:
+    timeout-millis: 60000
+    chunk-size: 48
+    chunk-delay-millis: 80
+  index:
+    max-chunk-length: 200
+    chunk-step: 160
+
+discover:
+  lbs:
+    default-type: knowledge
+    cache-ttl-seconds: 120
+    local-cache-ttl-seconds: 5
+    lock-ttl-seconds: 10
+    lock-wait-timeout-millis: 800
+    lock-retry-interval-millis: 40
+    max-redis-fetch-count: 1000
+    min-radius-meters: 100
+    max-radius-meters: 50000
+    max-page-size: 100
+    fail-open-on-search-error: false
+
 social:
   relation:
     rate-limit:

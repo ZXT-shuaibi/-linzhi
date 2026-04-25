@@ -63,4 +63,14 @@
          order by p.is_top desc, p.publish_time desc, p.id desc
          limit #{limit}
     </select>
+
+    <select id="suggestTagValues" resultType="string">
+        select cast(p.tags as varchar)
+          from know_posts p
+         where p.status = 'published'
+           and p.visible = 'public'
+           and lower(cast(coalesce(p.tags, '[]') as varchar)) like #{keywordLike}
+         order by p.is_top desc, p.publish_time desc, p.id desc
+         limit #{limit}
+    </select>
 </mapper>

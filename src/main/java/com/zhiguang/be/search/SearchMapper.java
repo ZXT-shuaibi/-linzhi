@@ -32,4 +32,12 @@ public interface SearchMapper {
             @Param("keywordLike") String keywordLike,
             @Param("limit") int limit
     );
+
+    /**
+     * 查询标签联想原始值。
+     */
+    List<String> suggestTagValues(
+            @Param("keywordLike") String keywordLike,
+            @Param("limit") int limit
+    );
 }

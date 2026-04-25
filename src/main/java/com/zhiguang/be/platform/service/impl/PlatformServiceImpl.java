@@ -4,6 +4,7 @@ import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.platform.model.PlatformCacheEvictRequest;
+import com.zhiguang.be.platform.model.PlatformCacheRegionData;
 import com.zhiguang.be.platform.model.PlatformModuleStatusData;
 import com.zhiguang.be.platform.model.PlatformRuntimeData;
 import com.zhiguang.be.platform.service.PlatformService;
@@ -14,7 +15,9 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 平台治理服务实现。
@@ -30,6 +33,10 @@ public class PlatformServiceImpl implements PlatformService {
     private String llmProvider;
     @Value("${llm.model-name:template-llm}")
     private String llmModel;
+    @Value("${search.provider:db}")
+    private String searchProvider;
+    @Value("${rag.query.default-top-k:5}")
+    private int ragDefaultTopK;
     @Value("${social.counter.kafka.enabled:false}")
     private boolean socialKafkaEnabled;
     @Value("${social.rebuild.enabled:false}")
@@ -42,6 +49,8 @@ public class PlatformServiceImpl implements PlatformService {
     private boolean loginBlacklistEnabled;
     @Value("${cache.local.max-entries-per-region:1024}")
     private int localCacheMaxEntriesPerRegion;
+    @Value("${cache.hotkey.enabled:true}")
+    private boolean cacheHotkeyEnabled;
 
     public PlatformServiceImpl(CacheService cacheService) {
         this.cacheService = cacheService;
@@ -54,14 +63,28 @@ public class PlatformServiceImpl implements PlatformService {
                 Instant.now(),
                 llmProvider,
                 llmModel,
+                searchProvider,
+                ragDefaultTopK,
                 socialKafkaEnabled,
                 socialRebuildEnabled,
                 tradeKafkaEnabled,
                 discoverFailOpenEnabled,
                 loginBlacklistEnabled,
+                cacheHotkeyEnabled,
                 localCacheMaxEntriesPerRegion,
+                cacheService.localRegionCount(),
                 buildModuleStatuses()
         );
+    }
+
+    @Override
+    public List<PlatformCacheRegionData> listCacheRegions() {
+        List<PlatformCacheRegionData> regions = new ArrayList<PlatformCacheRegionData>();
+        for (Map.Entry<String, Integer> entry : cacheService.snapshotLocalRegionSizes().entrySet()) {
+            regions.add(new PlatformCacheRegionData(entry.getKey(), entry.getValue().intValue()));
+        }
+        regions.sort(Comparator.comparingInt(PlatformCacheRegionData::size).reversed().thenComparing(PlatformCacheRegionData::region));
+        return regions;
     }
 
     @Override

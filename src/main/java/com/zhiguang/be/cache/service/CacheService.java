@@ -98,6 +98,24 @@ public class CacheService {
     }
 
     /**
+     * 获取当前本地缓存区域数量。
+     */
+    public int localRegionCount() {
+        return localRegions.size();
+    }
+
+    /**
+     * 快照当前本地缓存区域大小。
+     */
+    public Map<String, Integer> snapshotLocalRegionSizes() {
+        Map<String, Integer> snapshot = new ConcurrentHashMap<String, Integer>();
+        for (Map.Entry<String, ConcurrentHashMap<String, LocalCacheEntry>> entry : localRegions.entrySet()) {
+            snapshot.put(entry.getKey(), entry.getValue().size());
+        }
+        return snapshot;
+    }
+
+    /**
      * 读取 Redis 字符串缓存。
      */
     public String getRedisString(String key) {
