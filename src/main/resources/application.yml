@@ -124,6 +124,10 @@ search:
     auto-rebuild-on-startup: false
     rebuild-batch-size: 200
     use-ik-analyzer: false
+  outbox:
+    kafka-enabled: false
+    topic: canal-outbox
+    group-id: search-index-consumer
 
 rag:
   query:

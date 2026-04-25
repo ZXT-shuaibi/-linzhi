@@ -21,6 +21,7 @@ public class SearchProperties {
     private int snippetLength = 80;
     private boolean enableTagSuggest = true;
     private final Es es = new Es();
+    private final Outbox outbox = new Outbox();
 
     public String getProvider() {
         return provider;
@@ -96,6 +97,10 @@ public class SearchProperties {
 
     public Es getEs() {
         return es;
+    }
+
+    public Outbox getOutbox() {
+        return outbox;
     }
 
     /**
@@ -201,6 +206,40 @@ public class SearchProperties {
 
         public void setUseIkAnalyzer(boolean useIkAnalyzer) {
             this.useIkAnalyzer = useIkAnalyzer;
+        }
+    }
+
+    /**
+     * 搜索索引 outbox 消费配置。
+     */
+    public static class Outbox {
+
+        private boolean kafkaEnabled = false;
+        private String topic = "canal-outbox";
+        private String groupId = "search-index-consumer";
+
+        public boolean isKafkaEnabled() {
+            return kafkaEnabled;
+        }
+
+        public void setKafkaEnabled(boolean kafkaEnabled) {
+            this.kafkaEnabled = kafkaEnabled;
+        }
+
+        public String getTopic() {
+            return topic;
+        }
+
+        public void setTopic(String topic) {
+            this.topic = topic;
+        }
+
+        public String getGroupId() {
+            return groupId;
+        }
+
+        public void setGroupId(String groupId) {
+            this.groupId = groupId;
         }
     }
 }
