@@ -129,6 +129,8 @@ public class RagProperties {
 
         private int maxChunkLength = 200;
         private int chunkStep = 160;
+        private int fetchTimeoutSeconds = 5;
+        private boolean fallbackToMetadata = true;
 
         public int getMaxChunkLength() {
             return maxChunkLength;
@@ -144,6 +146,22 @@ public class RagProperties {
 
         public void setChunkStep(int chunkStep) {
             this.chunkStep = chunkStep;
+        }
+
+        public int getFetchTimeoutSeconds() {
+            return fetchTimeoutSeconds;
+        }
+
+        public void setFetchTimeoutSeconds(int fetchTimeoutSeconds) {
+            this.fetchTimeoutSeconds = fetchTimeoutSeconds;
+        }
+
+        public boolean isFallbackToMetadata() {
+            return fallbackToMetadata;
+        }
+
+        public void setFallbackToMetadata(boolean fallbackToMetadata) {
+            this.fallbackToMetadata = fallbackToMetadata;
         }
     }
 }

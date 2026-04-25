@@ -13,10 +13,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * RAG 问答服务。
- * 当前基础版通过内存索引做简化召回，再交给 llm 模块组织回答内容。
+ * 当前先用轻量索引做召回，再交给 llm 模块生成回答内容。
  */
 @Service
 public class RagQueryService {
@@ -51,7 +52,7 @@ public class RagQueryService {
     }
 
     /**
-     * 在后台异步输出 SSE 分片。
+     * 后台异步输出 SSE 分片。
      */
     private void doStream(RagQueryRequest request, SseEmitter emitter) {
         try {
@@ -63,28 +64,38 @@ public class RagQueryService {
                     request.lng(),
                     topK
             );
-            String answer = ragAnswerService.buildAnswer(request.question(), toContexts(searchResult.hits()));
+            List<RagAnswerService.Context> contexts = toContexts(searchResult.hits());
             List<com.zhiguang.be.rag.model.RagReference> references = searchResult.references();
 
-            int seq = 1;
-            for (String piece : splitAnswer(answer, ragProperties.getStream().getChunkSize())) {
-                send(emitter, "message", new SseChunk("message", seq++, piece, references, null, null));
-                sleep(ragProperties.getStream().getChunkDelayMillis());
+            AtomicInteger seq = new AtomicInteger(1);
+            boolean streamed = ragAnswerService.streamAnswer(
+                    request.question(),
+                    contexts,
+                    piece -> sendQuietly(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null))
+            );
+
+            if (!streamed) {
+                String answer = ragAnswerService.buildAnswer(request.question(), contexts);
+                for (String piece : splitAnswer(answer, ragProperties.getStream().getChunkSize())) {
+                    send(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null));
+                    sleep(ragProperties.getStream().getChunkDelayMillis());
+                }
             }
-            send(emitter, "done", new SseChunk("done", seq, "", references, "stop", null));
+
+            send(emitter, "done", new SseChunk("done", seq.get(), "", references, "stop", null));
             emitter.complete();
         } catch (Exception ex) {
             try {
                 send(emitter, "error", new SseChunk("error", 1, "", List.of(), null, "RAG_INTERNAL_ERROR"));
             } catch (Exception ignored) {
-                // 这里不再向外抛出，避免覆盖原始异常状态。
+                // 这里不再继续向外抛异常，避免覆盖原始错误状态。
             }
             emitter.completeWithError(ex);
         }
     }
 
     /**
-     * 规范化 topK，避免调用方传入过大值导致基础版检索退化。
+     * 规范化 topK，避免调用方传入过大值导致检索退化。
      */
     private int normalizeTopK(Integer topK) {
         int defaultTopK = Math.max(1, ragProperties.getQuery().getDefaultTopK());
@@ -129,6 +140,17 @@ public class RagQueryService {
                         .name(eventName)
                         .data(objectMapper.writeValueAsString(chunk))
         );
+    }
+
+    /**
+     * 安静发送单个流式片段。
+     */
+    private void sendQuietly(SseEmitter emitter, String eventName, SseChunk chunk) {
+        try {
+            send(emitter, eventName, chunk);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to send SSE chunk", ex);
+        }
     }
 
     /**

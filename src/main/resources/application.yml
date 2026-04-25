@@ -101,6 +101,9 @@ llm:
     endpoint:
     api-key:
     timeout-seconds: 10
+    stream-enabled: false
+    temperature: 0.2
+    max-tokens: 1024
 
 canal:
   enabled: false
@@ -157,6 +160,8 @@ rag:
   index:
     max-chunk-length: 200
     chunk-step: 160
+    fetch-timeout-seconds: 5
+    fallback-to-metadata: true
 
 discover:
   lbs:

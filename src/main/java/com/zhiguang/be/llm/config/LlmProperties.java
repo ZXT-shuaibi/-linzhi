@@ -44,13 +44,16 @@ public class LlmProperties {
     }
 
     /**
-     * HTTP 模型接入配置。
+     * HTTP 模型网关配置。
      */
     public static class Http {
 
         private String endpoint;
         private String apiKey;
         private int timeoutSeconds = 10;
+        private boolean streamEnabled = false;
+        private double temperature = 0.2D;
+        private int maxTokens = 1024;
 
         public String getEndpoint() {
             return endpoint;
@@ -74,6 +77,30 @@ public class LlmProperties {
 
         public void setTimeoutSeconds(int timeoutSeconds) {
             this.timeoutSeconds = timeoutSeconds;
+        }
+
+        public boolean isStreamEnabled() {
+            return streamEnabled;
+        }
+
+        public void setStreamEnabled(boolean streamEnabled) {
+            this.streamEnabled = streamEnabled;
+        }
+
+        public double getTemperature() {
+            return temperature;
+        }
+
+        public void setTemperature(double temperature) {
+            this.temperature = temperature;
+        }
+
+        public int getMaxTokens() {
+            return maxTokens;
+        }
+
+        public void setMaxTokens(int maxTokens) {
+            this.maxTokens = maxTokens;
         }
     }
 }

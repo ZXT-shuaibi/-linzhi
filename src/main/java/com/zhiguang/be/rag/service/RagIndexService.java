@@ -1,15 +1,14 @@
 package com.zhiguang.be.rag.service;
 
-import com.zhiguang.be.content.dto.PostAuthor;
-import com.zhiguang.be.content.dto.PostCard;
-import com.zhiguang.be.content.dto.PostDetail;
-import com.zhiguang.be.content.dto.PostLocation;
-import com.zhiguang.be.content.dto.PostPageData;
-import com.zhiguang.be.content.service.ContentService;
+import com.zhiguang.be.content.mapper.KnowPostMapper;
+import com.zhiguang.be.content.model.KnowPostEntity;
+import com.zhiguang.be.content.model.KnowPostFeedRow;
 import com.zhiguang.be.rag.config.RagProperties;
 import com.zhiguang.be.rag.model.RagReference;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -22,50 +21,82 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * 轻量内存版 RAG 索引服务。
- * 当前阶段不直接引入向量库，但会把索引切块、召回范围和位置加权整理成可配置形态，
- * 让后续切到真正的向量检索时不需要改控制器和服务接口。
+ * RAG 索引服务。
+ * 参考 zhiguang 的实现思路，优先根据正文地址抓取内容并切成多个检索分片，
+ * 同时结合内容指纹判断是否需要重建；如果正文暂时不可读，再回退到元数据切块，
+ * 保证 linli 在轻量环境下依旧能稳定工作。
  */
 @Service
 public class RagIndexService {
 
-    private final ContentService contentService;
+    private static final String STATUS_PUBLISHED = "published";
+    private static final String VISIBILITY_PUBLIC = "public";
+
+    private final KnowPostMapper knowPostMapper;
     private final RagProperties ragProperties;
+    private final RestTemplate restTemplate;
     private final Map<String, IndexedPost> indexStore = new ConcurrentHashMap<String, IndexedPost>();
 
-    public RagIndexService(ContentService contentService, RagProperties ragProperties) {
-        this.contentService = contentService;
+    public RagIndexService(KnowPostMapper knowPostMapper, RagProperties ragProperties) {
+        this.knowPostMapper = knowPostMapper;
         this.ragProperties = ragProperties;
+        this.restTemplate = createRestTemplate(ragProperties);
     }
 
+    /**
+     * 确保指定内容已构建索引。
+     */
     public int ensureIndexed(String postId) {
         if (!StringUtils.hasText(postId)) {
             return 0;
         }
+        KnowPostEntity entity = knowPostMapper.findById(postId);
+        if (entity == null || !isIndexable(entity)) {
+            indexStore.remove(postId);
+            return 0;
+        }
         IndexedPost indexedPost = indexStore.get(postId);
-        if (indexedPost != null) {
+        if (indexedPost != null && isUpToDate(entity, indexedPost)) {
             return indexedPost.chunks().size();
         }
         return reindexSinglePost(postId);
     }
 
+    /**
+     * 重建单篇内容索引。
+     */
     public int reindexSinglePost(String postId) {
-        PostDetail detail = contentService.getDetail(postId, null);
-        List<IndexedChunk> chunks = buildChunks(detail);
-        PostLocation location = detail.location();
+        KnowPostEntity entity = knowPostMapper.findById(postId);
+        if (entity == null || !isIndexable(entity)) {
+            indexStore.remove(postId);
+            return 0;
+        }
+
+        String content = fetchContent(entity.contentUrl());
+        List<IndexedChunk> chunks = buildChunks(entity, content);
+        if (chunks.isEmpty()) {
+            indexStore.remove(postId);
+            return 0;
+        }
+
         indexStore.put(
                 postId,
                 new IndexedPost(
                         postId,
-                        detail.title(),
-                        location == null ? null : location.lat(),
-                        location == null ? null : location.lng(),
+                        entity.title(),
+                        entity.latitude(),
+                        entity.longitude(),
+                        entity.contentSha256(),
+                        entity.contentEtag(),
                         chunks
                 )
         );
         return chunks.size();
     }
 
+    /**
+     * 执行检索并返回命中分片和引用信息。
+     */
     public SearchResult search(String question, String postId, Double lat, Double lng, int topK) {
         int safeTopK = Math.max(1, Math.min(topK, ragProperties.getQuery().getMaxTopK()));
         String normalizedQuestion = normalizeText(question);
@@ -107,6 +138,44 @@ public class RagIndexService {
         return new SearchResult(selected, references);
     }
 
+    private RestTemplate createRestTemplate(RagProperties ragProperties) {
+        int timeoutMillis = Math.max(1, ragProperties.getIndex().getFetchTimeoutSeconds()) * 1000;
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(timeoutMillis);
+        factory.setReadTimeout(timeoutMillis);
+        return new RestTemplate(factory);
+    }
+
+    private boolean isIndexable(KnowPostEntity entity) {
+        return entity != null
+                && STATUS_PUBLISHED.equalsIgnoreCase(entity.status())
+                && VISIBILITY_PUBLIC.equalsIgnoreCase(entity.visible());
+    }
+
+    private boolean isUpToDate(KnowPostEntity entity, IndexedPost indexedPost) {
+        if (indexedPost == null) {
+            return false;
+        }
+        if (hasText(entity.contentSha256()) && hasText(indexedPost.contentSha256())) {
+            return entity.contentSha256().equals(indexedPost.contentSha256());
+        }
+        if (hasText(entity.contentEtag()) && hasText(indexedPost.contentEtag())) {
+            return entity.contentEtag().equals(indexedPost.contentEtag());
+        }
+        return false;
+    }
+
+    private String fetchContent(String contentUrl) {
+        if (!hasText(contentUrl)) {
+            return null;
+        }
+        try {
+            return restTemplate.getForObject(contentUrl, String.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
     private List<IndexedPost> searchSinglePost(String postId) {
         int chunkCount = ensureIndexed(postId);
         if (chunkCount <= 0) {
@@ -119,22 +188,26 @@ public class RagIndexService {
     private List<IndexedPost> searchPublicPosts() {
         List<IndexedPost> posts = new ArrayList<IndexedPost>();
         Set<String> seenPostIds = new HashSet<String>();
-        for (int page = 1; page <= ragProperties.getQuery().getPublicSearchMaxPages(); page++) {
-            PostPageData pageData = contentService.getPublicFeed(null, page, ragProperties.getQuery().getPublicSearchPageSize());
-            if (pageData == null || pageData.items() == null || pageData.items().isEmpty()) {
+        int pageSize = Math.max(1, ragProperties.getQuery().getPublicSearchPageSize());
+        int maxPages = Math.max(1, ragProperties.getQuery().getPublicSearchMaxPages());
+        for (int page = 1; page <= maxPages; page++) {
+            int offset = (page - 1) * pageSize;
+            List<KnowPostFeedRow> rows = knowPostMapper.listFeedPublic(pageSize + 1, offset);
+            if (rows == null || rows.isEmpty()) {
                 break;
             }
-            for (PostCard item : pageData.items()) {
-                if (item == null || !StringUtils.hasText(item.postId()) || !seenPostIds.add(item.postId())) {
+            List<KnowPostFeedRow> pageRows = rows.size() > pageSize ? rows.subList(0, pageSize) : rows;
+            for (KnowPostFeedRow row : pageRows) {
+                if (row == null || !hasText(row.postId()) || !seenPostIds.add(row.postId())) {
                     continue;
                 }
-                ensureIndexed(item.postId());
-                IndexedPost indexedPost = indexStore.get(item.postId());
+                ensureIndexed(row.postId());
+                IndexedPost indexedPost = indexStore.get(row.postId());
                 if (indexedPost != null) {
                     posts.add(indexedPost);
                 }
             }
-            if (!pageData.hasMore()) {
+            if (rows.size() <= pageSize) {
                 break;
             }
         }
@@ -147,79 +220,100 @@ public class RagIndexService {
         }
         IndexedPost indexedPost = candidates.get(0);
         return indexedPost.chunks().stream()
-                .sorted(Comparator.comparingInt(IndexedChunk::weight).reversed().thenComparing(IndexedChunk::chunkId))
+                .sorted(Comparator
+                        .comparingInt(IndexedChunk::weight).reversed()
+                        .thenComparingInt(IndexedChunk::position))
                 .limit(topK)
                 .map(chunk -> new ChunkHit(indexedPost.postId(), indexedPost.title(), chunk.chunkId(), chunk.content(), 1))
                 .collect(Collectors.toList());
     }
 
-    private List<IndexedChunk> buildChunks(PostDetail detail) {
+    private List<IndexedChunk> buildChunks(KnowPostEntity entity, String content) {
         List<IndexedChunk> chunks = new ArrayList<IndexedChunk>();
-        appendSectionChunks(chunks, detail.postId(), "title", detail.title(), 4);
-        appendSectionChunks(chunks, detail.postId(), "summary", detail.summary(), 3);
-        appendSectionChunks(chunks, detail.postId(), "tags", detail.tags() == null ? null : String.join(" ", detail.tags()), 2);
-        appendAuthorChunks(chunks, detail.postId(), detail.author());
-        appendLocationChunks(chunks, detail.postId(), detail.location());
-
-        if (chunks.isEmpty()) {
-            appendSectionChunks(
-                    chunks,
-                    detail.postId(),
-                    "fallback",
-                    "This post currently has no summary or metadata available for retrieval.",
-                    1
-            );
+        int[] position = new int[]{0};
+        if (hasText(content)) {
+            appendMarkdownChunks(chunks, entity.postId(), entity.title(), content, position);
+        }
+        if (chunks.isEmpty() && ragProperties.getIndex().isFallbackToMetadata()) {
+            appendMetadataChunks(chunks, entity, position);
         }
         return chunks;
     }
 
-    private void appendAuthorChunks(List<IndexedChunk> chunks, String postId, PostAuthor author) {
-        if (author == null) {
-            return;
-        }
-        appendSectionChunks(chunks, postId, "author", author.nickname(), 1);
-    }
-
-    private void appendLocationChunks(List<IndexedChunk> chunks, String postId, PostLocation location) {
-        if (location == null) {
-            return;
-        }
-        StringBuilder locationText = new StringBuilder();
-        if (StringUtils.hasText(location.address())) {
-            locationText.append(location.address().trim());
-        }
-        if (StringUtils.hasText(location.geoHash())) {
-            if (!locationText.isEmpty()) {
-                locationText.append(' ');
+    private void appendMarkdownChunks(
+            List<IndexedChunk> chunks,
+            String postId,
+            String title,
+            String markdown,
+            int[] position
+    ) {
+        List<String> sections = splitMarkdownSections(markdown);
+        for (String section : sections) {
+            int weight = section.startsWith("#") ? 4 : 3;
+            List<String> parts = splitIntoChunks(section);
+            for (String part : parts) {
+                appendChunk(chunks, postId, title, "content", part, weight, position);
             }
-            locationText.append(location.geoHash().trim());
         }
-        appendSectionChunks(chunks, postId, "location", locationText.toString(), 1);
     }
 
-    private void appendSectionChunks(List<IndexedChunk> chunks, String postId, String section, String rawValue, int weight) {
-        String normalizedValue = normalizeText(rawValue);
-        if (!StringUtils.hasText(normalizedValue)) {
+    private void appendMetadataChunks(List<IndexedChunk> chunks, KnowPostEntity entity, int[] position) {
+        appendChunk(chunks, entity.postId(), entity.title(), "title", entity.title(), 5, position);
+        appendChunk(chunks, entity.postId(), entity.title(), "summary", entity.description(), 3, position);
+        appendChunk(chunks, entity.postId(), entity.title(), "tags", entity.tagsJson(), 2, position);
+        appendChunk(chunks, entity.postId(), entity.title(), "location", entity.address(), 1, position);
+    }
+
+    private void appendChunk(
+            List<IndexedChunk> chunks,
+            String postId,
+            String title,
+            String section,
+            String rawValue,
+            int weight,
+            int[] position
+    ) {
+        String normalizedValue = normalizeContent(rawValue);
+        if (!hasText(normalizedValue)) {
             return;
         }
+        chunks.add(new IndexedChunk(
+                postId + "#" + section + "#" + position[0],
+                title,
+                section,
+                decorateSection(section, normalizedValue),
+                tokenize(normalizedValue),
+                weight,
+                position[0]
+        ));
+        position[0]++;
+    }
 
-        Set<String> keywords = tokenize(normalizedValue);
-        List<String> pieces = splitIntoChunks(decorateSection(section, normalizedValue));
-        for (int index = 0; index < pieces.size(); index++) {
-            chunks.add(new IndexedChunk(
-                    postId + "#" + section + "#" + index,
-                    pieces.get(index),
-                    keywords,
-                    weight
-            ));
+    private List<String> splitMarkdownSections(String markdown) {
+        List<String> sections = new ArrayList<String>();
+        String[] lines = markdown.split("\\r?\\n");
+        StringBuilder builder = new StringBuilder();
+        for (String line : lines) {
+            if (line.startsWith("#") && builder.length() > 0) {
+                sections.add(builder.toString().trim());
+                builder.setLength(0);
+            }
+            builder.append(line).append('\n');
         }
+        if (builder.length() > 0) {
+            sections.add(builder.toString().trim());
+        }
+        if (sections.isEmpty()) {
+            sections.add(markdown.trim());
+        }
+        return sections;
     }
 
     private List<String> splitIntoChunks(String text) {
         List<String> parts = new ArrayList<String>();
+        int maxChunkLength = Math.max(64, ragProperties.getIndex().getMaxChunkLength());
+        int chunkStep = Math.max(16, Math.min(ragProperties.getIndex().getChunkStep(), maxChunkLength));
         int index = 0;
-        int maxChunkLength = Math.max(32, ragProperties.getIndex().getMaxChunkLength());
-        int chunkStep = Math.max(8, Math.min(ragProperties.getIndex().getChunkStep(), maxChunkLength));
         while (index < text.length()) {
             int end = Math.min(index + maxChunkLength, text.length());
             parts.add(text.substring(index, end));
@@ -233,32 +327,28 @@ public class RagIndexService {
 
     private String decorateSection(String section, String value) {
         if ("title".equals(section)) {
-            return "Title: " + value;
+            return "标题：" + value;
         }
         if ("summary".equals(section)) {
-            return "Summary: " + value;
+            return "摘要：" + value;
         }
         if ("tags".equals(section)) {
-            return "Tags: " + value;
-        }
-        if ("author".equals(section)) {
-            return "Author: " + value;
+            return "标签：" + value;
         }
         if ("location".equals(section)) {
-            return "Location: " + value;
+            return "位置：" + value;
         }
         return value;
     }
 
     private Set<String> tokenize(String text) {
-        if (!StringUtils.hasText(text)) {
+        if (!hasText(text)) {
             return Set.of();
         }
-
         LinkedHashSet<String> tokens = new LinkedHashSet<String>();
         String normalized = normalizeText(text);
         for (String part : normalized.split("[^\\p{IsAlphabetic}\\p{IsDigit}\\p{IsIdeographic}]+")) {
-            if (!StringUtils.hasText(part)) {
+            if (!hasText(part)) {
                 continue;
             }
             String token = part.trim();
@@ -275,23 +365,29 @@ public class RagIndexService {
     }
 
     private int score(String normalizedQuestion, Set<String> queryTokens, IndexedChunk chunk) {
-        if (!StringUtils.hasText(normalizedQuestion)) {
+        if (!hasText(normalizedQuestion)) {
             return 0;
         }
-
         String normalizedContent = normalizeText(chunk.content());
+        String normalizedTitle = normalizeText(chunk.title());
         int score = 0;
         if (normalizedContent.contains(normalizedQuestion)) {
-            score += 20;
+            score += 24;
+        }
+        if (hasText(normalizedTitle) && normalizedTitle.contains(normalizedQuestion)) {
+            score += 12;
         }
         for (String token : queryTokens) {
             if (normalizedContent.contains(token)) {
-                score += 3 + chunk.weight() * 2;
+                score += 4 + chunk.weight();
             } else if (chunk.keywords().contains(token)) {
                 score += 2 + chunk.weight();
             }
+            if (hasText(normalizedTitle) && normalizedTitle.contains(token)) {
+                score += 3;
+            }
         }
-        return score;
+        return score + Math.max(0, 6 - chunk.position());
     }
 
     private int locationBoost(Double queryLat, Double queryLng, Double postLat, Double postLng) {
@@ -322,11 +418,22 @@ public class RagIndexService {
         return token.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
     }
 
-    private String normalizeText(String value) {
-        if (!StringUtils.hasText(value)) {
+    private String normalizeContent(String value) {
+        if (!hasText(value)) {
             return "";
         }
-        return value.trim().toLowerCase();
+        return value.replaceAll("```[\\s\\S]*?```", " ")
+                .replace("`", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    private String normalizeText(String value) {
+        return normalizeContent(value).toLowerCase();
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private record IndexedPost(
@@ -334,15 +441,20 @@ public class RagIndexService {
             String title,
             Double latitude,
             Double longitude,
+            String contentSha256,
+            String contentEtag,
             List<IndexedChunk> chunks
     ) {
     }
 
     public record IndexedChunk(
             String chunkId,
+            String title,
+            String section,
             String content,
             Set<String> keywords,
-            int weight
+            int weight,
+            int position
     ) {
     }
 

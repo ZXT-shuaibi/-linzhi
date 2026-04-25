@@ -11,6 +11,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -22,7 +25,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
+/**
+ * 默认 LLM 网关实现。
+ * 当前同时支持模板兜底和 HTTP 模型网关接入。
+ */
 @Service
 public class DefaultLlmGateway implements LlmGateway {
 
@@ -52,10 +60,7 @@ public class DefaultLlmGateway implements LlmGateway {
     public String generateDescription(String content, int maxCodePoints) {
         if (useHttpProvider()) {
             try {
-                Map<String, Object> input = new LinkedHashMap<>();
-                input.put("content", content);
-                input.put("maxCodePoints", maxCodePoints);
-                String response = requestText("post_description", input);
+                String response = requestText(buildDescriptionPayload(content, maxCodePoints, false));
                 if (StringUtils.hasText(response)) {
                     return response.trim();
                 }
@@ -76,10 +81,7 @@ public class DefaultLlmGateway implements LlmGateway {
     public String generateRagAnswer(String question, List<RagAnswerService.Context> contexts) {
         if (useHttpProvider()) {
             try {
-                Map<String, Object> input = new LinkedHashMap<>();
-                input.put("question", question);
-                input.put("contexts", contexts);
-                String response = requestText("rag_answer", input);
+                String response = requestText(buildRagPayload(question, contexts, false));
                 if (StringUtils.hasText(response)) {
                     return response.trim();
                 }
@@ -96,29 +98,56 @@ public class DefaultLlmGateway implements LlmGateway {
         return templateRagAnswer(question, contexts);
     }
 
+    @Override
+    public boolean streamRagAnswer(String question, List<RagAnswerService.Context> contexts, Consumer<String> consumer) {
+        if (!useHttpProvider() || !llmProperties.getHttp().isStreamEnabled()) {
+            return false;
+        }
+
+        boolean emitted = false;
+        try {
+            HttpRequest request = buildRequest(buildRagPayload(question, contexts, true));
+            HttpResponse<InputStream> response = httpClient.send(
+                    request,
+                    HttpResponse.BodyHandlers.ofInputStream()
+            );
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalStateException("LLM HTTP status is not successful: " + response.statusCode());
+            }
+
+            try (InputStream bodyStream = response.body();
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(bodyStream, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String delta = extractStreamDelta(line);
+                    if (!StringUtils.hasText(delta)) {
+                        if (isDoneLine(line)) {
+                            break;
+                        }
+                        continue;
+                    }
+                    consumer.accept(delta);
+                    emitted = true;
+                }
+            }
+        } catch (Exception ex) {
+            if (!llmProperties.isFallbackToTemplate()) {
+                throw new IllegalStateException("Failed to stream LLM RAG API", ex);
+            }
+            log.warn("HTTP RAG streaming failed, falling back to template: {}", ex.getMessage());
+            return false;
+        }
+        return emitted;
+    }
+
     private boolean useHttpProvider() {
         return "http".equalsIgnoreCase(llmProperties.getProvider())
                 && StringUtils.hasText(llmProperties.getHttp().getEndpoint());
     }
 
-    private String requestText(String task, Map<String, Object> input) throws Exception {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("model", llmProperties.getModelName());
-        payload.put("task", task);
-        payload.put("input", input);
-        payload.put("messages", buildMessages(task, input));
-
-        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(llmProperties.getHttp().getEndpoint()))
-                .timeout(Duration.ofSeconds(Math.max(llmProperties.getHttp().getTimeoutSeconds(), 1)))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload), StandardCharsets.UTF_8));
-        if (StringUtils.hasText(llmProperties.getHttp().getApiKey())) {
-            requestBuilder.header("Authorization", "Bearer " + llmProperties.getHttp().getApiKey().trim());
-        }
-
+    private String requestText(Map<String, Object> payload) throws Exception {
         HttpResponse<String> response = httpClient.send(
-                requestBuilder.build(),
+                buildRequest(payload),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
         );
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -127,40 +156,81 @@ public class DefaultLlmGateway implements LlmGateway {
         return extractText(objectMapper.readTree(response.body()));
     }
 
-    private List<Map<String, String>> buildMessages(String task, Map<String, Object> input) {
-        List<Map<String, String>> messages = new ArrayList<>(2);
-        if ("post_description".equals(task)) {
-            String content = stringValue(input.get("content"));
-            String maxCodePoints = stringValue(input.get("maxCodePoints"));
-            messages.add(message(
-                    "system",
-                    "You are a Chinese copy editor. Generate one concise Chinese post description only."
-                            + " Keep the reply within " + maxCodePoints + " Unicode code points."
-                )
-            );
-            messages.add(message(
-                    "user",
-                    "Post content:\n" + content + "\n\nReturn only the description."
-            ));
-            return messages;
+    private HttpRequest buildRequest(Map<String, Object> payload) throws Exception {
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(llmProperties.getHttp().getEndpoint()))
+                .timeout(Duration.ofSeconds(Math.max(llmProperties.getHttp().getTimeoutSeconds(), 1)))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload), StandardCharsets.UTF_8));
+        if (StringUtils.hasText(llmProperties.getHttp().getApiKey())) {
+            requestBuilder.header("Authorization", "Bearer " + llmProperties.getHttp().getApiKey().trim());
         }
+        return requestBuilder.build();
+    }
 
-        if ("rag_answer".equals(task)) {
-            String question = stringValue(input.get("question"));
-            @SuppressWarnings("unchecked")
-            List<RagAnswerService.Context> contexts = (List<RagAnswerService.Context>) input.get("contexts");
-            messages.add(message(
-                    "system",
-                    "Answer the user's question based only on the provided community context."
-                            + " If the context is insufficient, say so clearly."
-                )
-            );
-            messages.add(message("user", buildRagPrompt(question, contexts)));
-            return messages;
-        }
+    private Map<String, Object> buildDescriptionPayload(String content, int maxCodePoints, boolean stream) {
+        Map<String, Object> input = new LinkedHashMap<String, Object>();
+        input.put("content", content);
+        input.put("maxCodePoints", maxCodePoints);
 
-        messages.add(message("user", objectToJson(input)));
+        Map<String, Object> payload = basePayload(stream);
+        payload.put("task", "post_description");
+        payload.put("input", input);
+        payload.put("messages", buildDescriptionMessages(content, maxCodePoints));
+        return payload;
+    }
+
+    private Map<String, Object> buildRagPayload(String question, List<RagAnswerService.Context> contexts, boolean stream) {
+        Map<String, Object> input = new LinkedHashMap<String, Object>();
+        input.put("question", question);
+        input.put("contexts", contexts);
+
+        Map<String, Object> payload = basePayload(stream);
+        payload.put("task", "rag_answer");
+        payload.put("input", input);
+        payload.put("messages", buildRagMessages(question, contexts));
+        return payload;
+    }
+
+    private Map<String, Object> basePayload(boolean stream) {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("model", llmProperties.getModelName());
+        payload.put("stream", stream);
+        payload.put("temperature", llmProperties.getHttp().getTemperature());
+        payload.put("max_tokens", llmProperties.getHttp().getMaxTokens());
+        return payload;
+    }
+
+    private List<Map<String, String>> buildDescriptionMessages(String content, int maxCodePoints) {
+        List<Map<String, String>> messages = new ArrayList<Map<String, String>>(2);
+        messages.add(message(
+                "system",
+                "You are a Chinese copy editor. Generate one concise Chinese post description only."
+                        + " Keep the reply within " + maxCodePoints + " Unicode code points."
+        ));
+        messages.add(message(
+                "user",
+                "Post content:\n" + content + "\n\nReturn only the description."
+        ));
         return messages;
+    }
+
+    private List<Map<String, String>> buildRagMessages(String question, List<RagAnswerService.Context> contexts) {
+        List<Map<String, String>> messages = new ArrayList<Map<String, String>>(2);
+        messages.add(message(
+                "system",
+                "Answer the user's question based only on the provided community context."
+                        + " If the context is insufficient, say so clearly. Reply in Chinese."
+        ));
+        messages.add(message("user", buildRagPrompt(question, contexts)));
+        return messages;
+    }
+
+    private Map<String, String> message(String role, String content) {
+        Map<String, String> message = new LinkedHashMap<String, String>();
+        message.put("role", role);
+        message.put("content", content);
+        return message;
     }
 
     private String buildRagPrompt(String question, List<RagAnswerService.Context> contexts) {
@@ -186,11 +256,51 @@ public class DefaultLlmGateway implements LlmGateway {
         return prompt.toString();
     }
 
-    private Map<String, String> message(String role, String content) {
-        Map<String, String> message = new LinkedHashMap<>();
-        message.put("role", role);
-        message.put("content", content);
-        return message;
+    private String extractStreamDelta(String line) {
+        if (!StringUtils.hasText(line)) {
+            return null;
+        }
+        String normalized = line.trim();
+        if (normalized.startsWith("data:")) {
+            normalized = normalized.substring(5).trim();
+        }
+        if (!StringUtils.hasText(normalized) || "[DONE]".equalsIgnoreCase(normalized)) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(normalized);
+            return firstNonBlank(
+                    extractChoiceDelta(root.get("choices")),
+                    extractOutputText(root.get("output")),
+                    extractOutputText(root.get("data")),
+                    textOf(root.get("text"))
+            );
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private boolean isDoneLine(String line) {
+        if (!StringUtils.hasText(line)) {
+            return false;
+        }
+        String normalized = line.trim();
+        if (normalized.startsWith("data:")) {
+            normalized = normalized.substring(5).trim();
+        }
+        return "[DONE]".equalsIgnoreCase(normalized);
+    }
+
+    private String extractChoiceDelta(JsonNode choicesNode) {
+        if (choicesNode == null || !choicesNode.isArray() || choicesNode.isEmpty()) {
+            return null;
+        }
+        JsonNode choice = choicesNode.get(0);
+        return firstNonBlank(
+                extractOutputText(choice.get("delta")),
+                extractMessageContent(choice.get("message")),
+                textOf(choice.get("text"))
+        );
     }
 
     private String extractText(JsonNode root) {
@@ -211,7 +321,7 @@ public class DefaultLlmGateway implements LlmGateway {
             return direct;
         }
 
-        String nested = firstNonBlank(
+        return firstNonBlank(
                 extractOutputText(root.get("output")),
                 extractOutputText(root.get("data")),
                 extractChoicesText(root.get("choices")),
@@ -219,11 +329,6 @@ public class DefaultLlmGateway implements LlmGateway {
                 extractMessageContent(root.get("message")),
                 extractMessageContent(root.get("content"))
         );
-        if (nested != null) {
-            return nested;
-        }
-
-        return null;
     }
 
     private String extractChoicesText(JsonNode choicesNode) {
@@ -259,7 +364,7 @@ public class DefaultLlmGateway implements LlmGateway {
             return node.asText();
         }
         if (node.isArray()) {
-            List<String> texts = new ArrayList<>();
+            List<String> texts = new ArrayList<String>();
             for (JsonNode item : node) {
                 String text = firstNonBlank(
                         textOf(item.get("text")),
@@ -293,7 +398,7 @@ public class DefaultLlmGateway implements LlmGateway {
             return node.asText();
         }
         if (node.isArray()) {
-            List<String> texts = new ArrayList<>();
+            List<String> texts = new ArrayList<String>();
             for (JsonNode item : node) {
                 String text = firstNonBlank(
                         textOf(item.get("text")),
@@ -394,17 +499,5 @@ public class DefaultLlmGateway implements LlmGateway {
             count++;
         }
         return builder.toString();
-    }
-
-    private String stringValue(Object value) {
-        return value == null ? "" : String.valueOf(value);
-    }
-
-    private String objectToJson(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (Exception ex) {
-            return String.valueOf(value);
-        }
     }
 }
