@@ -50,4 +50,12 @@ public class RagController {
     public ApiResponse<Integer> reindex(@PathVariable @Min(1) long postId) {
         return ApiResponse.success(ragIndexService.reindexSinglePost(String.valueOf(postId)));
     }
+
+    /**
+     * 手动触发公开内容索引全量重建。
+     */
+    @PostMapping("/reindex/public")
+    public ApiResponse<Integer> reindexPublicPosts() {
+        return ApiResponse.success(ragIndexService.reindexPublicPosts());
+    }
 }
