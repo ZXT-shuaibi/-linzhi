@@ -3,6 +3,9 @@ package com.zhiguang.be.search;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch._types.query_dsl.FieldValueFactorModifier;
+import co.elastic.clients.elasticsearch._types.query_dsl.FunctionBoostMode;
+import co.elastic.clients.elasticsearch._types.query_dsl.FunctionScoreMode;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
@@ -20,11 +23,19 @@ import java.util.Set;
 
 /**
  * Elasticsearch 搜索提供者。
- * 参考 zhiguang 的 ES 搜索思路，支持高亮、search_after 和联想建议。
+ * 参考 zhiguang 的搜索思路，支持高亮、function_score、search_after 和联想建议。
  */
 @Component
 @ConditionalOnBean(ElasticsearchClient.class)
 public class EsSearchProvider implements SearchProvider {
+
+    private static final double TITLE_EXACT_BOOST = 8.0D;
+    private static final double TITLE_PHRASE_BOOST = 4.0D;
+    private static final double TOP_WEIGHT = 2.0D;
+    private static final double LIKE_WEIGHT = 1.5D;
+    private static final double FAVORITE_WEIGHT = 1.0D;
+    private static final double NEARBY_WEIGHT = 1.2D;
+    private static final int DEFAULT_NEARBY_BOOST_RADIUS_METERS = 3000;
 
     private final ElasticsearchClient elasticsearchClient;
     private final SearchProperties searchProperties;
@@ -53,6 +64,8 @@ public class EsSearchProvider implements SearchProvider {
     ) {
         int safePage = Math.max(page, 1);
         int safeSize = normalizePageSize(size);
+        String queryText = q == null ? "" : q.trim();
+        String tagText = hasText(tag) ? tag.trim() : null;
         List<FieldValue> afterValues = parseAfter(searchAfter);
 
         SearchResponse<Map<String, Object>> response;
@@ -60,32 +73,79 @@ public class EsSearchProvider implements SearchProvider {
             response = elasticsearchClient.search(search -> {
                 search.index(searchProperties.getEs().getIndex())
                         .size(safeSize + 1)
-                        .query(query -> query.bool(bool -> {
-                            bool.must(must -> must.multiMatch(multiMatch -> multiMatch
-                                    .query(q.trim())
-                                    .fields("title^4", "summary^2", "tags_text")
-                            ));
-                            bool.filter(filter -> filter.term(term -> term.field("status").value("published")));
-                            bool.filter(filter -> filter.term(term -> term.field("visible").value("public")));
-                            if (hasText(tag)) {
-                                bool.filter(filter -> filter.term(term -> term.field("tags").value(tag.trim())));
-                            }
-                            if (lat != null && lng != null && radius != null && radius.doubleValue() > 0D) {
-                                bool.filter(filter -> filter.geoDistance(geo -> geo
-                                        .field("location")
-                                        .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
-                                        .distance(Math.max(radius.doubleValue(), 1D) + "m")
+                        .query(query -> query.functionScore(functionScore -> {
+                            functionScore.query(inner -> inner.bool(bool -> {
+                                bool.must(must -> must.multiMatch(multiMatch -> multiMatch
+                                        .query(queryText)
+                                        .fields("title^3", "summary^1.5", "tags_text^2")
                                 ));
+                                bool.filter(filter -> filter.term(term -> term.field("status").value("published")));
+                                bool.filter(filter -> filter.term(term -> term.field("visible").value("public")));
+                                if (tagText != null) {
+                                    bool.filter(filter -> filter.term(term -> term.field("tags").value(tagText)));
+                                }
+                                if (lat != null && lng != null && radius != null && radius.doubleValue() > 0D) {
+                                    bool.filter(filter -> filter.geoDistance(geo -> geo
+                                            .field("location")
+                                            .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
+                                            .distance(Math.max(radius.doubleValue(), 1D) + "m")
+                                    ));
+                                }
+                                bool.should(should -> should.term(term -> term
+                                        .field("title_keyword")
+                                        .value(queryText)
+                                        .boost((float) TITLE_EXACT_BOOST)
+                                ));
+                                bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
+                                        .field("title")
+                                        .query(queryText)
+                                        .boost((float) TITLE_PHRASE_BOOST)
+                                ));
+                                return bool;
+                            }));
+
+                            functionScore.functions(fn -> fn
+                                    .filter(filter -> filter.term(term -> term.field("is_top").value(1)))
+                                    .weight(TOP_WEIGHT)
+                            );
+                            functionScore.functions(fn -> fn
+                                    .fieldValueFactor(fieldValueFactor -> fieldValueFactor
+                                            .field("like_count")
+                                            .modifier(FieldValueFactorModifier.Log1p)
+                                            .missing(0.0)
+                                    )
+                                    .weight(LIKE_WEIGHT)
+                            );
+                            functionScore.functions(fn -> fn
+                                    .fieldValueFactor(fieldValueFactor -> fieldValueFactor
+                                            .field("favorite_count")
+                                            .modifier(FieldValueFactorModifier.Log1p)
+                                            .missing(0.0)
+                                    )
+                                    .weight(FAVORITE_WEIGHT)
+                            );
+                            if (lat != null && lng != null) {
+                                int nearbyRadius = resolveNearbyBoostRadius(radius);
+                                functionScore.functions(fn -> fn
+                                        .filter(filter -> filter.geoDistance(geo -> geo
+                                                .field("location")
+                                                .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
+                                                .distance(nearbyRadius + "m")
+                                        ))
+                                        .weight(NEARBY_WEIGHT)
+                                );
                             }
-                            return bool;
+                            return functionScore
+                                    .boostMode(FunctionBoostMode.Sum)
+                                    .scoreMode(FunctionScoreMode.Sum);
                         }))
                         .highlight(highlight -> highlight
-                                .fields("title", field -> field)
-                                .fields("summary", field -> field)
+                                .fields("title", field -> field.numberOfFragments(1))
+                                .fields("summary", field -> field.fragmentSize(Math.max(searchProperties.getSnippetLength(), 40)).numberOfFragments(1))
                         )
                         .sort(sort -> sort.score(score -> score.order(SortOrder.Desc)))
-                        .sort(sort -> sort.field(field -> field.field("is_top").order(SortOrder.Desc)))
                         .sort(sort -> sort.field(field -> field.field("publish_time").order(SortOrder.Desc).format("epoch_millis")))
+                        .sort(sort -> sort.field(field -> field.field("like_count").order(SortOrder.Desc)))
                         .sort(sort -> sort.field(field -> field.field("content_id").order(SortOrder.Desc)));
                 if (afterValues != null && !afterValues.isEmpty()) {
                     search.searchAfter(afterValues);
@@ -146,7 +206,11 @@ public class EsSearchProvider implements SearchProvider {
                             .suggest(suggest -> suggest
                                     .suggesters("title_suggest", fieldSuggester -> fieldSuggester
                                             .prefix(q.trim())
-                                            .completion(completion -> completion.field("title_suggest").size(safeSize))
+                                            .completion(completion -> completion
+                                                    .field("title_suggest")
+                                                    .size(safeSize)
+                                                    .skipDuplicates(true)
+                                            )
                                     )
                             ),
                     (Class<Map<String, Object>>) (Class<?>) Map.class);
@@ -168,7 +232,7 @@ public class EsSearchProvider implements SearchProvider {
                     if (text != null) {
                         String normalized = text.trim();
                         if (!normalized.isEmpty() && deduplicated.add(normalized)) {
-                            items.add(new SuggestItem(normalized, 1.0D, "title"));
+                            items.add(new SuggestItem(normalized, option.score() == null ? 1.0D : option.score().doubleValue(), "title"));
                         }
                     }
                 });
@@ -202,6 +266,13 @@ public class EsSearchProvider implements SearchProvider {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private int resolveNearbyBoostRadius(Double radius) {
+        if (radius == null || radius.doubleValue() <= 0D) {
+            return DEFAULT_NEARBY_BOOST_RADIUS_METERS;
+        }
+        return (int) Math.max(300D, Math.min(radius.doubleValue(), DEFAULT_NEARBY_BOOST_RADIUS_METERS));
     }
 
     private List<FieldValue> parseAfter(String searchAfter) {
@@ -264,15 +335,19 @@ public class EsSearchProvider implements SearchProvider {
     }
 
     private String buildSnippet(Hit<Map<String, Object>> hit, String fallback) {
+        List<String> fragments = new ArrayList<String>();
         if (hit.highlight() != null) {
             List<String> titleHighlights = hit.highlight().get("title");
             if (titleHighlights != null && !titleHighlights.isEmpty()) {
-                return String.join(" ", titleHighlights);
+                fragments.addAll(titleHighlights);
             }
             List<String> summaryHighlights = hit.highlight().get("summary");
             if (summaryHighlights != null && !summaryHighlights.isEmpty()) {
-                return String.join(" ", summaryHighlights);
+                fragments.addAll(summaryHighlights);
             }
+        }
+        if (!fragments.isEmpty()) {
+            return String.join(" ", fragments);
         }
         if (fallback == null) {
             return "";

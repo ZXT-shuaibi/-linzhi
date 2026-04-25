@@ -214,9 +214,18 @@ public class SearchProperties {
      */
     public static class Outbox {
 
+        private boolean localSyncEnabled = true;
         private boolean kafkaEnabled = false;
         private String topic = "canal-outbox";
         private String groupId = "search-index-consumer";
+
+        public boolean isLocalSyncEnabled() {
+            return localSyncEnabled;
+        }
+
+        public void setLocalSyncEnabled(boolean localSyncEnabled) {
+            this.localSyncEnabled = localSyncEnabled;
+        }
 
         public boolean isKafkaEnabled() {
             return kafkaEnabled;

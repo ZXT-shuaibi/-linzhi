@@ -102,6 +102,18 @@ llm:
     api-key:
     timeout-seconds: 10
 
+canal:
+  enabled: false
+  host: localhost
+  port: 11111
+  destination: example
+  username:
+  password:
+  filter: .*\\.outbox
+  batch-size: 100
+  interval-ms: 1000
+  topic: canal-outbox
+
 search:
   provider: db
   default-page-size: 20
@@ -125,6 +137,7 @@ search:
     rebuild-batch-size: 200
     use-ik-analyzer: false
   outbox:
+    local-sync-enabled: true
     kafka-enabled: false
     topic: canal-outbox
     group-id: search-index-consumer

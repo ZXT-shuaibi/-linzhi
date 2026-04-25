@@ -573,7 +573,7 @@ public class ContentServiceImpl implements ContentService {
      * 同步搜索索引，失败时不阻断内容主流程。
      */
     private void syncSearchIndex(String postId) {
-        if (searchIndexService == null) {
+        if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
             return;
         }
         try {
@@ -587,7 +587,7 @@ public class ContentServiceImpl implements ContentService {
      * 从搜索索引中移除内容，失败时不阻断主流程。
      */
     private void removeFromSearchIndex(String postId) {
-        if (searchIndexService == null) {
+        if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
             return;
         }
         try {

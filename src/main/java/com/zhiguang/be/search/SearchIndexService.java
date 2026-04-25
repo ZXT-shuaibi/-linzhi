@@ -4,6 +4,8 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.Refresh;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.social.InteractionSummary;
+import com.zhiguang.be.social.service.InteractionService;
 import jakarta.annotation.PostConstruct;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Service;
@@ -15,7 +17,7 @@ import java.util.Map;
 
 /**
  * 搜索索引维护服务。
- * 负责初始化索引、全量回灌，以及单篇内容的 upsert / delete。
+ * 负责索引初始化、全量回灌以及单篇内容的 upsert 和 delete。
  */
 @Service
 @ConditionalOnBean(ElasticsearchClient.class)
@@ -24,17 +26,20 @@ public class SearchIndexService {
     private final ElasticsearchClient elasticsearchClient;
     private final SearchMapper searchMapper;
     private final SearchProperties searchProperties;
+    private final InteractionService interactionService;
     private final ObjectMapper objectMapper;
 
     public SearchIndexService(
             ElasticsearchClient elasticsearchClient,
             SearchMapper searchMapper,
             SearchProperties searchProperties,
+            InteractionService interactionService,
             ObjectMapper objectMapper
     ) {
         this.elasticsearchClient = elasticsearchClient;
         this.searchMapper = searchMapper;
         this.searchProperties = searchProperties;
+        this.interactionService = interactionService;
         this.objectMapper = objectMapper;
     }
 
@@ -47,8 +52,7 @@ public class SearchIndexService {
     }
 
     /**
-     * 应用启动时确保索引存在。
-     * 默认不强依赖 IK，让玩具项目在本地更容易跑起来。
+     * 启动时确保索引存在。
      */
     public void ensureIndex() {
         if (!searchProperties.getEs().isAutoCreateIndex()) {
@@ -72,8 +76,11 @@ public class SearchIndexService {
                             mappings.properties("summary", property -> property.text(text -> text));
                             mappings.properties("tags_text", property -> property.text(text -> text));
                         }
+                        mappings.properties("title_keyword", property -> property.keyword(keyword -> keyword));
                         mappings.properties("tags", property -> property.keyword(keyword -> keyword));
                         mappings.properties("is_top", property -> property.integer(value -> value));
+                        mappings.properties("like_count", property -> property.long_(value -> value));
+                        mappings.properties("favorite_count", property -> property.long_(value -> value));
                         mappings.properties("publish_time", property -> property.date(value -> value));
                         mappings.properties("latitude", property -> property.double_(value -> value));
                         mappings.properties("longitude", property -> property.double_(value -> value));
@@ -85,12 +92,12 @@ public class SearchIndexService {
                     })
             );
         } catch (Exception ignored) {
-            // ES 不可用时不阻断应用启动，仍保留 db provider 兜底。
+            // ES 不可用时不阻断应用启动，仍可回退到 db provider。
         }
     }
 
     /**
-     * 首次切到 ES 时可用来全量回灌历史内容。
+     * 全量回灌历史内容到 ES。
      */
     public void rebuildAll() {
         int batchSize = Math.max(searchProperties.getEs().getRebuildBatchSize(), 1);
@@ -100,8 +107,10 @@ public class SearchIndexService {
             if (rows == null || rows.isEmpty()) {
                 return;
             }
+
+            Map<Long, InteractionSummary> interactionMap = loadInteractionMap(rows);
             for (SearchIndexDocumentRow row : rows) {
-                syncRow(row);
+                syncRow(row, interactionMap.get(row.postId()));
             }
             offset += rows.size();
         }
@@ -114,11 +123,11 @@ public class SearchIndexService {
         if (postId == null) {
             return;
         }
-        syncRow(searchMapper.findSearchIndexDocumentRow(postId));
+        syncRow(searchMapper.findSearchIndexDocumentRow(postId), loadInteractionSummary(postId));
     }
 
     /**
-     * 从搜索索引中删除指定内容。
+     * 从搜索索引中删除内容。
      */
     public void deletePost(Long postId) {
         if (postId == null) {
@@ -131,11 +140,18 @@ public class SearchIndexService {
                     .refresh(Refresh.WaitFor)
             );
         } catch (Exception ignored) {
-            // 删除失败不影响主链路，后续仍可通过重建修正。
+            // 删除失败不阻断主链路，后续可通过重建修正。
         }
     }
 
-    private void syncRow(SearchIndexDocumentRow row) {
+    /**
+     * 当前是否允许内容模块执行本地直连同步。
+     */
+    public boolean isLocalSyncEnabled() {
+        return searchProperties.getOutbox().isLocalSyncEnabled();
+    }
+
+    private void syncRow(SearchIndexDocumentRow row, InteractionSummary interactionSummary) {
         if (row == null || row.postId() == null) {
             return;
         }
@@ -145,16 +161,40 @@ public class SearchIndexService {
         }
 
         List<String> tags = parseTags(row.tagsJson());
+        Map<String, Object> document = buildDocument(row, tags, interactionSummary);
+        try {
+            elasticsearchClient.index(request -> request
+                    .index(indexName())
+                    .id(String.valueOf(row.postId()))
+                    .document(document)
+                    .refresh(Refresh.WaitFor)
+            );
+        } catch (Exception ignored) {
+            // 不阻断内容主流程，ES 异常可由后续重建修正。
+        }
+    }
+
+    private Map<String, Object> buildDocument(
+            SearchIndexDocumentRow row,
+            List<String> tags,
+            InteractionSummary interactionSummary
+    ) {
+        long likeCount = interactionSummary == null ? 0L : interactionSummary.getLikeCount();
+        long favoriteCount = interactionSummary == null ? 0L : interactionSummary.getFavoriteCount();
+
         Map<String, Object> document = new LinkedHashMap<String, Object>();
         document.put("content_id", row.postId());
         document.put("title", row.title());
+        document.put("title_keyword", row.title());
         document.put("summary", row.summary());
         document.put("tags", tags);
         document.put("tags_text", String.join(" ", tags));
         document.put("is_top", row.isTop() == null ? 0 : row.isTop());
+        document.put("like_count", likeCount);
+        document.put("favorite_count", favoriteCount);
         document.put("status", row.status());
         document.put("visible", row.visible());
-        document.put("title_suggest", row.title());
+        document.put("title_suggest", buildSuggestDocument(row, tags, likeCount, favoriteCount));
         if (row.publishTime() != null) {
             document.put("publish_time", row.publishTime().toEpochMilli());
         }
@@ -170,16 +210,62 @@ public class SearchIndexService {
             location.put("lon", row.longitude());
             document.put("location", location);
         }
+        return document;
+    }
 
+    private Map<String, Object> buildSuggestDocument(
+            SearchIndexDocumentRow row,
+            List<String> tags,
+            long likeCount,
+            long favoriteCount
+    ) {
+        Map<String, Object> suggest = new LinkedHashMap<String, Object>();
+        suggest.put("input", row.suggestInputs(tags));
+        suggest.put("weight", normalizeSuggestWeight(row.isTop(), likeCount, favoriteCount));
+        return suggest;
+    }
+
+    private int normalizeSuggestWeight(Integer isTop, long likeCount, long favoriteCount) {
+        long weight = likeCount + favoriteCount;
+        if (isTop != null && isTop.intValue() == 1) {
+            weight += 50L;
+        }
+        weight += 10L;
+        return (int) Math.min(weight, Integer.MAX_VALUE);
+    }
+
+    private Map<Long, InteractionSummary> loadInteractionMap(List<SearchIndexDocumentRow> rows) {
+        List<Long> targetIds = new ArrayList<Long>();
+        for (SearchIndexDocumentRow row : rows) {
+            if (row != null && row.postId() != null) {
+                targetIds.add(row.postId());
+            }
+        }
+        if (targetIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, InteractionSummary> rawMap = interactionService.summaryBatch(0L, "post", targetIds);
+        if (rawMap == null || rawMap.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<Long, InteractionSummary> interactionMap = new LinkedHashMap<Long, InteractionSummary>();
+        for (Map.Entry<String, InteractionSummary> entry : rawMap.entrySet()) {
+            try {
+                interactionMap.put(Long.valueOf(entry.getKey()), entry.getValue());
+            } catch (Exception ignored) {
+                // 忽略异常键，避免影响整批回灌。
+            }
+        }
+        return interactionMap;
+    }
+
+    private InteractionSummary loadInteractionSummary(Long postId) {
         try {
-            elasticsearchClient.index(request -> request
-                    .index(indexName())
-                    .id(String.valueOf(row.postId()))
-                    .document(document)
-                    .refresh(Refresh.WaitFor)
-            );
+            return interactionService.summary(0L, "post", postId.longValue());
         } catch (Exception ignored) {
-            // 不阻断内容主流程，ES 异常由后续重建修正。
+            return null;
         }
     }
 
