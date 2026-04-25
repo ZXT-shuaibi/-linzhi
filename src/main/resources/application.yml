@@ -112,6 +112,18 @@ search:
   max-suggest-size: 20
   snippet-length: 80
   enable-tag-suggest: true
+  es:
+    endpoint: http://localhost:9200
+    index: zhiguang_content_index
+    username:
+    password:
+    api-key:
+    connect-timeout-seconds: 3
+    socket-timeout-seconds: 5
+    auto-create-index: true
+    auto-rebuild-on-startup: false
+    rebuild-batch-size: 200
+    use-ik-analyzer: false
 
 rag:
   query:

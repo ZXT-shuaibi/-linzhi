@@ -40,4 +40,17 @@ public interface SearchMapper {
             @Param("keywordLike") String keywordLike,
             @Param("limit") int limit
     );
+
+    /**
+     * 查询单篇文章的搜索索引原始行。
+     */
+    SearchIndexDocumentRow findSearchIndexDocumentRow(@Param("postId") Long postId);
+
+    /**
+     * 分页查询搜索索引原始行。
+     */
+    List<SearchIndexDocumentRow> listSearchIndexDocumentRows(
+            @Param("limit") int limit,
+            @Param("offset") int offset
+    );
 }

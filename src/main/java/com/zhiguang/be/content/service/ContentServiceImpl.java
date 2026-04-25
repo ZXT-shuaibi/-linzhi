@@ -22,6 +22,7 @@ import com.zhiguang.be.content.model.OutboxEventEntity;
 import com.zhiguang.be.content.model.PostSyncPayload;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
 import com.zhiguang.be.feed.service.FeedCacheInvalidationService;
+import com.zhiguang.be.search.SearchIndexService;
 import com.zhiguang.be.storage.StorageService;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.RelationStatusData;
@@ -29,6 +30,7 @@ import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -76,6 +78,7 @@ public class ContentServiceImpl implements ContentService {
     private final InteractionService interactionService;
     private final UserSocialCounterService userSocialCounterService;
     private final StorageService storageService;
+    private final SearchIndexService searchIndexService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final ObjectMapper objectMapper;
 
@@ -90,6 +93,7 @@ public class ContentServiceImpl implements ContentService {
             InteractionService interactionService,
             UserSocialCounterService userSocialCounterService,
             StorageService storageService,
+            ObjectProvider<SearchIndexService> searchIndexServiceProvider,
             SnowflakeIdGenerator snowflakeIdGenerator,
             ObjectMapper objectMapper
     ) {
@@ -100,6 +104,7 @@ public class ContentServiceImpl implements ContentService {
         this.interactionService = interactionService;
         this.userSocialCounterService = userSocialCounterService;
         this.storageService = storageService;
+        this.searchIndexService = searchIndexServiceProvider.getIfAvailable();
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.objectMapper = objectMapper;
     }
@@ -320,6 +325,7 @@ public class ContentServiceImpl implements ContentService {
         incrementPublishedPostCounter(creatorId, 1);
         enqueuePostSyncEvent(postId, EVENT_POST_PUBLISHED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
+        syncSearchIndex(postId);
         feedCacheInvalidationService.invalidatePostAfterCommit(postId);
         return getDetail(postId, creatorId);
     }
@@ -336,6 +342,7 @@ public class ContentServiceImpl implements ContentService {
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章置顶状态更新失败，请刷新后重试");
         }
+        syncSearchIndex(postId);
         feedCacheInvalidationService.invalidatePostAfterCommit(postId);
         return getDetail(postId, creatorId);
     }
@@ -357,6 +364,7 @@ public class ContentServiceImpl implements ContentService {
 
         enqueuePostSyncEvent(postId, EVENT_POST_VISIBILITY_CHANGED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), normalizedVisibility, entity.publishTime());
+        syncSearchIndex(postId);
         feedCacheInvalidationService.invalidatePostAfterCommit(postId);
         return getDetail(postId, creatorId);
     }
@@ -382,6 +390,7 @@ public class ContentServiceImpl implements ContentService {
         }
         enqueuePostSyncEvent(postId, EVENT_POST_DELETED, now);
         removeFromDiscover(postId);
+        removeFromSearchIndex(postId);
         feedCacheInvalidationService.invalidatePostAfterCommit(postId);
     }
 
@@ -557,6 +566,34 @@ public class ContentServiceImpl implements ContentService {
             removeFromDiscoverStrict(postId);
         } catch (Exception ex) {
             log.warn("Failed to remove post {} from discover index: {}", postId, ex.getMessage());
+        }
+    }
+
+    /**
+     * 同步搜索索引，失败时不阻断内容主流程。
+     */
+    private void syncSearchIndex(String postId) {
+        if (searchIndexService == null) {
+            return;
+        }
+        try {
+            searchIndexService.syncPost(parseOptionalPostId(postId));
+        } catch (Exception ex) {
+            log.warn("Failed to sync post {} to search index: {}", postId, ex.getMessage());
+        }
+    }
+
+    /**
+     * 从搜索索引中移除内容，失败时不阻断主流程。
+     */
+    private void removeFromSearchIndex(String postId) {
+        if (searchIndexService == null) {
+            return;
+        }
+        try {
+            searchIndexService.deletePost(parseOptionalPostId(postId));
+        } catch (Exception ex) {
+            log.warn("Failed to remove post {} from search index: {}", postId, ex.getMessage());
         }
     }
 
@@ -768,6 +805,20 @@ public class ContentServiceImpl implements ContentService {
      */
     private int normalizePageSize(int size) {
         return Math.min(Math.max(size, 1), 50);
+    }
+
+    /**
+     * 解析可选内容 ID。
+     */
+    private Long parseOptionalPostId(String rawPostId) {
+        if (!hasText(rawPostId)) {
+            return null;
+        }
+        try {
+            return Long.valueOf(rawPostId.trim());
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     /**

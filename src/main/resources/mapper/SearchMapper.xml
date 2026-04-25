@@ -15,6 +15,21 @@
         </constructor>
     </resultMap>
 
+    <resultMap id="SearchIndexDocumentRowMap" type="com.zhiguang.be.search.SearchIndexDocumentRow">
+        <constructor>
+            <arg column="post_id" javaType="java.lang.Long"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="summary" javaType="java.lang.String"/>
+            <arg column="tags_json" javaType="java.lang.String"/>
+            <arg column="is_top" javaType="java.lang.Integer"/>
+            <arg column="publish_time" javaType="java.time.Instant"/>
+            <arg column="latitude" javaType="java.lang.Double"/>
+            <arg column="longitude" javaType="java.lang.Double"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="visible" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
     <select id="searchPosts" resultMap="SearchPostRowMap">
         select cast(p.id as varchar) as post_id,
                p.title,
@@ -72,5 +87,38 @@
            and lower(cast(coalesce(p.tags, '[]') as varchar)) like #{keywordLike}
          order by p.is_top desc, p.publish_time desc, p.id desc
          limit #{limit}
+    </select>
+
+    <select id="findSearchIndexDocumentRow" resultMap="SearchIndexDocumentRowMap">
+        select p.id as post_id,
+               p.title,
+               p.description as summary,
+               p.tags as tags_json,
+               p.is_top,
+               p.publish_time,
+               p.latitude,
+               p.longitude,
+               p.status,
+               p.visible
+          from know_posts p
+         where p.id = #{postId}
+    </select>
+
+    <select id="listSearchIndexDocumentRows" resultMap="SearchIndexDocumentRowMap">
+        select p.id as post_id,
+               p.title,
+               p.description as summary,
+               p.tags as tags_json,
+               p.is_top,
+               p.publish_time,
+               p.latitude,
+               p.longitude,
+               p.status,
+               p.visible
+          from know_posts p
+         where p.status is not null
+         order by p.id asc
+         limit #{limit}
+         offset #{offset}
     </select>
 </mapper>

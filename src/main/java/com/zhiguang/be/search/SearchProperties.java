@@ -5,7 +5,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 搜索模块配置。
- * 当前默认走数据库基础版，同时把分页、联想和摘要截取等参数收口到配置层。
+ * 当前同时支持 db 和 es 两种 provider，默认仍走 db。
  */
 @Component
 @ConfigurationProperties(prefix = "search")
@@ -20,6 +20,7 @@ public class SearchProperties {
     private int maxSuggestSize = 20;
     private int snippetLength = 80;
     private boolean enableTagSuggest = true;
+    private final Es es = new Es();
 
     public String getProvider() {
         return provider;
@@ -91,5 +92,115 @@ public class SearchProperties {
 
     public void setEnableTagSuggest(boolean enableTagSuggest) {
         this.enableTagSuggest = enableTagSuggest;
+    }
+
+    public Es getEs() {
+        return es;
+    }
+
+    /**
+     * Elasticsearch 配置。
+     */
+    public static class Es {
+
+        private String endpoint = "http://localhost:9200";
+        private String index = "zhiguang_content_index";
+        private String username;
+        private String password;
+        private String apiKey;
+        private int connectTimeoutSeconds = 3;
+        private int socketTimeoutSeconds = 5;
+        private boolean autoCreateIndex = true;
+        private boolean autoRebuildOnStartup = false;
+        private int rebuildBatchSize = 200;
+        private boolean useIkAnalyzer = false;
+
+        public String getEndpoint() {
+            return endpoint;
+        }
+
+        public void setEndpoint(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
+        public String getIndex() {
+            return index;
+        }
+
+        public void setIndex(String index) {
+            this.index = index;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public int getConnectTimeoutSeconds() {
+            return connectTimeoutSeconds;
+        }
+
+        public void setConnectTimeoutSeconds(int connectTimeoutSeconds) {
+            this.connectTimeoutSeconds = connectTimeoutSeconds;
+        }
+
+        public int getSocketTimeoutSeconds() {
+            return socketTimeoutSeconds;
+        }
+
+        public void setSocketTimeoutSeconds(int socketTimeoutSeconds) {
+            this.socketTimeoutSeconds = socketTimeoutSeconds;
+        }
+
+        public boolean isAutoCreateIndex() {
+            return autoCreateIndex;
+        }
+
+        public void setAutoCreateIndex(boolean autoCreateIndex) {
+            this.autoCreateIndex = autoCreateIndex;
+        }
+
+        public boolean isAutoRebuildOnStartup() {
+            return autoRebuildOnStartup;
+        }
+
+        public void setAutoRebuildOnStartup(boolean autoRebuildOnStartup) {
+            this.autoRebuildOnStartup = autoRebuildOnStartup;
+        }
+
+        public int getRebuildBatchSize() {
+            return rebuildBatchSize;
+        }
+
+        public void setRebuildBatchSize(int rebuildBatchSize) {
+            this.rebuildBatchSize = rebuildBatchSize;
+        }
+
+        public boolean isUseIkAnalyzer() {
+            return useIkAnalyzer;
+        }
+
+        public void setUseIkAnalyzer(boolean useIkAnalyzer) {
+            this.useIkAnalyzer = useIkAnalyzer;
+        }
     }
 }
