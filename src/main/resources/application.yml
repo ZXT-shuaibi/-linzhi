@@ -162,6 +162,28 @@ rag:
     chunk-step: 160
     fetch-timeout-seconds: 5
     fallback-to-metadata: true
+    auto-rebuild-on-startup: false
+    rebuild-page-size: 20
+    rebuild-max-pages: 20
+  vector:
+    store-enabled: true
+    endpoint: http://localhost:9200
+    index-name: zhiguang_rag_chunk_index
+    username:
+    password:
+    api-key:
+    auto-create-index: true
+    candidate-size: 64
+    embedding-endpoint:
+    embedding-api-key:
+    embedding-model: text-embedding-3-small
+    embedding-timeout-seconds: 10
+    allow-local-fallback: true
+    dimension: 1536
+    min-similarity: 0.12
+    vector-weight: 0.7
+    keyword-weight: 0.3
+    title-boost: 0.08
 
 discover:
   lbs:

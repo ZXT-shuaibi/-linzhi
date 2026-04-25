@@ -1013,6 +1013,28 @@ paths:
           $ref: '#/components/responses/UnauthorizedError'
         '404':
           $ref: '#/components/responses/NotFoundError'
+  /rag/reindex/public:
+    post:
+      tags: [Rag]
+      summary: 鎵嬪姩瑙﹀彂鍏紑鍐呭绱㈠紩鍏ㄩ噺閲嶅缓
+      operationId: reindexRagPublicPosts
+      x-maturity: 宸插疄鐜?
+      x-source: 褰撳墠浠ｇ爜
+      responses:
+        '200':
+          description: 閲嶅缓鎴愬姛
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: integer
+                        description: 鏈鍏ㄩ噺閲嶅缓鍑虹殑鍒嗙墖鏁伴噺
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /interactions/targets/{targetType}/{targetId}/like:
     post:
       tags: [Interactions]

@@ -14,6 +14,7 @@ public class RagProperties {
     private final Query query = new Query();
     private final Stream stream = new Stream();
     private final Index index = new Index();
+    private final Vector vector = new Vector();
 
     public Query getQuery() {
         return query;
@@ -25,6 +26,10 @@ public class RagProperties {
 
     public Index getIndex() {
         return index;
+    }
+
+    public Vector getVector() {
+        return vector;
     }
 
     /**
@@ -131,6 +136,9 @@ public class RagProperties {
         private int chunkStep = 160;
         private int fetchTimeoutSeconds = 5;
         private boolean fallbackToMetadata = true;
+        private boolean autoRebuildOnStartup = false;
+        private int rebuildPageSize = 20;
+        private int rebuildMaxPages = 20;
 
         public int getMaxChunkLength() {
             return maxChunkLength;
@@ -162,6 +170,199 @@ public class RagProperties {
 
         public void setFallbackToMetadata(boolean fallbackToMetadata) {
             this.fallbackToMetadata = fallbackToMetadata;
+        }
+
+        public boolean isAutoRebuildOnStartup() {
+            return autoRebuildOnStartup;
+        }
+
+        public void setAutoRebuildOnStartup(boolean autoRebuildOnStartup) {
+            this.autoRebuildOnStartup = autoRebuildOnStartup;
+        }
+
+        public int getRebuildPageSize() {
+            return rebuildPageSize;
+        }
+
+        public void setRebuildPageSize(int rebuildPageSize) {
+            this.rebuildPageSize = rebuildPageSize;
+        }
+
+        public int getRebuildMaxPages() {
+            return rebuildMaxPages;
+        }
+
+        public void setRebuildMaxPages(int rebuildMaxPages) {
+            this.rebuildMaxPages = rebuildMaxPages;
+        }
+    }
+
+    /**
+     * 向量检索参数。
+     */
+    public static class Vector {
+
+        private boolean storeEnabled = true;
+        private String endpoint = "http://localhost:9200";
+        private String indexName = "zhiguang_rag_chunk_index";
+        private String username;
+        private String password;
+        private String apiKey;
+        private boolean autoCreateIndex = true;
+        private int candidateSize = 64;
+        private String embeddingEndpoint;
+        private String embeddingApiKey;
+        private String embeddingModel = "text-embedding-3-small";
+        private int embeddingTimeoutSeconds = 10;
+        private boolean allowLocalFallback = true;
+        private int dimension = 1536;
+        private double minSimilarity = 0.12D;
+        private double vectorWeight = 0.7D;
+        private double keywordWeight = 0.3D;
+        private double titleBoost = 0.08D;
+
+        public boolean isStoreEnabled() {
+            return storeEnabled;
+        }
+
+        public void setStoreEnabled(boolean storeEnabled) {
+            this.storeEnabled = storeEnabled;
+        }
+
+        public String getEndpoint() {
+            return endpoint;
+        }
+
+        public void setEndpoint(String endpoint) {
+            this.endpoint = endpoint;
+        }
+
+        public String getIndexName() {
+            return indexName;
+        }
+
+        public void setIndexName(String indexName) {
+            this.indexName = indexName;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
+        }
+
+        public String getPassword() {
+            return password;
+        }
+
+        public void setPassword(String password) {
+            this.password = password;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public boolean isAutoCreateIndex() {
+            return autoCreateIndex;
+        }
+
+        public void setAutoCreateIndex(boolean autoCreateIndex) {
+            this.autoCreateIndex = autoCreateIndex;
+        }
+
+        public int getCandidateSize() {
+            return candidateSize;
+        }
+
+        public void setCandidateSize(int candidateSize) {
+            this.candidateSize = candidateSize;
+        }
+
+        public String getEmbeddingEndpoint() {
+            return embeddingEndpoint;
+        }
+
+        public void setEmbeddingEndpoint(String embeddingEndpoint) {
+            this.embeddingEndpoint = embeddingEndpoint;
+        }
+
+        public String getEmbeddingApiKey() {
+            return embeddingApiKey;
+        }
+
+        public void setEmbeddingApiKey(String embeddingApiKey) {
+            this.embeddingApiKey = embeddingApiKey;
+        }
+
+        public String getEmbeddingModel() {
+            return embeddingModel;
+        }
+
+        public void setEmbeddingModel(String embeddingModel) {
+            this.embeddingModel = embeddingModel;
+        }
+
+        public int getEmbeddingTimeoutSeconds() {
+            return embeddingTimeoutSeconds;
+        }
+
+        public void setEmbeddingTimeoutSeconds(int embeddingTimeoutSeconds) {
+            this.embeddingTimeoutSeconds = embeddingTimeoutSeconds;
+        }
+
+        public boolean isAllowLocalFallback() {
+            return allowLocalFallback;
+        }
+
+        public void setAllowLocalFallback(boolean allowLocalFallback) {
+            this.allowLocalFallback = allowLocalFallback;
+        }
+
+        public int getDimension() {
+            return dimension;
+        }
+
+        public void setDimension(int dimension) {
+            this.dimension = dimension;
+        }
+
+        public double getMinSimilarity() {
+            return minSimilarity;
+        }
+
+        public void setMinSimilarity(double minSimilarity) {
+            this.minSimilarity = minSimilarity;
+        }
+
+        public double getVectorWeight() {
+            return vectorWeight;
+        }
+
+        public void setVectorWeight(double vectorWeight) {
+            this.vectorWeight = vectorWeight;
+        }
+
+        public double getKeywordWeight() {
+            return keywordWeight;
+        }
+
+        public void setKeywordWeight(double keywordWeight) {
+            this.keywordWeight = keywordWeight;
+        }
+
+        public double getTitleBoost() {
+            return titleBoost;
+        }
+
+        public void setTitleBoost(double titleBoost) {
+            this.titleBoost = titleBoost;
         }
     }
 }
