@@ -2,8 +2,10 @@ package com.zhiguang.be.platform.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
 import com.zhiguang.be.platform.model.PlatformCacheEvictRequest;
+import com.zhiguang.be.platform.model.PlatformCacheMetricsData;
 import com.zhiguang.be.platform.model.PlatformCacheRegionData;
 import com.zhiguang.be.platform.model.PlatformRuntimeData;
+import com.zhiguang.be.platform.model.PlatformThreadPoolData;
 import com.zhiguang.be.platform.service.PlatformService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -41,6 +43,22 @@ public class PlatformController {
     @GetMapping("/cache/regions")
     public ApiResponse<List<PlatformCacheRegionData>> cacheRegions() {
         return ApiResponse.success(platformService.listCacheRegions());
+    }
+
+    /**
+     * 查询缓存整体指标。
+     */
+    @GetMapping("/cache/metrics")
+    public ApiResponse<PlatformCacheMetricsData> cacheMetrics() {
+        return ApiResponse.success(platformService.getCacheMetrics());
+    }
+
+    /**
+     * 查询线程池运行摘要。
+     */
+    @GetMapping("/threadpools")
+    public ApiResponse<List<PlatformThreadPoolData>> threadPools() {
+        return ApiResponse.success(platformService.listThreadPools());
     }
 
     /**

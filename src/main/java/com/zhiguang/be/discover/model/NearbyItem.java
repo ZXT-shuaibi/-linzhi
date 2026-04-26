@@ -23,6 +23,7 @@ public record NearbyItem(
         Double distance,
         Long publishTime,
         Integer likeCount,
+        Integer favoriteCount,
         Double score
 ) {
 }

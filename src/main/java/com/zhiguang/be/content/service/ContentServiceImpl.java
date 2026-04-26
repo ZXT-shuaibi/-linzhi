@@ -618,6 +618,7 @@ public class ContentServiceImpl implements ContentService {
             return;
         }
         List<String> imageUrls = parseStringList(detailRow.imgUrlsJson());
+        InteractionSummary discoverSummary = loadDiscoverInteractionSummary(postId);
         lbsDiscoverService.addLocation(
                 postId,
                 DISCOVER_TYPE,
@@ -631,7 +632,8 @@ public class ContentServiceImpl implements ContentService {
                 detailRow.authorAvatar(),
                 detailRow.tagsJson(),
                 publishTime == null ? null : publishTime.toEpochMilli(),
-                0
+                discoverSummary == null ? 0 : safeToInt(discoverSummary.getLikeCount()),
+                discoverSummary == null ? 0 : safeToInt(discoverSummary.getFavoriteCount())
         );
     }
 
@@ -716,6 +718,21 @@ public class ContentServiceImpl implements ContentService {
             return summaryMap;
         }
         return interactionService.summaryBatch(viewerUserId, "post", targetIds);
+    }
+
+    /**
+     * 为 discover 同步加载互动汇总。
+     * discover 当前只收公开已发布内容，因此这里统一使用匿名视角读取聚合计数。
+     *
+     * @param postId 内容 ID
+     * @return discover 需要的互动汇总
+     */
+    private InteractionSummary loadDiscoverInteractionSummary(String postId) {
+        long targetId = parseOptionalUserId(postId);
+        if (targetId <= 0L) {
+            return null;
+        }
+        return interactionService.summary(0L, "post", targetId);
     }
 
     /**
@@ -834,6 +851,19 @@ public class ContentServiceImpl implements ContentService {
         } catch (Exception ex) {
             return 0L;
         }
+    }
+
+    /**
+     * 将 long 计数安全收缩为 int。
+     *
+     * @param value long 计数值
+     * @return 安全转换后的 int 值
+     */
+    private int safeToInt(long value) {
+        if (value <= 0L) {
+            return 0;
+        }
+        return value >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
     }
 
     /**

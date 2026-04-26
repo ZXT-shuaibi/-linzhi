@@ -14,9 +14,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * 统一缓存服务。
@@ -32,6 +34,18 @@ public class CacheService {
     private final CacheProperties cacheProperties;
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, LocalCacheEntry>> localRegions =
             new ConcurrentHashMap<String, ConcurrentHashMap<String, LocalCacheEntry>>();
+    private final ConcurrentHashMap<String, LocalRegionStats> localRegionStats =
+            new ConcurrentHashMap<String, LocalRegionStats>();
+    private final LongAdder localHitCount = new LongAdder();
+    private final LongAdder localMissCount = new LongAdder();
+    private final LongAdder localExpiredCount = new LongAdder();
+    private final LongAdder localManualEvictionCount = new LongAdder();
+    private final LongAdder localCapacityEvictionCount = new LongAdder();
+    private final LongAdder redisReadFailureCount = new LongAdder();
+    private final LongAdder redisWriteFailureCount = new LongAdder();
+    private final LongAdder redisDeleteFailureCount = new LongAdder();
+    private final LongAdder redisPatternDeleteFailureCount = new LongAdder();
+    private final LongAdder redisPatternDeletedKeyCount = new LongAdder();
 
     public CacheService(
             StringRedisTemplate stringRedisTemplate,
@@ -47,20 +61,30 @@ public class CacheService {
      * 读取本地缓存。
      */
     public <T> T getLocal(String region, String key, Class<T> type) {
+        LocalRegionStats stats = regionStats(region);
         ConcurrentHashMap<String, LocalCacheEntry> localCache = localRegions.get(region);
         if (localCache == null) {
+            recordLocalMiss(stats);
             return null;
         }
         LocalCacheEntry entry = localCache.get(key);
         if (entry == null) {
+            recordLocalMiss(stats);
             return null;
         }
         if (entry.expireAtMillis() < System.currentTimeMillis()) {
             localCache.remove(key);
+            recordLocalExpired(stats);
+            recordLocalMiss(stats);
             return null;
         }
         Object value = entry.value();
-        return type.isInstance(value) ? type.cast(value) : null;
+        if (!type.isInstance(value)) {
+            recordLocalMiss(stats);
+            return null;
+        }
+        recordLocalHit(stats);
+        return type.cast(value);
     }
 
     /**
@@ -72,8 +96,9 @@ public class CacheService {
         }
         ConcurrentHashMap<String, LocalCacheEntry> localCache =
                 localRegions.computeIfAbsent(region, ignored -> new ConcurrentHashMap<String, LocalCacheEntry>());
+        regionStats(region);
         localCache.put(key, new LocalCacheEntry(value, System.currentTimeMillis() + ttl.toMillis()));
-        shrinkIfNecessary(localCache);
+        shrinkIfNecessary(region, localCache);
     }
 
     /**
@@ -81,8 +106,8 @@ public class CacheService {
      */
     public void evictLocal(String region, String key) {
         ConcurrentHashMap<String, LocalCacheEntry> localCache = localRegions.get(region);
-        if (localCache != null) {
-            localCache.remove(key);
+        if (localCache != null && localCache.remove(key) != null) {
+            recordLocalManualEviction(regionStats(region), 1L);
         }
     }
 
@@ -93,7 +118,11 @@ public class CacheService {
      */
     public void evictLocalRegion(String region) {
         if (region != null && !region.trim().isEmpty()) {
-            localRegions.remove(region);
+            ConcurrentHashMap<String, LocalCacheEntry> removed = localRegions.remove(region);
+            if (removed != null && !removed.isEmpty()) {
+                recordLocalManualEviction(regionStats(region), removed.size());
+            }
+            localRegionStats.remove(region);
         }
     }
 
@@ -116,12 +145,52 @@ public class CacheService {
     }
 
     /**
+     * 快照当前本地缓存区域指标。
+     */
+    public Map<String, LocalRegionSnapshot> snapshotLocalRegionStats() {
+        Map<String, LocalRegionSnapshot> snapshot = new LinkedHashMap<String, LocalRegionSnapshot>();
+        int maxEntries = Math.max(cacheProperties.getLocal().getMaxEntriesPerRegion(), 16);
+        for (Map.Entry<String, ConcurrentHashMap<String, LocalCacheEntry>> entry : localRegions.entrySet()) {
+            LocalRegionStats stats = localRegionStats.get(entry.getKey());
+            snapshot.put(entry.getKey(), new LocalRegionSnapshot(
+                    entry.getValue().size(),
+                    maxEntries,
+                    sum(stats == null ? null : stats.hitCount),
+                    sum(stats == null ? null : stats.missCount),
+                    sum(stats == null ? null : stats.expiredCount),
+                    sum(stats == null ? null : stats.manualEvictionCount),
+                    sum(stats == null ? null : stats.capacityEvictionCount)
+            ));
+        }
+        return snapshot;
+    }
+
+    /**
+     * 快照缓存整体指标。
+     */
+    public CacheMetricsSnapshot snapshotMetrics() {
+        return new CacheMetricsSnapshot(
+                localHitCount.sum(),
+                localMissCount.sum(),
+                localExpiredCount.sum(),
+                localManualEvictionCount.sum(),
+                localCapacityEvictionCount.sum(),
+                redisReadFailureCount.sum(),
+                redisWriteFailureCount.sum(),
+                redisDeleteFailureCount.sum(),
+                redisPatternDeleteFailureCount.sum(),
+                redisPatternDeletedKeyCount.sum()
+        );
+    }
+
+    /**
      * 读取 Redis 字符串缓存。
      */
     public String getRedisString(String key) {
         try {
             return stringRedisTemplate.opsForValue().get(key);
         } catch (Exception ex) {
+            redisReadFailureCount.increment();
             log.warn("read redis cache failed, key={}", key, ex);
             return null;
         }
@@ -142,6 +211,7 @@ public class CacheService {
             List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
             return values == null ? Collections.emptyList() : values;
         } catch (Exception ex) {
+            redisReadFailureCount.increment();
             log.warn("batch read redis cache failed, keyCount={}", keys.size(), ex);
             return Collections.emptyList();
         }
@@ -157,6 +227,7 @@ public class CacheService {
         try {
             stringRedisTemplate.opsForValue().set(key, value, ttl);
         } catch (Exception ex) {
+            redisWriteFailureCount.increment();
             log.warn("write redis string cache failed, key={}", key, ex);
         }
     }
@@ -198,6 +269,7 @@ public class CacheService {
         try {
             stringRedisTemplate.delete(key);
         } catch (Exception ex) {
+            redisDeleteFailureCount.increment();
             log.warn("delete redis cache failed, key={}", key, ex);
         }
     }
@@ -234,8 +306,10 @@ public class CacheService {
                 }
                 return count;
             });
+            redisPatternDeletedKeyCount.add(deleted == null ? 0L : deleted.longValue());
             return deleted == null ? 0L : deleted;
         } catch (Exception ex) {
+            redisPatternDeleteFailureCount.increment();
             log.warn("delete redis cache by pattern failed, pattern={}", pattern, ex);
             return 0L;
         }
@@ -248,18 +322,20 @@ public class CacheService {
         return deleted == null ? 0L : deleted;
     }
 
-    private void shrinkIfNecessary(ConcurrentHashMap<String, LocalCacheEntry> localCache) {
+    private void shrinkIfNecessary(String region, ConcurrentHashMap<String, LocalCacheEntry> localCache) {
         int maxEntries = Math.max(cacheProperties.getLocal().getMaxEntriesPerRegion(), 16);
         if (localCache.size() <= maxEntries) {
             return;
         }
 
         long now = System.currentTimeMillis();
+        LocalRegionStats stats = regionStats(region);
         Iterator<Map.Entry<String, LocalCacheEntry>> iterator = localCache.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, LocalCacheEntry> entry = iterator.next();
             if (entry.getValue().expireAtMillis() < now) {
                 iterator.remove();
+                recordLocalExpired(stats);
             }
         }
 
@@ -273,7 +349,41 @@ public class CacheService {
             keyIterator.next();
             keyIterator.remove();
             removed++;
+            recordLocalCapacityEviction(stats, 1L);
         }
+    }
+
+    private LocalRegionStats regionStats(String region) {
+        return localRegionStats.computeIfAbsent(region == null ? "default" : region, ignored -> new LocalRegionStats());
+    }
+
+    private void recordLocalHit(LocalRegionStats stats) {
+        localHitCount.increment();
+        stats.hitCount.increment();
+    }
+
+    private void recordLocalMiss(LocalRegionStats stats) {
+        localMissCount.increment();
+        stats.missCount.increment();
+    }
+
+    private void recordLocalExpired(LocalRegionStats stats) {
+        localExpiredCount.increment();
+        stats.expiredCount.increment();
+    }
+
+    private void recordLocalManualEviction(LocalRegionStats stats, long count) {
+        localManualEvictionCount.add(count);
+        stats.manualEvictionCount.add(count);
+    }
+
+    private void recordLocalCapacityEviction(LocalRegionStats stats, long count) {
+        localCapacityEvictionCount.add(count);
+        stats.capacityEvictionCount.add(count);
+    }
+
+    private long sum(LongAdder adder) {
+        return adder == null ? 0L : adder.sum();
     }
 
     /**
@@ -282,6 +392,48 @@ public class CacheService {
     private record LocalCacheEntry(
             Object value,
             long expireAtMillis
+    ) {
+    }
+
+    /**
+     * 本地缓存区域统计。
+     */
+    private static final class LocalRegionStats {
+        private final LongAdder hitCount = new LongAdder();
+        private final LongAdder missCount = new LongAdder();
+        private final LongAdder expiredCount = new LongAdder();
+        private final LongAdder manualEvictionCount = new LongAdder();
+        private final LongAdder capacityEvictionCount = new LongAdder();
+    }
+
+    /**
+     * 本地缓存区域快照。
+     */
+    public record LocalRegionSnapshot(
+            int size,
+            int maxEntries,
+            long hitCount,
+            long missCount,
+            long expiredCount,
+            long manualEvictionCount,
+            long capacityEvictionCount
+    ) {
+    }
+
+    /**
+     * 缓存整体指标快照。
+     */
+    public record CacheMetricsSnapshot(
+            long localHitCount,
+            long localMissCount,
+            long localExpiredCount,
+            long localManualEvictionCount,
+            long localCapacityEvictionCount,
+            long redisReadFailureCount,
+            long redisWriteFailureCount,
+            long redisDeleteFailureCount,
+            long redisPatternDeleteFailureCount,
+            long redisPatternDeletedKeyCount
     ) {
     }
 }

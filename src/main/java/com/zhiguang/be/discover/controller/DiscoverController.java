@@ -82,6 +82,7 @@ public class DiscoverController {
      * @param title 内容标题
      * @param publishTime 发布时间时间戳
      * @param likeCount 点赞数
+     * @param favoriteCount 收藏数
      * @return 标准成功响应
      */
     @PostMapping("/location")
@@ -92,9 +93,10 @@ public class DiscoverController {
         @RequestParam Double lng,
         @RequestParam(required = false) String title,
         @RequestParam(required = false) Long publishTime,
-        @RequestParam(required = false) Integer likeCount
+        @RequestParam(required = false) Integer likeCount,
+        @RequestParam(required = false) Integer favoriteCount
     ) {
-        lbsDiscoverService.addLocation(id, type, lat, lng, title, publishTime, likeCount);
+        lbsDiscoverService.addLocation(id, type, lat, lng, title, publishTime, likeCount, favoriteCount);
         return ApiResponse.success(null);
     }
 

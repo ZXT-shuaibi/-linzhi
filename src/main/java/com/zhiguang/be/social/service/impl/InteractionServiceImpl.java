@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
+import com.zhiguang.be.discover.service.LbsDiscoverService;
 import com.zhiguang.be.social.CounterEventPayload;
 import com.zhiguang.be.social.SocialCounterSchema;
 import com.zhiguang.be.social.InteractionActionData;
@@ -19,6 +20,7 @@ import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.RedisCallback;
@@ -49,6 +51,7 @@ import java.util.Set;
 public class InteractionServiceImpl implements InteractionService {
 
     private static final Logger log = LoggerFactory.getLogger(InteractionServiceImpl.class);
+    private static final String DISCOVER_TYPE = "knowledge";
 
     private static final int OFFSET_LIKE = SocialCounterSchema.offsetOf(SocialCounterSchema.IDX_LIKE);
     private static final int OFFSET_FAVORITE = SocialCounterSchema.offsetOf(SocialCounterSchema.IDX_FAV);
@@ -60,6 +63,7 @@ public class InteractionServiceImpl implements InteractionService {
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final UserSocialCounterService userSocialCounterService;
     private final CounterEventProducer counterEventProducer;
+    private final LbsDiscoverService lbsDiscoverService;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final DefaultRedisScript<Long> bitmapToggleScript;
@@ -94,6 +98,7 @@ public class InteractionServiceImpl implements InteractionService {
             SnowflakeIdGenerator snowflakeIdGenerator,
             UserSocialCounterService userSocialCounterService,
             CounterEventProducer counterEventProducer,
+            ObjectProvider<LbsDiscoverService> lbsDiscoverServiceProvider,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper
     ) {
@@ -102,6 +107,7 @@ public class InteractionServiceImpl implements InteractionService {
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.userSocialCounterService = userSocialCounterService;
         this.counterEventProducer = counterEventProducer;
+        this.lbsDiscoverService = lbsDiscoverServiceProvider.getIfAvailable();
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
 
@@ -405,6 +411,7 @@ public class InteractionServiceImpl implements InteractionService {
                 } else {
                     userSocialCounterService.incrementFavoritesReceived(snapshot.getCreatorId(), delta);
                 }
+                refreshDiscoverInteractionStats(snapshot, targetType, targetId, action, delta);
             } catch (Exception ex) {
                 log.warn(
                         "refresh interaction cache failed, userId={}, targetType={}, targetId={}, action={}, active={}",
@@ -419,6 +426,40 @@ public class InteractionServiceImpl implements InteractionService {
         });
 
         return buildActionData(targetType, targetId, action, active);
+    }
+
+    /**
+     * 将互动增量同步到 discover 元数据。
+     * discover 目前只承接公开已发布内容，因此这里对非公开内容直接跳过。
+     *
+     * @param snapshot 内容快照
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param action 互动动作
+     * @param delta 增量
+     */
+    private void refreshDiscoverInteractionStats(
+            PostTargetSnapshot snapshot,
+            String targetType,
+            long targetId,
+            String action,
+            int delta
+    ) {
+        if (lbsDiscoverService == null || snapshot == null || delta == 0) {
+            return;
+        }
+        if (!"post".equalsIgnoreCase(targetType) || !snapshot.interactable() || !snapshot.isPublicVisible()) {
+            return;
+        }
+
+        int likeDelta = "like".equals(action) ? delta : 0;
+        int favoriteDelta = "favorite".equals(action) ? delta : 0;
+        lbsDiscoverService.incrementInteractionStats(
+                String.valueOf(targetId),
+                DISCOVER_TYPE,
+                likeDelta,
+                favoriteDelta
+        );
     }
 
     /**

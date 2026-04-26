@@ -5,6 +5,12 @@ package com.zhiguang.be.platform.model;
  */
 public record PlatformCacheRegionData(
         String region,
-        int size
+        int size,
+        int maxEntries,
+        long hitCount,
+        long missCount,
+        long expiredCount,
+        long manualEvictionCount,
+        long capacityEvictionCount
 ) {
 }

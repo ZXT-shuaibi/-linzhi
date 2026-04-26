@@ -6,6 +6,7 @@ package com.zhiguang.be.platform.model;
 public record PlatformCacheEvictRequest(
         String region,
         String localKey,
-        String redisKey
+        String redisKey,
+        String redisPattern
 ) {
 }

@@ -1793,6 +1793,50 @@ paths:
                           $ref: '#/components/schemas/PlatformCacheRegionData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /platform/cache/metrics:
+    get:
+      tags: [Ops]
+      summary: 鏌ヨ缂撳瓨鏁翠綋鎸囨爣
+      operationId: getPlatformCacheMetrics
+      x-maturity: 宸插疄鐜?
+      x-source: 鍩轰簬褰撳墠浠ｇ爜瀹炵幇
+      responses:
+        '200':
+          description: 鏌ヨ鎴愬姛
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PlatformCacheMetricsData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/threadpools:
+    get:
+      tags: [Ops]
+      summary: 鏌ヨ绾跨▼姹犺繍琛屾憳瑕?
+      operationId: listPlatformThreadPools
+      x-maturity: 宸插疄鐜?
+      x-source: 鍩轰簬褰撳墠浠ｇ爜瀹炵幇
+      responses:
+        '200':
+          description: 鏌ヨ鎴愬姛
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PlatformThreadPoolData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /platform/cache/evict:
     post:
       tags: [Ops]
@@ -2252,20 +2296,48 @@ components:
           type: string
         summary:
           type: string
-        distanceMeters:
+        coverUrl:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        authorId:
+          type: string
+          nullable: true
+        authorName:
+          type: string
+          nullable: true
+        authorAvatar:
+          type: string
+          nullable: true
+        lat:
           type: number
           format: double
-        freshnessScore:
+          nullable: true
+        lng:
           type: number
           format: double
-        interactionScore:
+          nullable: true
+        distance:
           type: number
           format: double
-        trustScore:
+          nullable: true
+        publishTime:
+          type: integer
+          format: int64
+          nullable: true
+        likeCount:
+          type: integer
+          nullable: true
+        favoriteCount:
+          type: integer
+          nullable: true
+        score:
           type: number
           format: double
-        location:
-          $ref: '#/components/schemas/Location'
+          nullable: true
     NearbyData:
       type: object
       properties:
@@ -2273,8 +2345,12 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NearbyItem'
+        total:
+          type: integer
         page:
-          $ref: '#/components/schemas/PageMeta'
+          type: integer
+        size:
+          type: integer
     CreateDraftRequest:
       type: object
       description: 当前版本草稿类型固定为 image_text，无需额外字段
@@ -3068,6 +3144,10 @@ components:
       properties:
         applicationName:
           type: string
+        activeProfiles:
+          type: array
+          items:
+            type: string
         generatedAt:
           type: string
           format: date-time
@@ -3106,6 +3186,91 @@ components:
           type: string
         size:
           type: integer
+        maxEntries:
+          type: integer
+        hitCount:
+          type: integer
+          format: int64
+        missCount:
+          type: integer
+          format: int64
+        expiredCount:
+          type: integer
+          format: int64
+        manualEvictionCount:
+          type: integer
+          format: int64
+        capacityEvictionCount:
+          type: integer
+          format: int64
+    PlatformCacheMetricsData:
+      type: object
+      properties:
+        localHitCount:
+          type: integer
+          format: int64
+        localMissCount:
+          type: integer
+          format: int64
+        localExpiredCount:
+          type: integer
+          format: int64
+        localManualEvictionCount:
+          type: integer
+          format: int64
+        localCapacityEvictionCount:
+          type: integer
+          format: int64
+        redisReadFailureCount:
+          type: integer
+          format: int64
+        redisWriteFailureCount:
+          type: integer
+          format: int64
+        redisDeleteFailureCount:
+          type: integer
+          format: int64
+        redisPatternDeleteFailureCount:
+          type: integer
+          format: int64
+        redisPatternDeletedKeyCount:
+          type: integer
+          format: int64
+    PlatformThreadPoolData:
+      type: object
+      properties:
+        name:
+          type: string
+        threadNamePrefix:
+          type: string
+        corePoolSize:
+          type: integer
+        maximumPoolSize:
+          type: integer
+        queueCapacity:
+          type: integer
+        preventRejection:
+          type: boolean
+        poolSize:
+          type: integer
+        activeCount:
+          type: integer
+        queuedTaskCount:
+          type: integer
+        taskCount:
+          type: integer
+          format: int64
+        completedTaskCount:
+          type: integer
+          format: int64
+        largestPoolSize:
+          type: integer
+        rejectedCount:
+          type: integer
+          format: int64
+        cpuLoad:
+          type: number
+          format: double
     PlatformCacheEvictRequest:
       type: object
       properties:
@@ -3114,6 +3279,8 @@ components:
         localKey:
           type: string
         redisKey:
+          type: string
+        redisPattern:
           type: string
     CounterEventPayload:
       type: object
