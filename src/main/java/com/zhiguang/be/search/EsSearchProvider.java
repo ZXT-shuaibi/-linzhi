@@ -2,13 +2,23 @@ package com.zhiguang.be.search;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.FieldValue;
+import co.elastic.clients.elasticsearch._types.FieldSort;
+import co.elastic.clients.elasticsearch._types.ScoreSort;
 import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch._types.SortOptions;
+import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.FieldValueFactorModifier;
+import co.elastic.clients.elasticsearch._types.query_dsl.FunctionScoreQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.FunctionBoostMode;
 import co.elastic.clients.elasticsearch._types.query_dsl.FunctionScoreMode;
+import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import co.elastic.clients.elasticsearch.core.search.Highlight;
+import co.elastic.clients.elasticsearch.core.search.HighlightField;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
+import co.elastic.clients.util.NamedValue;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
 import org.slf4j.Logger;
@@ -204,88 +214,142 @@ public class EsSearchProvider implements SearchProvider {
             Double lng,
             Double radius
     ) throws Exception {
-        return elasticsearchClient.search(search -> {
-            search.index(searchProperties.getEs().getIndex())
-                    .size(safeSize + 1)
-                    .query(query -> query.functionScore(functionScore -> {
-                        functionScore.query(inner -> inner.bool(bool -> {
-                            bool.must(must -> must.multiMatch(multiMatch -> multiMatch
-                                    .query(queryText)
-                                    .fields("title^3", "summary^1.5", "tags_text^2")
-                            ));
-                            bool.filter(filter -> filter.term(term -> term.field("status").value("published")));
-                            bool.filter(filter -> filter.term(term -> term.field("visible").value("public")));
-                            if (tagText != null) {
-                                bool.filter(filter -> filter.term(term -> term.field("tags").value(tagText)));
-                            }
-                            if (lat != null && lng != null && radius != null && radius.doubleValue() > 0D) {
-                                bool.filter(filter -> filter.geoDistance(geo -> geo
-                                        .field("location")
-                                        .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
-                                        .distance(Math.max(radius.doubleValue(), 1D) + "m")
-                                ));
-                            }
-                            bool.should(should -> should.term(term -> term
-                                    .field("title_keyword")
-                                    .value(queryText)
-                                    .boost((float) TITLE_EXACT_BOOST)
-                            ));
-                            bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
-                                    .field("title")
-                                    .query(queryText)
-                                    .boost((float) TITLE_PHRASE_BOOST)
-                            ));
-                            return bool;
-                        }));
+        SearchRequest.Builder search = new SearchRequest.Builder()
+                .index(searchProperties.getEs().getIndex())
+                .size(safeSize + 1)
+                .query(buildFunctionScoreQuery(queryText, tagText, lat, lng, radius))
+                .highlight(buildSearchHighlight())
+                .sort(buildSearchSorts());
+        if (afterValues != null && !afterValues.isEmpty()) {
+            search.searchAfter(afterValues);
+        }
+        return elasticsearchClient.search(search.build(), (Class<Map<String, Object>>) (Class<?>) Map.class);
+    }
 
-                        functionScore.functions(fn -> fn
-                                .filter(filter -> filter.term(term -> term.field("is_top").value(1)))
-                                .weight(TOP_WEIGHT)
-                        );
-                        functionScore.functions(fn -> fn
-                                .fieldValueFactor(fieldValueFactor -> fieldValueFactor
-                                        .field("like_count")
-                                        .modifier(FieldValueFactorModifier.Log1p)
-                                        .missing(0.0)
-                                )
-                                .weight(LIKE_WEIGHT)
-                        );
-                        functionScore.functions(fn -> fn
-                                .fieldValueFactor(fieldValueFactor -> fieldValueFactor
-                                        .field("favorite_count")
-                                        .modifier(FieldValueFactorModifier.Log1p)
-                                        .missing(0.0)
-                                )
-                                .weight(FAVORITE_WEIGHT)
-                        );
-                        if (lat != null && lng != null) {
-                            int nearbyRadius = resolveNearbyBoostRadius(radius);
-                            functionScore.functions(fn -> fn
-                                    .filter(filter -> filter.geoDistance(geo -> geo
-                                            .field("location")
-                                            .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
-                                            .distance(nearbyRadius + "m")
-                                    ))
-                                    .weight(NEARBY_WEIGHT)
-                            );
-                        }
-                        return functionScore
-                                .boostMode(FunctionBoostMode.Sum)
-                                .scoreMode(FunctionScoreMode.Sum);
-                    }))
-                    .highlight(highlight -> highlight
-                            .fields("title", field -> field.numberOfFragments(1))
-                            .fields("summary", field -> field.fragmentSize(Math.max(searchProperties.getSnippetLength(), 40)).numberOfFragments(1))
-                    )
-                    .sort(sort -> sort.score(score -> score.order(SortOrder.Desc)))
-                    .sort(sort -> sort.field(field -> field.field("publish_time").order(SortOrder.Desc).format("epoch_millis")))
-                    .sort(sort -> sort.field(field -> field.field("like_count").order(SortOrder.Desc)))
-                    .sort(sort -> sort.field(field -> field.field("content_id").order(SortOrder.Desc)));
-            if (afterValues != null && !afterValues.isEmpty()) {
-                search.searchAfter(afterValues);
-            }
-            return search;
-        }, (Class<Map<String, Object>>) (Class<?>) Map.class);
+    /**
+     * 构建 ES function_score 查询，避免过深的链式 lambda 触发 IDE 泛型推断误报。
+     */
+    private FunctionScoreQuery buildFunctionScoreQuery(
+            String queryText,
+            String tagText,
+            Double lat,
+            Double lng,
+            Double radius
+    ) {
+        FunctionScoreQuery.Builder functionScore = new FunctionScoreQuery.Builder()
+                .query(buildBaseSearchQuery(queryText, tagText, lat, lng, radius))
+                .functions(fn -> fn
+                        .filter(filter -> filter.term(term -> term.field("is_top").value(1)))
+                        .weight(TOP_WEIGHT))
+                .functions(fn -> fn
+                        .fieldValueFactor(fieldValueFactor -> fieldValueFactor
+                                .field("like_count")
+                                .modifier(FieldValueFactorModifier.Log1p)
+                                .missing(0.0))
+                        .weight(LIKE_WEIGHT))
+                .functions(fn -> fn
+                        .fieldValueFactor(fieldValueFactor -> fieldValueFactor
+                                .field("favorite_count")
+                                .modifier(FieldValueFactorModifier.Log1p)
+                                .missing(0.0))
+                        .weight(FAVORITE_WEIGHT))
+                .boostMode(FunctionBoostMode.Sum)
+                .scoreMode(FunctionScoreMode.Sum);
+        if (lat != null && lng != null) {
+            int nearbyRadius = resolveNearbyBoostRadius(radius);
+            functionScore.functions(fn -> fn
+                    .filter(filter -> filter.geoDistance(geo -> geo
+                            .field("location")
+                            .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
+                            .distance(nearbyRadius + "m")))
+                    .weight(NEARBY_WEIGHT));
+        }
+        return functionScore.build();
+    }
+
+    /**
+     * 构建搜索高亮配置，避免链式 fields lambda 继续触发 IDE 误报。
+     */
+    private Highlight buildSearchHighlight() {
+        HighlightField titleField = new HighlightField.Builder()
+                .numberOfFragments(1)
+                .build();
+        HighlightField summaryField = new HighlightField.Builder()
+                .fragmentSize(Math.max(searchProperties.getSnippetLength(), 40))
+                .numberOfFragments(1)
+                .build();
+        return new Highlight.Builder()
+                .fields(
+                        NamedValue.of("title", titleField),
+                        NamedValue.of("summary", summaryField)
+                )
+                .build();
+    }
+
+    /**
+     * 构建统一排序规则，显式对象构造比多层 sort lambda 更稳定。
+     */
+    private List<SortOptions> buildSearchSorts() {
+        List<SortOptions> sorts = new ArrayList<SortOptions>(4);
+        sorts.add(new SortOptions.Builder()
+                .score(new ScoreSort.Builder().order(SortOrder.Desc).build())
+                .build());
+        sorts.add(new SortOptions.Builder()
+                .field(new FieldSort.Builder()
+                        .field("publish_time")
+                        .order(SortOrder.Desc)
+                        .format("epoch_millis")
+                        .build())
+                .build());
+        sorts.add(new SortOptions.Builder()
+                .field(new FieldSort.Builder()
+                        .field("like_count")
+                        .order(SortOrder.Desc)
+                        .build())
+                .build());
+        sorts.add(new SortOptions.Builder()
+                .field(new FieldSort.Builder()
+                        .field("content_id")
+                        .order(SortOrder.Desc)
+                        .build())
+                .build());
+        return sorts;
+    }
+
+    /**
+     * 构建帖子搜索基础查询，承载全文检索、公开态过滤、标签过滤和位置过滤。
+     */
+    private Query buildBaseSearchQuery(
+            String queryText,
+            String tagText,
+            Double lat,
+            Double lng,
+            Double radius
+    ) {
+        BoolQuery.Builder bool = new BoolQuery.Builder()
+                .must(must -> must.multiMatch(multiMatch -> multiMatch
+                        .query(queryText)
+                        .fields("title^3", "summary^1.5", "tags_text^2")))
+                .filter(filter -> filter.term(term -> term.field("status").value("published")))
+                .filter(filter -> filter.term(term -> term.field("visible").value("public")))
+                .should(should -> should.term(term -> term
+                        .field("title_keyword")
+                        .value(queryText)
+                        .boost((float) TITLE_EXACT_BOOST)))
+                .should(should -> should.matchPhrase(matchPhrase -> matchPhrase
+                        .field("title")
+                        .query(queryText)
+                        .boost((float) TITLE_PHRASE_BOOST)));
+        if (tagText != null) {
+            bool.filter(filter -> filter.term(term -> term.field("tags").value(tagText)));
+        }
+        if (lat != null && lng != null && radius != null && radius.doubleValue() > 0D) {
+            bool.filter(filter -> filter.geoDistance(geo -> geo
+                    .field("location")
+                    .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
+                    .distance(Math.max(radius.doubleValue(), 1D) + "m")));
+        }
+        return new Query(bool.build());
     }
 
     /**
