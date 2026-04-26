@@ -118,6 +118,8 @@ public class DiscoverProperties {
         private String geocodeEndpoint = "https://restapi.amap.com/v3/geocode/geo";
         private String reverseGeocodeEndpoint = "https://restapi.amap.com/v3/geocode/regeo";
         private String poiSearchEndpoint = "https://restapi.amap.com/v5/place/around";
+        private int connectTimeoutSeconds = 3;
+        private int readTimeoutSeconds = 5;
 
         public boolean isEnabled() {
             return enabled;
@@ -165,6 +167,22 @@ public class DiscoverProperties {
 
         public void setPoiSearchEndpoint(String poiSearchEndpoint) {
             this.poiSearchEndpoint = poiSearchEndpoint;
+        }
+
+        public int getConnectTimeoutSeconds() {
+            return connectTimeoutSeconds;
+        }
+
+        public void setConnectTimeoutSeconds(int connectTimeoutSeconds) {
+            this.connectTimeoutSeconds = connectTimeoutSeconds;
+        }
+
+        public int getReadTimeoutSeconds() {
+            return readTimeoutSeconds;
+        }
+
+        public void setReadTimeoutSeconds(int readTimeoutSeconds) {
+            this.readTimeoutSeconds = readTimeoutSeconds;
         }
     }
 }
