@@ -1,8 +1,13 @@
 package com.zhiguang.be.search;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.common.exception.BusinessException;
+import com.zhiguang.be.common.exception.ErrorCode;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -35,9 +40,10 @@ public class SearchController {
             @RequestParam(value = "lat", required = false) Double lat,
             @RequestParam(value = "lng", required = false) Double lng,
             @RequestParam(value = "radius", required = false) Double radius,
-            @RequestParam(value = "tag", required = false) String tag
+            @RequestParam(value = "tag", required = false) String tag,
+            @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(searchService.searchPosts(q, page, size, searchAfter, lat, lng, radius, tag));
+        return ApiResponse.success(searchService.searchPosts(q, page, size, searchAfter, currentViewerId(jwt), lat, lng, radius, tag));
     }
 
     /**
@@ -49,5 +55,16 @@ public class SearchController {
             @RequestParam(value = "size", defaultValue = "10") @Min(value = 1, message = "size 最小为 1") int size
     ) {
         return ApiResponse.success(searchService.suggest(q, size));
+    }
+
+    private long currentViewerId(Jwt jwt) {
+        if (jwt == null) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(jwt.getSubject());
+        } catch (Exception ex) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
+        }
     }
 }

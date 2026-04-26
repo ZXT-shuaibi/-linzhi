@@ -17,7 +17,6 @@ import java.util.Map;
 
 /**
  * 搜索索引维护服务。
- * 负责索引初始化、全量回灌以及单篇内容的 upsert 和 delete。
  */
 @Service
 @ConditionalOnBean(ElasticsearchClient.class)
@@ -78,6 +77,11 @@ public class SearchIndexService {
                         }
                         mappings.properties("title_keyword", property -> property.keyword(keyword -> keyword));
                         mappings.properties("tags", property -> property.keyword(keyword -> keyword));
+                        mappings.properties("cover_url", property -> property.keyword(keyword -> keyword));
+                        mappings.properties("author_id", property -> property.long_(value -> value));
+                        mappings.properties("author_nickname", property -> property.keyword(keyword -> keyword));
+                        mappings.properties("author_avatar", property -> property.keyword(keyword -> keyword));
+                        mappings.properties("author_tag_json", property -> property.keyword(keyword -> keyword));
                         mappings.properties("is_top", property -> property.integer(value -> value));
                         mappings.properties("like_count", property -> property.long_(value -> value));
                         mappings.properties("favorite_count", property -> property.long_(value -> value));
@@ -160,7 +164,7 @@ public class SearchIndexService {
             return;
         }
 
-        List<String> tags = parseTags(row.tagsJson());
+        List<String> tags = parseStringList(row.tagsJson());
         Map<String, Object> document = buildDocument(row, tags, interactionSummary);
         try {
             elasticsearchClient.index(request -> request
@@ -189,6 +193,11 @@ public class SearchIndexService {
         document.put("summary", row.summary());
         document.put("tags", tags);
         document.put("tags_text", String.join(" ", tags));
+        document.put("cover_url", firstListValue(parseStringList(row.imgUrlsJson())));
+        document.put("author_id", row.authorId());
+        document.put("author_nickname", row.authorNickname());
+        document.put("author_avatar", row.authorAvatar());
+        document.put("author_tag_json", row.authorTagJson());
         document.put("is_top", row.isTop() == null ? 0 : row.isTop());
         document.put("like_count", likeCount);
         document.put("favorite_count", favoriteCount);
@@ -269,19 +278,19 @@ public class SearchIndexService {
         }
     }
 
-    private List<String> parseTags(String tagsJson) {
-        if (tagsJson == null || tagsJson.isBlank()) {
+    private List<String> parseStringList(String json) {
+        if (json == null || json.isBlank()) {
             return List.of();
         }
         try {
-            List<String> parsed = objectMapper.readValue(tagsJson, new TypeReference<List<String>>() {
+            List<String> parsed = objectMapper.readValue(json, new TypeReference<List<String>>() {
             });
             List<String> normalized = new ArrayList<String>();
-            for (String tag : parsed) {
-                if (tag == null) {
+            for (String item : parsed) {
+                if (item == null) {
                     continue;
                 }
-                String trimmed = tag.trim();
+                String trimmed = item.trim();
                 if (!trimmed.isEmpty() && !normalized.contains(trimmed)) {
                     normalized.add(trimmed);
                 }
@@ -290,6 +299,13 @@ public class SearchIndexService {
         } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private String firstListValue(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        return values.get(0);
     }
 
     private String indexName() {

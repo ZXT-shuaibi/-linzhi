@@ -1,5 +1,7 @@
 package com.zhiguang.be.search;
 
+import com.zhiguang.be.social.InteractionSummary;
+import com.zhiguang.be.social.service.InteractionService;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -9,21 +11,27 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
  * 数据库基础版搜索提供者。
- * 先复用 MyBatis 检索与手动打分，后续可平滑升级为 ES 提供者。
  */
 @Component
 public class DbSearchProvider implements SearchProvider {
 
     private final SearchMapper searchMapper;
     private final SearchProperties searchProperties;
+    private final InteractionService interactionService;
 
-    public DbSearchProvider(SearchMapper searchMapper, SearchProperties searchProperties) {
+    public DbSearchProvider(
+            SearchMapper searchMapper,
+            SearchProperties searchProperties,
+            InteractionService interactionService
+    ) {
         this.searchMapper = searchMapper;
         this.searchProperties = searchProperties;
+        this.interactionService = interactionService;
     }
 
     @Override
@@ -37,6 +45,7 @@ public class DbSearchProvider implements SearchProvider {
             int page,
             int size,
             String searchAfter,
+            long currentUserId,
             Double lat,
             Double lng,
             Double radius,
@@ -59,6 +68,7 @@ public class DbSearchProvider implements SearchProvider {
                 fetchLimit,
                 offset
         );
+        Map<String, InteractionSummary> interactionMap = loadInteractionMap(currentUserId, rows);
 
         List<SearchResultItem> items = new ArrayList<SearchResultItem>();
         for (SearchPostRow row : rows) {
@@ -67,10 +77,23 @@ public class DbSearchProvider implements SearchProvider {
                 continue;
             }
             List<String> rowSearchAfter = buildSearchAfter(row);
+            InteractionSummary summary = interactionMap.get(row.postId());
             items.add(new SearchResultItem(
                     row.postId(),
                     row.title(),
                     buildSnippet(q, row),
+                    firstListValue(parseJsonArray(row.imgUrlsJson())),
+                    parseJsonArray(row.tagsJson()),
+                    row.authorId(),
+                    row.authorNickname(),
+                    row.authorAvatar(),
+                    row.authorTagJson(),
+                    summary == null ? 0L : summary.getLikeCount(),
+                    summary == null ? 0L : summary.getFavoriteCount(),
+                    currentUserId > 0L && summary != null ? summary.isViewerLiked() : null,
+                    currentUserId > 0L && summary != null ? summary.isViewerFavorited() : null,
+                    row.isTop() != null && row.isTop().intValue() == 1,
+                    row.publishTime(),
                     computeScore(q, row),
                     distanceMeters,
                     rowSearchAfter
@@ -146,6 +169,28 @@ public class DbSearchProvider implements SearchProvider {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private Map<String, InteractionSummary> loadInteractionMap(long currentUserId, List<SearchPostRow> rows) {
+        List<Long> targetIds = new ArrayList<Long>();
+        for (SearchPostRow row : rows) {
+            if (row == null || row.postId() == null) {
+                continue;
+            }
+            try {
+                targetIds.add(Long.valueOf(row.postId()));
+            } catch (Exception ignored) {
+                // 忽略异常主键，避免影响整页搜索结果。
+            }
+        }
+        if (targetIds.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return interactionService.summaryBatch(currentUserId, "post", targetIds);
+        } catch (Exception ignored) {
+            return Map.of();
+        }
     }
 
     private String buildSnippet(String q, SearchPostRow row) {
@@ -265,6 +310,38 @@ public class DbSearchProvider implements SearchProvider {
         return value == null ? "" : value.toLowerCase();
     }
 
+    private List<String> parseJsonArray(String rawValue) {
+        if (!hasText(rawValue)) {
+            return Collections.emptyList();
+        }
+        String normalized = rawValue
+                .replace('[', ' ')
+                .replace(']', ' ')
+                .replace('"', ' ')
+                .replace('\'', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (normalized.isEmpty()) {
+            return Collections.emptyList();
+        }
+        String[] parts = normalized.split(",");
+        List<String> values = new ArrayList<String>();
+        for (String part : parts) {
+            String item = part.trim();
+            if (!item.isEmpty() && !values.contains(item)) {
+                values.add(item);
+            }
+        }
+        return values;
+    }
+
+    private String firstListValue(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        return values.get(0);
+    }
+
     private void appendTagSuggests(
             String q,
             int safeSize,
@@ -303,9 +380,9 @@ public class DbSearchProvider implements SearchProvider {
         String[] parts = normalized.split("[,，]");
         List<String> tags = new ArrayList<String>();
         for (String part : parts) {
-            String tag = part.trim();
-            if (!tag.isEmpty()) {
-                tags.add(tag);
+            String value = part.trim();
+            if (!value.isEmpty()) {
+                tags.add(value);
             }
         }
         return tags;

@@ -9,10 +9,13 @@ import co.elastic.clients.elasticsearch._types.query_dsl.FunctionScoreMode;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
+import com.zhiguang.be.social.InteractionSummary;
+import com.zhiguang.be.social.service.InteractionService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
@@ -23,7 +26,6 @@ import java.util.Set;
 
 /**
  * Elasticsearch 搜索提供者。
- * 参考 zhiguang 的搜索思路，支持高亮、function_score、search_after 和联想建议。
  */
 @Component
 @ConditionalOnBean(ElasticsearchClient.class)
@@ -39,10 +41,16 @@ public class EsSearchProvider implements SearchProvider {
 
     private final ElasticsearchClient elasticsearchClient;
     private final SearchProperties searchProperties;
+    private final InteractionService interactionService;
 
-    public EsSearchProvider(ElasticsearchClient elasticsearchClient, SearchProperties searchProperties) {
+    public EsSearchProvider(
+            ElasticsearchClient elasticsearchClient,
+            SearchProperties searchProperties,
+            InteractionService interactionService
+    ) {
         this.elasticsearchClient = elasticsearchClient;
         this.searchProperties = searchProperties;
+        this.interactionService = interactionService;
     }
 
     @Override
@@ -57,6 +65,7 @@ public class EsSearchProvider implements SearchProvider {
             int page,
             int size,
             String searchAfter,
+            long currentUserId,
             Double lat,
             Double lng,
             Double radius,
@@ -163,16 +172,31 @@ public class EsSearchProvider implements SearchProvider {
         List<Hit<Map<String, Object>>> hits = response.hits() == null
                 ? Collections.<Hit<Map<String, Object>>>emptyList()
                 : response.hits().hits();
+        Map<String, InteractionSummary> interactionMap = loadInteractionMap(currentUserId, hits);
         for (Hit<Map<String, Object>> hit : hits) {
             Map<String, Object> source = hit.source();
             if (source == null) {
                 continue;
             }
+            String postId = asString(source.get("content_id"));
+            InteractionSummary summary = interactionMap.get(postId);
             Double distanceMeters = computeDistanceMeters(lat, lng, asDouble(source.get("latitude")), asDouble(source.get("longitude")));
             items.add(new SearchResultItem(
-                    asString(source.get("content_id")),
+                    postId,
                     asString(source.get("title")),
                     buildSnippet(hit, asString(source.get("summary"))),
+                    asString(source.get("cover_url")),
+                    asStringList(source.get("tags")),
+                    asString(source.get("author_id")),
+                    asString(source.get("author_nickname")),
+                    asString(source.get("author_avatar")),
+                    asString(source.get("author_tag_json")),
+                    summary == null ? defaultLong(asLong(source.get("like_count"))) : summary.getLikeCount(),
+                    summary == null ? defaultLong(asLong(source.get("favorite_count"))) : summary.getFavoriteCount(),
+                    currentUserId > 0L && summary != null ? summary.isViewerLiked() : null,
+                    currentUserId > 0L && summary != null ? summary.isViewerFavorited() : null,
+                    asBoolean(source.get("is_top")),
+                    asInstant(source.get("publish_time")),
                     hit.score() == null ? 0D : hit.score().doubleValue(),
                     distanceMeters,
                     encodeSortValues(hit.sort())
@@ -275,6 +299,28 @@ public class EsSearchProvider implements SearchProvider {
         return (int) Math.max(300D, Math.min(radius.doubleValue(), DEFAULT_NEARBY_BOOST_RADIUS_METERS));
     }
 
+    private Map<String, InteractionSummary> loadInteractionMap(long currentUserId, List<Hit<Map<String, Object>>> hits) {
+        List<Long> targetIds = new ArrayList<Long>();
+        for (Hit<Map<String, Object>> hit : hits) {
+            Map<String, Object> source = hit.source();
+            if (source == null) {
+                continue;
+            }
+            Long targetId = asLong(source.get("content_id"));
+            if (targetId != null) {
+                targetIds.add(targetId);
+            }
+        }
+        if (targetIds.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return interactionService.summaryBatch(currentUserId, "post", targetIds);
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
     private List<FieldValue> parseAfter(String searchAfter) {
         if (!hasText(searchAfter)) {
             return null;
@@ -360,6 +406,21 @@ public class EsSearchProvider implements SearchProvider {
         return value == null ? null : String.valueOf(value);
     }
 
+    private Long asLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(String.valueOf(value));
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private long defaultLong(Long value) {
+        return value == null ? 0L : value.longValue();
+    }
+
     private Double asDouble(Object value) {
         if (value == null) {
             return null;
@@ -369,6 +430,69 @@ public class EsSearchProvider implements SearchProvider {
         } catch (Exception ex) {
             return null;
         }
+    }
+
+    private Boolean asBoolean(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Boolean booleanValue) {
+            return booleanValue;
+        }
+        if (value instanceof Number number) {
+            return number.intValue() != 0;
+        }
+        String normalized = String.valueOf(value).trim().toLowerCase();
+        if ("true".equals(normalized) || "1".equals(normalized)) {
+            return Boolean.TRUE;
+        }
+        if ("false".equals(normalized) || "0".equals(normalized)) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
+    private Instant asInstant(Object value) {
+        Long epochMillis = asLong(value);
+        if (epochMillis == null || epochMillis.longValue() <= 0L) {
+            return null;
+        }
+        return Instant.ofEpochMilli(epochMillis.longValue());
+    }
+
+    private List<String> asStringList(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        if (value instanceof List<?> list) {
+            List<String> values = new ArrayList<String>();
+            for (Object item : list) {
+                if (item == null) {
+                    continue;
+                }
+                String normalized = String.valueOf(item).trim();
+                if (!normalized.isEmpty() && !values.contains(normalized)) {
+                    values.add(normalized);
+                }
+            }
+            return values;
+        }
+        String raw = String.valueOf(value).trim();
+        if (raw.isEmpty()) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<String>();
+        String normalized = raw.replace('[', ' ').replace(']', ' ').replace('"', ' ').replace('\'', ' ').trim();
+        if (normalized.isEmpty()) {
+            return List.of();
+        }
+        for (String part : normalized.split(",")) {
+            String item = part.trim();
+            if (!item.isEmpty() && !values.contains(item)) {
+                values.add(item);
+            }
+        }
+        return values;
     }
 
     private Double computeDistanceMeters(Double lat1, Double lng1, Double lat2, Double lng2) {

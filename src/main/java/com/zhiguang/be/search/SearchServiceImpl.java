@@ -6,7 +6,6 @@ import java.util.List;
 
 /**
  * 搜索模块服务实现。
- * 负责按配置选择底层搜索提供者，当前默认启用 db 基础版。
  */
 @Service
 public class SearchServiceImpl implements SearchService {
@@ -25,12 +24,13 @@ public class SearchServiceImpl implements SearchService {
             int page,
             int size,
             String searchAfter,
+            long currentUserId,
             Double lat,
             Double lng,
             Double radius,
             String tag
     ) {
-        return currentProvider().searchPosts(q, page, size, searchAfter, lat, lng, radius, tag);
+        return currentProvider().searchPosts(q, page, size, searchAfter, currentUserId, lat, lng, radius, tag);
     }
 
     @Override

@@ -2,12 +2,11 @@ package com.zhiguang.be.search;
 
 /**
  * 搜索提供者接口。
- * 当前先落地 db 提供者，后续接 ES 时只需要补实现，不需要改控制器和外层服务。
  */
 public interface SearchProvider {
 
     /**
-     * 提供者名称。
+     * 提供者标识。
      */
     String provider();
 
@@ -19,6 +18,7 @@ public interface SearchProvider {
             int page,
             int size,
             String searchAfter,
+            long currentUserId,
             Double lat,
             Double lng,
             Double radius,

@@ -2513,6 +2513,46 @@ components:
           type: string
         summary:
           type: string
+        coverUrl:
+          type: string
+          format: uri
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        authorId:
+          type: string
+          nullable: true
+        authorNickname:
+          type: string
+          nullable: true
+        authorAvatar:
+          type: string
+          format: uri
+          nullable: true
+        authorTagJson:
+          type: string
+          nullable: true
+        likeCount:
+          type: integer
+          format: int64
+        favoriteCount:
+          type: integer
+          format: int64
+        liked:
+          type: boolean
+          nullable: true
+        faved:
+          type: boolean
+          nullable: true
+        isTop:
+          type: boolean
+          nullable: true
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
         score:
           type: number
           format: double
