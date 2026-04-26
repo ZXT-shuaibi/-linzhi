@@ -21,6 +21,7 @@ public class DiscoverProperties {
     private int minRadiusMeters = 100;
     private int maxRadiusMeters = 50000;
     private int maxPageSize = 100;
+    private final MapProvider mapProvider = new MapProvider();
 
     public String getDefaultType() {
         return defaultType;
@@ -100,5 +101,88 @@ public class DiscoverProperties {
 
     public void setMaxPageSize(int maxPageSize) {
         this.maxPageSize = maxPageSize;
+    }
+
+    public MapProvider getMapProvider() {
+        return mapProvider;
+    }
+
+    /**
+     * 外部地图服务配置。
+     */
+    public static class MapProvider {
+
+        private boolean enabled = false;
+        private String provider = "amap";
+        private String apiKey;
+        private String geocodeEndpoint = "https://restapi.amap.com/v3/geocode/geo";
+        private String reverseGeocodeEndpoint = "https://restapi.amap.com/v3/geocode/regeo";
+        private String poiSearchEndpoint = "https://restapi.amap.com/v5/place/around";
+        private int connectTimeoutSeconds = 3;
+        private int readTimeoutSeconds = 5;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getProvider() {
+            return provider;
+        }
+
+        public void setProvider(String provider) {
+            this.provider = provider;
+        }
+
+        public String getApiKey() {
+            return apiKey;
+        }
+
+        public void setApiKey(String apiKey) {
+            this.apiKey = apiKey;
+        }
+
+        public String getGeocodeEndpoint() {
+            return geocodeEndpoint;
+        }
+
+        public void setGeocodeEndpoint(String geocodeEndpoint) {
+            this.geocodeEndpoint = geocodeEndpoint;
+        }
+
+        public String getReverseGeocodeEndpoint() {
+            return reverseGeocodeEndpoint;
+        }
+
+        public void setReverseGeocodeEndpoint(String reverseGeocodeEndpoint) {
+            this.reverseGeocodeEndpoint = reverseGeocodeEndpoint;
+        }
+
+        public String getPoiSearchEndpoint() {
+            return poiSearchEndpoint;
+        }
+
+        public void setPoiSearchEndpoint(String poiSearchEndpoint) {
+            this.poiSearchEndpoint = poiSearchEndpoint;
+        }
+
+        public int getConnectTimeoutSeconds() {
+            return connectTimeoutSeconds;
+        }
+
+        public void setConnectTimeoutSeconds(int connectTimeoutSeconds) {
+            this.connectTimeoutSeconds = connectTimeoutSeconds;
+        }
+
+        public int getReadTimeoutSeconds() {
+            return readTimeoutSeconds;
+        }
+
+        public void setReadTimeoutSeconds(int readTimeoutSeconds) {
+            this.readTimeoutSeconds = readTimeoutSeconds;
+        }
     }
 }

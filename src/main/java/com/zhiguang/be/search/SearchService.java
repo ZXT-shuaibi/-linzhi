@@ -13,6 +13,7 @@ public interface SearchService {
             int page,
             int size,
             String searchAfter,
+            long currentUserId,
             Double lat,
             Double lng,
             Double radius,

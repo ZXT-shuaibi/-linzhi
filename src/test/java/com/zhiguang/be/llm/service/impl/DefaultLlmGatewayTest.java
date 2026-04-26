@@ -7,6 +7,9 @@ import com.zhiguang.be.llm.config.LlmProperties;
 import com.zhiguang.be.llm.service.RagAnswerService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -31,7 +34,7 @@ class DefaultLlmGatewayTest {
 
     @Test
     void generateDescriptionShouldSendChatMessagesAndReadOpenAiStyleOutput() throws Exception {
-        AtomicReference<String> requestBody = new AtomicReference<>();
+        AtomicReference<String> requestBody = new AtomicReference<String>();
         server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/llm", exchange -> {
             requestBody.set(readBody(exchange));
@@ -52,7 +55,11 @@ class DefaultLlmGatewayTest {
         });
         server.start();
 
-        DefaultLlmGateway gateway = new DefaultLlmGateway(new ObjectMapper(), httpProperties(serverUrl(), true));
+        DefaultLlmGateway gateway = new DefaultLlmGateway(
+                new ObjectMapper(),
+                httpProperties(serverUrl(), true),
+                emptyChatClientProvider()
+        );
 
         String result = gateway.generateDescription("正文内容", 50);
 
@@ -87,7 +94,11 @@ class DefaultLlmGatewayTest {
                 """));
         server.start();
 
-        DefaultLlmGateway gateway = new DefaultLlmGateway(new ObjectMapper(), httpProperties(serverUrl(), true));
+        DefaultLlmGateway gateway = new DefaultLlmGateway(
+                new ObjectMapper(),
+                httpProperties(serverUrl(), true),
+                emptyChatClientProvider()
+        );
 
         String result = gateway.generateRagAnswer(
                 "活动什么时候开始？",
@@ -103,7 +114,11 @@ class DefaultLlmGatewayTest {
         server.createContext("/llm", exchange -> writeJson(exchange, 500, "{\"error\":\"boom\"}"));
         server.start();
 
-        DefaultLlmGateway gateway = new DefaultLlmGateway(new ObjectMapper(), httpProperties(serverUrl(), true));
+        DefaultLlmGateway gateway = new DefaultLlmGateway(
+                new ObjectMapper(),
+                httpProperties(serverUrl(), true),
+                emptyChatClientProvider()
+        );
 
         String result = gateway.generateDescription("社区今天举办亲子读书会。欢迎带孩子参加。", 50);
 
@@ -118,6 +133,10 @@ class DefaultLlmGatewayTest {
         properties.getHttp().setEndpoint(endpoint);
         properties.getHttp().setTimeoutSeconds(5);
         return properties;
+    }
+
+    private ObjectProvider<ChatClient> emptyChatClientProvider() {
+        return new StaticListableBeanFactory().getBeanProvider(ChatClient.class);
     }
 
     private String serverUrl() {

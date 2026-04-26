@@ -10,8 +10,10 @@ import com.zhiguang.be.rag.model.RagReference;
 import org.apache.http.util.EntityUtils;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.Response;
-import org.elasticsearch.client.ResponseException;
 import org.elasticsearch.client.RestClient;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -33,8 +35,8 @@ import java.util.stream.Collectors;
 
 /**
  * RAG 索引服务。
- * 参考 zhiguang 的思路，把正文抓取、切块、指纹判断、向量写入和检索放在一条链路里。
- * 当前优先使用 Elasticsearch 持久化向量分片；如果未启用真实向量存储，再回退到本地轻量索引。
+ * 参考 zhiguang 的写法，优先使用 Spring AI 的 VectorStore 做向量写入和语义召回，
+ * 同时保留当前工程里的 ES 指纹校验和本地兜底索引，避免基础设施未就绪时主链断掉。
  */
 @Service
 public class RagIndexService {
@@ -48,6 +50,7 @@ public class RagIndexService {
     private final ObjectMapper objectMapper;
     private final RagEmbeddingGateway ragEmbeddingGateway;
     private final RestClient ragVectorRestClient;
+    private final VectorStore vectorStore;
     private final Map<String, IndexedPost> localIndexStore = new ConcurrentHashMap<String, IndexedPost>();
 
     public RagIndexService(
@@ -55,18 +58,21 @@ public class RagIndexService {
             RagProperties ragProperties,
             ObjectMapper objectMapper,
             RagEmbeddingGateway ragEmbeddingGateway,
-            @Qualifier("ragVectorRestClient") ObjectProvider<RestClient> ragVectorRestClientProvider
+            @Qualifier("ragVectorRestClient") ObjectProvider<RestClient> ragVectorRestClientProvider,
+            @Qualifier("ragVectorStore") ObjectProvider<VectorStore> vectorStoreProvider
     ) {
         this.knowPostMapper = knowPostMapper;
         this.ragProperties = ragProperties;
         this.objectMapper = objectMapper;
         this.ragEmbeddingGateway = ragEmbeddingGateway;
         this.ragVectorRestClient = ragVectorRestClientProvider.getIfAvailable();
+        this.vectorStore = vectorStoreProvider.getIfAvailable();
         this.restTemplate = createRestTemplate(ragProperties);
     }
 
     /**
-     * 确保指定内容已经具备可用索引。
+     * 确保指定帖子已经具备可用索引。
+     * 内容指纹未变化时会直接复用已有索引，避免重复切块和重复向量写入。
      */
     public int ensureIndexed(String postId) {
         if (!hasText(postId)) {
@@ -79,7 +85,6 @@ public class RagIndexService {
         }
 
         if (useVectorStore()) {
-            ensureVectorIndex();
             IndexedFingerprint fingerprint = findIndexedFingerprint(postId);
             if (fingerprint != null && isUpToDate(entity, fingerprint)) {
                 return fingerprint.chunkCount();
@@ -112,7 +117,6 @@ public class RagIndexService {
         }
 
         if (useVectorStore()) {
-            ensureVectorIndex();
             writeChunksToVectorStore(entity, chunks);
         } else {
             localIndexStore.put(
@@ -132,7 +136,7 @@ public class RagIndexService {
     }
 
     /**
-     * 批量重建公开已发布内容索引。
+     * 批量重建公开内容的索引。
      */
     public int reindexPublicPosts() {
         int pageSize = Math.max(1, ragProperties.getIndex().getRebuildPageSize());
@@ -160,7 +164,7 @@ public class RagIndexService {
     }
 
     /**
-     * 执行检索并返回命中分片。
+     * 执行语义检索并返回命中的内容分片。
      */
     public SearchResult search(String question, String postId, Double lat, Double lng, int topK) {
         int safeTopK = Math.max(1, Math.min(topK, ragProperties.getQuery().getMaxTopK()));
@@ -169,7 +173,7 @@ public class RagIndexService {
         double[] queryVector = ragEmbeddingGateway.embed(normalizedQuestion);
 
         List<ChunkHit> hits = useVectorStore()
-                ? searchFromVectorStore(question, postId, lat, lng, safeTopK, normalizedQuestion, queryTokens, queryVector)
+                ? searchFromVectorStore(postId, lat, lng, safeTopK, normalizedQuestion, queryTokens)
                 : searchFromLocalStore(postId, lat, lng, safeTopK, normalizedQuestion, queryTokens, queryVector);
 
         List<RagReference> references = hits.stream()
@@ -178,32 +182,33 @@ public class RagIndexService {
         return new SearchResult(hits, references);
     }
 
+    /**
+     * 优先通过 Spring AI VectorStore 进行宽召回，再叠加标题、关键词、位置等业务重排。
+     */
     private List<ChunkHit> searchFromVectorStore(
-            String question,
             String postId,
             Double lat,
             Double lng,
             int topK,
             String normalizedQuestion,
-            Set<String> queryTokens,
-            double[] queryVector
+            Set<String> queryTokens
     ) {
-        ensureVectorIndex();
-        List<VectorChunkDocument> documents = searchVectorDocuments(question, postId);
+        List<VectorChunkDocument> documents = searchVectorDocuments(postId, topK, normalizedQuestion);
         if (documents.isEmpty()) {
             return List.of();
         }
 
         List<ChunkHit> hits = new ArrayList<ChunkHit>();
         for (VectorChunkDocument document : documents) {
+            double vectorScore = normalizedSimilarity(document.retrievalScore());
             double score = score(
                     normalizedQuestion,
                     queryTokens,
-                    queryVector,
+                    vectorScore,
                     document.title(),
                     document.content(),
                     tokenize(document.content()),
-                    document.vector(),
+                    document.weight(),
                     document.position()
             );
             if (score <= 0D) {
@@ -220,6 +225,9 @@ public class RagIndexService {
         return hits.stream().limit(topK).collect(Collectors.toList());
     }
 
+    /**
+     * 当 VectorStore 不可用时，回退到本地轻量索引，并沿用同一套重排逻辑。
+     */
     private List<ChunkHit> searchFromLocalStore(
             String postId,
             Double lat,
@@ -229,7 +237,7 @@ public class RagIndexService {
             Set<String> queryTokens,
             double[] queryVector
     ) {
-        List<IndexedPost> candidates = StringUtils.hasText(postId)
+        List<IndexedPost> candidates = hasText(postId)
                 ? searchSinglePost(postId)
                 : searchPublicPosts();
         if (candidates.isEmpty()) {
@@ -242,11 +250,11 @@ public class RagIndexService {
                 double score = score(
                         normalizedQuestion,
                         queryTokens,
-                        queryVector,
+                        cosineSimilarity(queryVector, chunk.vector()),
                         post.title(),
                         chunk.content(),
                         chunk.keywords(),
-                        chunk.vector(),
+                        chunk.weight(),
                         chunk.position()
                 );
                 if (score <= 0D) {
@@ -272,7 +280,7 @@ public class RagIndexService {
     }
 
     private boolean useVectorStore() {
-        return ragProperties.getVector().isStoreEnabled() && ragVectorRestClient != null;
+        return vectorStore != null && ragVectorRestClient != null;
     }
 
     private boolean isIndexable(KnowPostEntity entity) {
@@ -294,49 +302,9 @@ public class RagIndexService {
         return false;
     }
 
-    private void ensureVectorIndex() {
-        if (!useVectorStore() || !ragProperties.getVector().isAutoCreateIndex()) {
-            return;
-        }
-        try {
-            Request request = new Request("HEAD", "/" + ragProperties.getVector().getIndexName());
-            ragVectorRestClient.performRequest(request);
-        } catch (ResponseException ex) {
-            if (ex.getResponse() == null || ex.getResponse().getStatusLine().getStatusCode() != 404) {
-                return;
-            }
-            createVectorIndex();
-        } catch (Exception ignored) {
-            // 向量索引不可用时不阻断主链路，后续会自动回退到本地模式。
-        }
-    }
-
-    private void createVectorIndex() {
-        try {
-            String mapping = "{"
-                    + "\"mappings\":{"
-                    + "\"properties\":{"
-                    + "\"post_id\":{\"type\":\"keyword\"},"
-                    + "\"chunk_id\":{\"type\":\"keyword\"},"
-                    + "\"title\":{\"type\":\"text\"},"
-                    + "\"content\":{\"type\":\"text\"},"
-                    + "\"position\":{\"type\":\"integer\"},"
-                    + "\"content_sha256\":{\"type\":\"keyword\"},"
-                    + "\"content_etag\":{\"type\":\"keyword\"},"
-                    + "\"latitude\":{\"type\":\"double\"},"
-                    + "\"longitude\":{\"type\":\"double\"},"
-                    + "\"vector\":{\"type\":\"dense_vector\",\"dims\":" + Math.max(1, ragProperties.getVector().getDimension()) + ",\"index\":false}"
-                    + "}"
-                    + "}"
-                    + "}";
-            Request request = new Request("PUT", "/" + ragProperties.getVector().getIndexName());
-            request.setJsonEntity(mapping);
-            ragVectorRestClient.performRequest(request);
-        } catch (Exception ignored) {
-            // 创建失败时保持静默，调用方会继续走本地回退。
-        }
-    }
-
+    /**
+     * 从向量索引中读取已有指纹，判断是否需要重建。
+     */
     private IndexedFingerprint findIndexedFingerprint(String postId) {
         if (!useVectorStore()) {
             return null;
@@ -346,7 +314,7 @@ public class RagIndexService {
             request.setJsonEntity("{"
                     + "\"size\":1,"
                     + "\"track_total_hits\":true,"
-                    + "\"query\":{\"term\":{\"post_id\":\"" + escapeJson(postId) + "\"}}"
+                    + "\"query\":{\"term\":{\"metadata.postId\":\"" + escapeJson(postId) + "\"}}"
                     + "}");
             JsonNode root = parseResponse(ragVectorRestClient.performRequest(request));
             JsonNode hits = root.path("hits").path("hits");
@@ -354,10 +322,11 @@ public class RagIndexService {
                 return null;
             }
             JsonNode source = hits.get(0).path("_source");
+            JsonNode metadata = source.path("metadata");
             int chunkCount = root.path("hits").path("total").path("value").asInt(hits.size());
             return new IndexedFingerprint(
-                    source.path("content_sha256").asText(null),
-                    source.path("content_etag").asText(null),
+                    metadata.path("contentSha256").asText(null),
+                    metadata.path("contentEtag").asText(null),
                     chunkCount
             );
         } catch (Exception ex) {
@@ -365,105 +334,96 @@ public class RagIndexService {
         }
     }
 
+    /**
+     * 通过 VectorStore 写入向量分片。
+     */
     private void writeChunksToVectorStore(KnowPostEntity entity, List<IndexedChunk> chunks) {
         deleteVectorChunks(entity.postId());
-        StringBuilder ndjson = new StringBuilder();
+        List<Document> documents = new ArrayList<Document>(chunks.size());
         for (IndexedChunk chunk : chunks) {
-            VectorChunkDocument document = new VectorChunkDocument(
-                    entity.postId(),
-                    chunk.chunkId(),
-                    entity.title(),
-                    chunk.content(),
-                    chunk.position(),
-                    entity.contentSha256(),
-                    entity.contentEtag(),
-                    entity.latitude(),
-                    entity.longitude(),
-                    chunk.vector()
-            );
-            ndjson.append("{\"index\":{\"_index\":\"")
-                    .append(ragProperties.getVector().getIndexName())
-                    .append("\",\"_id\":\"")
-                    .append(chunk.chunkId())
-                    .append("\"}}\n")
-                    .append(toJson(document))
-                    .append('\n');
+            Map<String, Object> metadata = new java.util.LinkedHashMap<String, Object>();
+            metadata.put("postId", entity.postId());
+            metadata.put("chunkId", chunk.chunkId());
+            metadata.put("title", entity.title());
+            metadata.put("position", chunk.position());
+            metadata.put("weight", chunk.weight());
+            metadata.put("contentSha256", entity.contentSha256());
+            metadata.put("contentEtag", entity.contentEtag());
+            metadata.put("latitude", entity.latitude());
+            metadata.put("longitude", entity.longitude());
+            documents.add(new Document(chunk.content(), chunk.chunkId(), metadata));
         }
-        try {
-            Request request = new Request("POST", "/_bulk");
-            request.addParameter("refresh", "true");
-            request.setJsonEntity(ndjson.toString());
-            ragVectorRestClient.performRequest(request);
-        } catch (Exception ignored) {
-            // 批量写入失败时不抛出，让上层仍可继续运行。
-        }
+        vectorStore.add(documents);
     }
 
+    /**
+     * 根据 postId 删除旧分片，保证重建幂等。
+     */
     private void deleteVectorChunks(String postId) {
         if (!useVectorStore()) {
             return;
         }
         try {
             Request request = new Request("POST", "/" + ragProperties.getVector().getIndexName() + "/_delete_by_query");
-            request.setJsonEntity("{\"query\":{\"term\":{\"post_id\":\"" + escapeJson(postId) + "\"}}}");
+            request.setJsonEntity("{\"query\":{\"term\":{\"metadata.postId\":\"" + escapeJson(postId) + "\"}}}");
             ragVectorRestClient.performRequest(request);
         } catch (Exception ignored) {
-            // 删除失败不会阻塞重建，下次重建仍会覆盖写。
+            // 删除失败时保留静默，后续重建仍会继续尝试写入。
         }
     }
 
-    private List<VectorChunkDocument> searchVectorDocuments(String question, String postId) {
-        List<VectorChunkDocument> documents = new ArrayList<VectorChunkDocument>();
-        try {
-            int candidateSize = Math.max(1, ragProperties.getVector().getCandidateSize());
-            Request request = new Request("POST", "/" + ragProperties.getVector().getIndexName() + "/_search");
-            request.setJsonEntity(buildSearchBody(question, postId, candidateSize));
-            JsonNode root = parseResponse(ragVectorRestClient.performRequest(request));
-            JsonNode hits = root.path("hits").path("hits");
-            if (!hits.isArray()) {
-                return documents;
-            }
-            for (JsonNode hit : hits) {
-                JsonNode source = hit.path("_source");
-                if (source.isMissingNode()) {
-                    continue;
-                }
-                documents.add(new VectorChunkDocument(
-                        source.path("post_id").asText(),
-                        source.path("chunk_id").asText(),
-                        source.path("title").asText(""),
-                        source.path("content").asText(""),
-                        source.path("position").asInt(0),
-                        source.path("content_sha256").asText(null),
-                        source.path("content_etag").asText(null),
-                        source.path("latitude").isNumber() ? source.path("latitude").asDouble() : null,
-                        source.path("longitude").isNumber() ? source.path("longitude").asDouble() : null,
-                        parseVector(source.path("vector"))
-                ));
-            }
-        } catch (Exception ignored) {
+    /**
+     * 使用 VectorStore 做语义宽召回，再把结果转成项目内部的分片模型。
+     */
+    private List<VectorChunkDocument> searchVectorDocuments(String postId, int topK, String normalizedQuestion) {
+        if (!useVectorStore()) {
             return List.of();
         }
-        return documents;
-    }
+        try {
+            int candidateSize = Math.max(
+                    Math.max(1, ragProperties.getVector().getCandidateSize()),
+                    Math.max(1, topK) * 3
+            );
+            List<Document> documents = vectorStore.similaritySearch(
+                    SearchRequest.builder()
+                            .query(normalizedQuestion)
+                            .topK(candidateSize)
+                            .similarityThresholdAll()
+                            .build()
+            );
+            if (documents == null || documents.isEmpty()) {
+                return List.of();
+            }
 
-    private String buildSearchBody(String question, String postId, int candidateSize) {
-        if (hasText(postId)) {
-            return "{"
-                    + "\"size\":" + candidateSize + ","
-                    + "\"query\":{\"term\":{\"post_id\":\"" + escapeJson(postId) + "\"}}"
-                    + "}";
+            List<VectorChunkDocument> hits = new ArrayList<VectorChunkDocument>();
+            for (Document document : documents) {
+                Map<String, Object> metadata = document.getMetadata();
+                String documentPostId = asString(metadata.get("postId"));
+                if (hasText(postId) && !postId.equals(documentPostId)) {
+                    continue;
+                }
+                Double retrievalScore = document.getScore();
+                if (!hasText(postId) && retrievalScore != null && normalizedSimilarity(retrievalScore.doubleValue()) < ragProperties.getVector().getMinSimilarity()) {
+                    continue;
+                }
+                hits.add(new VectorChunkDocument(
+                        documentPostId,
+                        asString(metadata.get("chunkId")),
+                        asString(metadata.get("title")),
+                        document.getText(),
+                        asInt(metadata.get("position")),
+                        asInt(metadata.get("weight"), 1),
+                        asString(metadata.get("contentSha256")),
+                        asString(metadata.get("contentEtag")),
+                        asDouble(metadata.get("latitude")),
+                        asDouble(metadata.get("longitude")),
+                        retrievalScore == null ? 0D : retrievalScore.doubleValue()
+                ));
+            }
+            return hits;
+        } catch (Exception ex) {
+            return List.of();
         }
-        if (hasText(question)) {
-            return "{"
-                    + "\"size\":" + candidateSize + ","
-                    + "\"query\":{\"multi_match\":{\"query\":\"" + escapeJson(question) + "\",\"fields\":[\"title^2\",\"content\"]}}"
-                    + "}";
-        }
-        return "{"
-                + "\"size\":" + candidateSize + ","
-                + "\"query\":{\"match_all\":{}}"
-                + "}";
     }
 
     private JsonNode parseResponse(Response response) throws Exception {
@@ -661,22 +621,24 @@ public class RagIndexService {
         return tokens;
     }
 
+    /**
+     * 组合语义分数、关键词命中和分片权重，得到最终重排分数。
+     */
     private double score(
             String normalizedQuestion,
             Set<String> queryTokens,
-            double[] queryVector,
+            double vectorScore,
             String title,
             String content,
             Set<String> keywords,
-            double[] chunkVector,
+            int weight,
             int position
     ) {
         if (!hasText(normalizedQuestion)) {
             return 0D;
         }
 
-        double vectorScore = cosineSimilarity(queryVector, chunkVector);
-        double keywordScore = keywordScore(normalizedQuestion, queryTokens, title, content, keywords, position);
+        double keywordScore = keywordScore(normalizedQuestion, queryTokens, title, content, keywords, weight, position);
         double weightedScore = vectorScore * ragProperties.getVector().getVectorWeight()
                 + keywordScore * ragProperties.getVector().getKeywordWeight();
 
@@ -686,12 +648,16 @@ public class RagIndexService {
         return weightedScore;
     }
 
+    /**
+     * 计算标题、正文、关键词与权重带来的业务加分。
+     */
     private double keywordScore(
             String normalizedQuestion,
             Set<String> queryTokens,
             String title,
             String content,
             Set<String> keywords,
+            int weight,
             int position
     ) {
         String normalizedContent = normalizeText(content);
@@ -713,8 +679,16 @@ public class RagIndexService {
                 score += ragProperties.getVector().getTitleBoost();
             }
         }
+        score += Math.max(0D, weight - 1) * 0.03D;
         score += Math.max(0D, 0.08D - position * 0.01D);
         return score;
+    }
+
+    /**
+     * Spring AI 返回的 score 直接作为向量相关度主分数使用。
+     */
+    private double normalizedSimilarity(double retrievalScore) {
+        return Math.max(0D, retrievalScore);
     }
 
     private double cosineSimilarity(double[] left, double[] right) {
@@ -778,25 +752,40 @@ public class RagIndexService {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    private double[] parseVector(JsonNode node) {
-        int dimension = Math.max(1, ragProperties.getVector().getDimension());
-        double[] vector = new double[dimension];
-        if (node == null || !node.isArray()) {
-            return vector;
-        }
-        int upperBound = Math.min(dimension, node.size());
-        for (int index = 0; index < upperBound; index++) {
-            vector[index] = node.get(index).asDouble(0D);
-        }
-        return vector;
+    private String asString(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
-    private String toJson(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (Exception ex) {
-            throw new IllegalStateException("Failed to serialize vector document", ex);
+    private int asInt(Object value) {
+        return asInt(value, 0);
+    }
+
+    private int asInt(Object value, int defaultValue) {
+        if (value instanceof Number number) {
+            return number.intValue();
         }
+        if (value instanceof String text && hasText(text)) {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException ignored) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
+    }
+
+    private Double asDouble(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value instanceof String text && hasText(text)) {
+            try {
+                return Double.valueOf(text);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private record IndexedFingerprint(
@@ -836,11 +825,12 @@ public class RagIndexService {
             String title,
             String content,
             int position,
+            int weight,
             String contentSha256,
             String contentEtag,
             Double latitude,
             Double longitude,
-            double[] vector
+            double retrievalScore
     ) {
     }
 

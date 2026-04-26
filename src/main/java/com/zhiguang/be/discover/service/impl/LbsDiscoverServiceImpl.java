@@ -29,7 +29,6 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
-
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -252,6 +251,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             metadata.title(),
             metadata.summary(),
             metadata.coverUrl(),
+            metadata.address(),
             metadata.tags(),
             metadata.authorId(),
             metadata.authorName(),
@@ -261,6 +261,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             distance,
             metadata.publishTime(),
             metadata.likeCount(),
+            metadata.favoriteCount(),
             score
         ));
     }
@@ -419,12 +420,14 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         String title,
         String summary,
         String coverUrl,
+        String address,
         String authorId,
         String authorName,
         String authorAvatar,
         String tagsJson,
         Long publishTime,
-        Integer likeCount
+        Integer likeCount,
+        Integer favoriteCount
     ) {
         String normalizedType = normalizeType(type);
         try {
@@ -437,12 +440,14 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                     title,
                     summary,
                     coverUrl,
+                    address,
                     authorId,
                     authorName,
                     authorAvatar,
                     tagsJson,
                     publishTime,
-                    likeCount
+                    likeCount,
+                    favoriteCount
             );
             bumpCacheVersion(normalizedType);
             log.info("Indexed LBS location. type={}, id={}, lat={}, lng={}", normalizedType, id, lat, lng);
@@ -474,6 +479,39 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     }
 
     /**
+     * 增量刷新 discover 卡片中的互动统计。
+     * 这里只更新内容元数据，不主动击穿整页缓存，依赖短 TTL 做最终一致。
+     *
+     * @param id 内容 ID
+     * @param type 内容类型
+     * @param likeDelta 点赞增量
+     * @param favoriteDelta 收藏增量
+     */
+    @Override
+    public void incrementInteractionStats(String id, String type, int likeDelta, int favoriteDelta) {
+        if (!StringUtils.hasText(id) || (!hasDelta(likeDelta) && !hasDelta(favoriteDelta))) {
+            return;
+        }
+
+        String normalizedType = normalizeType(type);
+        String contentKey = buildContentKey(normalizedType, id);
+        try {
+            if (!Boolean.TRUE.equals(redisTemplate.hasKey(contentKey))) {
+                return;
+            }
+
+            if (hasDelta(likeDelta)) {
+                updateCounterField(contentKey, "likeCount", likeDelta);
+            }
+            if (hasDelta(favoriteDelta)) {
+                updateCounterField(contentKey, "favoriteCount", favoriteDelta);
+            }
+        } catch (Exception ex) {
+            log.warn("Failed to refresh discover interaction stats. type={}, id={}", normalizedType, id, ex);
+        }
+    }
+
+    /**
      * 将内容附属元数据保存到 Redis Hash。
      * 这里会写入备用坐标、标题、发布时间和点赞数等搜索结果展示字段。
      *
@@ -493,12 +531,14 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         String title,
         String summary,
         String coverUrl,
+        String address,
         String authorId,
         String authorName,
         String authorAvatar,
         String tagsJson,
         Long publishTime,
-        Integer likeCount
+        Integer likeCount,
+        Integer favoriteCount
     ) {
         Map<String, String> values = new HashMap<>();
         values.put("lat", String.valueOf(lat));
@@ -511,6 +551,9 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         }
         if (StringUtils.hasText(coverUrl)) {
             values.put("coverUrl", coverUrl.trim());
+        }
+        if (StringUtils.hasText(address)) {
+            values.put("address", address.trim());
         }
         if (StringUtils.hasText(authorId)) {
             values.put("authorId", authorId.trim());
@@ -530,7 +573,33 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         if (likeCount != null) {
             values.put("likeCount", String.valueOf(likeCount));
         }
+        if (favoriteCount != null) {
+            values.put("favoriteCount", String.valueOf(favoriteCount));
+        }
         redisTemplate.opsForHash().putAll(buildContentKey(type, id), values);
+    }
+
+    /**
+     * 更新单个互动计数字段，并保证不会跌到 0 以下。
+     *
+     * @param contentKey 内容元数据 key
+     * @param field 计数字段名
+     * @param delta 增量
+     */
+    private void updateCounterField(String contentKey, String field, int delta) {
+        Integer current = asInteger(redisTemplate.opsForHash().get(contentKey, field));
+        int next = Math.max(0, (current == null ? 0 : current) + delta);
+        redisTemplate.opsForHash().put(contentKey, field, String.valueOf(next));
+    }
+
+    /**
+     * 判断当前增量是否非 0。
+     *
+     * @param delta 计数增量
+     * @return 非 0 返回 true
+     */
+    private boolean hasDelta(int delta) {
+        return delta != 0;
     }
 
     /**
@@ -914,12 +983,14 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         String title = null;
         String summary = null;
         String coverUrl = null;
+        String address = null;
         String authorId = null;
         String authorName = null;
         String authorAvatar = null;
         List<String> tags = Collections.emptyList();
         Long publishTime = null;
         Integer likeCount = null;
+        Integer favoriteCount = null;
         Double lat = null;
         Double lng = null;
 
@@ -935,6 +1006,8 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                 summary = asString(entry.getValue());
             } else if ("coverUrl".equals(key)) {
                 coverUrl = asString(entry.getValue());
+            } else if ("address".equals(key)) {
+                address = asString(entry.getValue());
             } else if ("authorId".equals(key)) {
                 authorId = asString(entry.getValue());
             } else if ("authorName".equals(key)) {
@@ -947,6 +1020,8 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                 publishTime = asLong(entry.getValue());
             } else if ("likeCount".equals(key)) {
                 likeCount = asInteger(entry.getValue());
+            } else if ("favoriteCount".equals(key)) {
+                favoriteCount = asInteger(entry.getValue());
             } else if ("lat".equals(key)) {
                 lat = asDouble(entry.getValue());
             } else if ("lng".equals(key)) {
@@ -954,7 +1029,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             }
         }
 
-        return new LbsContentMetadata(title, summary, coverUrl, tags, authorId, authorName, authorAvatar, publishTime, likeCount, lat, lng);
+        return new LbsContentMetadata(title, summary, coverUrl, address, tags, authorId, authorName, authorAvatar, publishTime, likeCount, favoriteCount, lat, lng);
     }
 
     /**
@@ -1058,12 +1133,14 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         private final String title;
         private final String summary;
         private final String coverUrl;
+        private final String address;
         private final List<String> tags;
         private final String authorId;
         private final String authorName;
         private final String authorAvatar;
         private final Long publishTime;
         private final Integer likeCount;
+        private final Integer favoriteCount;
         private final Double lat;
         private final Double lng;
 
@@ -1080,24 +1157,28 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                 String title,
                 String summary,
                 String coverUrl,
+                String address,
                 List<String> tags,
                 String authorId,
                 String authorName,
                 String authorAvatar,
                 Long publishTime,
                 Integer likeCount,
+                Integer favoriteCount,
                 Double lat,
                 Double lng
         ) {
             this.title = title;
             this.summary = summary;
             this.coverUrl = coverUrl;
+            this.address = address;
             this.tags = tags;
             this.authorId = authorId;
             this.authorName = authorName;
             this.authorAvatar = authorAvatar;
             this.publishTime = publishTime;
             this.likeCount = likeCount;
+            this.favoriteCount = favoriteCount;
             this.lat = lat;
             this.lng = lng;
         }
@@ -1108,7 +1189,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
          * @return 空元数据实例
          */
         private static LbsContentMetadata empty() {
-            return new LbsContentMetadata(null, null, null, Collections.emptyList(), null, null, null, null, null, null, null);
+            return new LbsContentMetadata(null, null, null, null, Collections.emptyList(), null, null, null, null, null, null, null, null);
         }
 
         /**
@@ -1126,6 +1207,10 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
 
         private String coverUrl() {
             return coverUrl;
+        }
+
+        private String address() {
+            return address;
         }
 
         private List<String> tags() {
@@ -1160,6 +1245,10 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
          */
         private Integer likeCount() {
             return likeCount;
+        }
+
+        private Integer favoriteCount() {
+            return favoriteCount;
         }
 
         /**

@@ -8,6 +8,11 @@
             <arg column="title" javaType="java.lang.String"/>
             <arg column="summary" javaType="java.lang.String"/>
             <arg column="tags_json" javaType="java.lang.String"/>
+            <arg column="img_urls_json" javaType="java.lang.String"/>
+            <arg column="author_id" javaType="java.lang.String"/>
+            <arg column="author_nickname" javaType="java.lang.String"/>
+            <arg column="author_avatar" javaType="java.lang.String"/>
+            <arg column="author_tag_json" javaType="java.lang.String"/>
             <arg column="is_top" javaType="java.lang.Integer"/>
             <arg column="publish_time" javaType="java.time.Instant"/>
             <arg column="latitude" javaType="java.lang.Double"/>
@@ -21,6 +26,11 @@
             <arg column="title" javaType="java.lang.String"/>
             <arg column="summary" javaType="java.lang.String"/>
             <arg column="tags_json" javaType="java.lang.String"/>
+            <arg column="img_urls_json" javaType="java.lang.String"/>
+            <arg column="author_id" javaType="java.lang.Long"/>
+            <arg column="author_nickname" javaType="java.lang.String"/>
+            <arg column="author_avatar" javaType="java.lang.String"/>
+            <arg column="author_tag_json" javaType="java.lang.String"/>
             <arg column="is_top" javaType="java.lang.Integer"/>
             <arg column="publish_time" javaType="java.time.Instant"/>
             <arg column="latitude" javaType="java.lang.Double"/>
@@ -34,21 +44,27 @@
         select cast(p.id as varchar) as post_id,
                p.title,
                p.description as summary,
-               p.tags as tags_json,
+               cast(p.tags as varchar) as tags_json,
+               cast(p.img_urls as varchar) as img_urls_json,
+               cast(p.creator_id as varchar) as author_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               cast(u.tags_json as varchar) as author_tag_json,
                p.is_top,
                p.publish_time,
                p.latitude,
                p.longitude
           from know_posts p
+          join users u on u.id = p.creator_id
          where p.status = 'published'
            and p.visible = 'public'
            and (
                 lower(coalesce(p.title, '')) like #{keywordLike}
                 or lower(coalesce(p.description, '')) like #{keywordLike}
-                or lower(coalesce(p.tags, '')) like #{keywordLike}
+                or lower(coalesce(cast(p.tags as varchar), '')) like #{keywordLike}
            )
         <if test="tagLike != null and tagLike != ''">
-           and lower(coalesce(p.tags, '')) like #{tagLike}
+           and lower(coalesce(cast(p.tags as varchar), '')) like #{tagLike}
         </if>
         <if test="afterIsTop != null and afterPublishTime != null and afterPostId != null">
            and (
@@ -93,7 +109,12 @@
         select p.id as post_id,
                p.title,
                p.description as summary,
-               p.tags as tags_json,
+               cast(p.tags as varchar) as tags_json,
+               cast(p.img_urls as varchar) as img_urls_json,
+               p.creator_id as author_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               cast(u.tags_json as varchar) as author_tag_json,
                p.is_top,
                p.publish_time,
                p.latitude,
@@ -101,6 +122,7 @@
                p.status,
                p.visible
           from know_posts p
+          join users u on u.id = p.creator_id
          where p.id = #{postId}
     </select>
 
@@ -108,7 +130,12 @@
         select p.id as post_id,
                p.title,
                p.description as summary,
-               p.tags as tags_json,
+               cast(p.tags as varchar) as tags_json,
+               cast(p.img_urls as varchar) as img_urls_json,
+               p.creator_id as author_id,
+               u.nickname as author_nickname,
+               u.avatar as author_avatar,
+               cast(u.tags_json as varchar) as author_tag_json,
                p.is_top,
                p.publish_time,
                p.latitude,
@@ -116,6 +143,7 @@
                p.status,
                p.visible
           from know_posts p
+          join users u on u.id = p.creator_id
          where p.status is not null
          order by p.id asc
          limit #{limit}
