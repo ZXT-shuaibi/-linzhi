@@ -3,6 +3,12 @@ spring:
     name: zhiguang-be
   profiles:
     default: business
+  ai:
+    model:
+      chat: none
+    deepseek:
+      chat:
+        enabled: false
   datasource:
     url: jdbc:h2:file:./data/linli-auth;MODE=MySQL;DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver
@@ -36,10 +42,13 @@ server:
   port: 8080
 
 management:
+  endpoint:
+    health:
+      show-details: always
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,env,configprops,threaddump,loggers
 
 storage:
   mock-upload-base-url: https://mock-oss.local/upload
@@ -166,7 +175,7 @@ rag:
     rebuild-page-size: 20
     rebuild-max-pages: 20
   vector:
-    store-enabled: true
+    store-enabled: false
     endpoint: http://localhost:9200
     index-name: zhiguang_rag_chunk_index
     username:
@@ -205,8 +214,8 @@ discover:
       geocode-endpoint: https://restapi.amap.com/v3/geocode/geo
       reverse-geocode-endpoint: https://restapi.amap.com/v3/geocode/regeo
       poi-search-endpoint: https://restapi.amap.com/v5/place/around
-  
-  social:
+
+social:
   relation:
     rate-limit:
       capacity: 100

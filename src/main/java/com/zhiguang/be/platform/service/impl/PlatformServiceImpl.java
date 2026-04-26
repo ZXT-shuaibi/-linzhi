@@ -1,12 +1,18 @@
 package com.zhiguang.be.platform.service.impl;
 
+import com.zhiguang.be.cache.hotkey.HotKeyDetector;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.platform.model.PlatformCacheEvictRequest;
 import com.zhiguang.be.platform.model.PlatformCacheMetricsData;
 import com.zhiguang.be.platform.model.PlatformCacheRegionData;
+import com.zhiguang.be.platform.model.PlatformHotKeyData;
+import com.zhiguang.be.platform.model.PlatformHotKeyResetRequest;
+import com.zhiguang.be.platform.model.PlatformJvmMetricsData;
 import com.zhiguang.be.platform.model.PlatformModuleStatusData;
+import com.zhiguang.be.platform.model.PlatformObservabilityData;
+import com.zhiguang.be.platform.model.PlatformOpsSnapshotData;
 import com.zhiguang.be.platform.model.PlatformRuntimeData;
 import com.zhiguang.be.platform.model.PlatformThreadPoolData;
 import com.zhiguang.be.platform.service.PlatformService;
@@ -19,6 +25,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryUsage;
+import java.lang.management.OperatingSystemMXBean;
+import java.lang.management.RuntimeMXBean;
+import java.lang.management.ThreadMXBean;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,6 +46,7 @@ import java.util.concurrent.Executor;
 public class PlatformServiceImpl implements PlatformService {
 
     private final CacheService cacheService;
+    private final HotKeyDetector hotKeyDetector;
     private final Environment environment;
     private final ThreadPoolProperties threadPoolProperties;
     private final Executor tradeOrderExecutor;
@@ -63,15 +76,19 @@ public class PlatformServiceImpl implements PlatformService {
     private int localCacheMaxEntriesPerRegion;
     @Value("${cache.hotkey.enabled:true}")
     private boolean cacheHotkeyEnabled;
+    @Value("${management.endpoints.web.exposure.include:health,info}")
+    private String actuatorExposure;
 
     public PlatformServiceImpl(
             CacheService cacheService,
+            HotKeyDetector hotKeyDetector,
             Environment environment,
             ThreadPoolProperties threadPoolProperties,
             @Qualifier("tradeOrderExecutor") Executor tradeOrderExecutor,
             @Qualifier("ragQueryExecutor") Executor ragQueryExecutor
     ) {
         this.cacheService = cacheService;
+        this.hotKeyDetector = hotKeyDetector;
         this.environment = environment;
         this.threadPoolProperties = threadPoolProperties;
         this.tradeOrderExecutor = tradeOrderExecutor;
@@ -148,6 +165,50 @@ public class PlatformServiceImpl implements PlatformService {
     }
 
     @Override
+    public PlatformObservabilityData getObservabilitySummary() {
+        return new PlatformObservabilityData(
+                Instant.now(),
+                resolveActuatorExposures(),
+                snapshotJvmMetrics(),
+                getCacheMetrics(),
+                listThreadPools()
+        );
+    }
+
+    @Override
+    public List<PlatformHotKeyData> listHotKeys(int limit) {
+        List<PlatformHotKeyData> hotKeys = new ArrayList<PlatformHotKeyData>();
+        for (HotKeyDetector.HotKeySnapshot snapshot : hotKeyDetector.snapshotTopKeys(limit)) {
+            hotKeys.add(new PlatformHotKeyData(snapshot.key(), snapshot.heat(), snapshot.level().name()));
+        }
+        return hotKeys;
+    }
+
+    @Override
+    public List<String> previewRedisKeys(String pattern, int limit) {
+        return cacheService.previewRedisKeys(pattern, limit);
+    }
+
+    @Override
+    public String resetHotKey(PlatformHotKeyResetRequest request) {
+        if (request == null || !StringUtils.hasText(request.key())) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "热点 key 不能为空");
+        }
+        hotKeyDetector.reset(request.key().trim());
+        return "热点 key 已重置";
+    }
+
+    @Override
+    public PlatformOpsSnapshotData getOpsSnapshot(int hotKeyLimit) {
+        return new PlatformOpsSnapshotData(
+                getRuntimeSummary(),
+                getObservabilitySummary(),
+                listCacheRegions(),
+                listHotKeys(hotKeyLimit)
+        );
+    }
+
+    @Override
     public String evictCache(PlatformCacheEvictRequest request) {
         if (request == null) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "清理请求不能为空");
@@ -205,6 +266,37 @@ public class PlatformServiceImpl implements PlatformService {
         );
     }
 
+    private PlatformJvmMetricsData snapshotJvmMetrics() {
+        RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
+        MemoryMXBean memoryMXBean = ManagementFactory.getMemoryMXBean();
+        ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
+        OperatingSystemMXBean operatingSystemMXBean = ManagementFactory.getOperatingSystemMXBean();
+        MemoryUsage heap = memoryMXBean.getHeapMemoryUsage();
+        MemoryUsage nonHeap = memoryMXBean.getNonHeapMemoryUsage();
+        return new PlatformJvmMetricsData(
+                runtimeMXBean.getUptime(),
+                heap.getUsed(),
+                heap.getCommitted(),
+                heap.getMax(),
+                nonHeap.getUsed(),
+                threadMXBean.getThreadCount(),
+                threadMXBean.getDaemonThreadCount(),
+                threadMXBean.getPeakThreadCount(),
+                operatingSystemMXBean.getAvailableProcessors(),
+                operatingSystemMXBean.getSystemLoadAverage()
+        );
+    }
+
+    private List<String> resolveActuatorExposures() {
+        if (!StringUtils.hasText(actuatorExposure)) {
+            return List.of("health", "info");
+        }
+        return Arrays.stream(actuatorExposure.split(","))
+                .map(String::trim)
+                .filter(StringUtils::hasText)
+                .toList();
+    }
+
     private List<String> resolveActiveProfiles() {
         String[] profiles = environment.getActiveProfiles();
         if (profiles == null || profiles.length == 0) {
@@ -219,18 +311,20 @@ public class PlatformServiceImpl implements PlatformService {
 
     private List<PlatformModuleStatusData> buildModuleStatuses() {
         List<PlatformModuleStatusData> modules = new ArrayList<PlatformModuleStatusData>();
-        modules.add(new PlatformModuleStatusData("auth", "COMPLETED", "认证主链已闭环"));
-        modules.add(new PlatformModuleStatusData("content", "COMPLETED", "内容发布主链已闭环"));
-        modules.add(new PlatformModuleStatusData("social", "COMPLETED", "社交互动与计数主链已闭环"));
-        modules.add(new PlatformModuleStatusData("feed", "COMPLETED", "首页 Feed 主链已闭环"));
-        modules.add(new PlatformModuleStatusData("storage", "BASIC_READY", "独立存储入口已接通"));
-        modules.add(new PlatformModuleStatusData("search", "BASIC_READY", "搜索与索引同步主链可用"));
-        modules.add(new PlatformModuleStatusData("profile", "BASIC_READY", "个人主页基础聚合已可用"));
-        modules.add(new PlatformModuleStatusData("discover", "BASIC_READY", "发现模块已接入互动元数据联动"));
-        modules.add(new PlatformModuleStatusData("llm", "BASIC_READY", "已具备真实接模与 RAG 检索骨架"));
-        modules.add(new PlatformModuleStatusData("trade", "BASIC_READY", "交易主链已打通，仍在持续增强"));
-        modules.add(new PlatformModuleStatusData("cache", "BASIC_READY", "缓存治理与观测能力已落地"));
-        modules.add(new PlatformModuleStatusData("threadpool", "BASIC_READY", "线程池双模式与运行摘要已可观测"));
+        modules.add(new PlatformModuleStatusData("auth", "COMPLETED", "认证主链已经闭环"));
+        modules.add(new PlatformModuleStatusData("content", "COMPLETED", "内容发布主链已经闭环"));
+        modules.add(new PlatformModuleStatusData("social", "COMPLETED", "社交互动与计数主链已经闭环"));
+        modules.add(new PlatformModuleStatusData("feed", "COMPLETED", "首页 Feed 主链已经闭环"));
+        modules.add(new PlatformModuleStatusData("storage", "BASIC_READY", "独立存储入口已经接通"));
+        modules.add(new PlatformModuleStatusData("search", "BASIC_READY", "搜索、ES 同步与 outbox 链路可用"));
+        modules.add(new PlatformModuleStatusData("profile", "BASIC_READY", "个人主页基础聚合已经可用"));
+        modules.add(new PlatformModuleStatusData("discover", "BASIC_READY", "发现模块已经接入互动与地图能力"));
+        modules.add(new PlatformModuleStatusData("llm", "BASIC_READY", "已经接入 Spring AI ChatClient 风格模型链路"));
+        modules.add(new PlatformModuleStatusData("rag", "BASIC_READY", "已经接入 Spring AI VectorStore 风格向量检索"));
+        modules.add(new PlatformModuleStatusData("trade", "BASIC_READY", "交易主链已经打通，仍在持续增强"));
+        modules.add(new PlatformModuleStatusData("cache", "BASIC_READY", "缓存治理与热点观测能力已经落地"));
+        modules.add(new PlatformModuleStatusData("threadpool", "BASIC_READY", "线程池双模式与运行摘要已经可观测"));
+        modules.add(new PlatformModuleStatusData("platform", "BASIC_READY", "平台治理入口已覆盖运行、缓存、线程池与热点观测"));
         return modules;
     }
 }

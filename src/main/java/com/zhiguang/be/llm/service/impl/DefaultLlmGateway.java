@@ -2,14 +2,17 @@ package com.zhiguang.be.llm.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.zhiguang.be.llm.LlmConfig;
+import com.zhiguang.be.llm.LlmConstants;
 import com.zhiguang.be.llm.config.LlmProperties;
 import com.zhiguang.be.llm.service.LlmGateway;
 import com.zhiguang.be.llm.service.RagAnswerService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.deepseek.DeepSeekChatOptions;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -29,7 +32,7 @@ import java.util.function.Consumer;
 
 /**
  * 默认 LLM 网关实现。
- * 当前同时支持模板兜底和 HTTP 模型网关接入。
+ * 当前同时支持 Spring AI ChatClient、HTTP 网关以及模板兜底三种路径。
  */
 @Service
 public class DefaultLlmGateway implements LlmGateway {
@@ -38,11 +41,17 @@ public class DefaultLlmGateway implements LlmGateway {
 
     private final ObjectMapper objectMapper;
     private final LlmProperties llmProperties;
+    private final ChatClient chatClient;
     private final HttpClient httpClient;
 
-    public DefaultLlmGateway(ObjectMapper objectMapper, LlmProperties llmProperties) {
+    public DefaultLlmGateway(
+            ObjectMapper objectMapper,
+            LlmProperties llmProperties,
+            ObjectProvider<ChatClient> chatClientProvider
+    ) {
         this.objectMapper = objectMapper;
         this.llmProperties = llmProperties;
+        this.chatClient = chatClientProvider.getIfAvailable();
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(Math.max(llmProperties.getHttp().getTimeoutSeconds(), 1)))
                 .build();
@@ -50,14 +59,36 @@ public class DefaultLlmGateway implements LlmGateway {
 
     @Override
     public String currentModelName() {
-        if (useHttpProvider()) {
+        if (useSpringAiProvider() || useHttpProvider()) {
             return llmProperties.getModelName();
         }
-        return LlmConfig.MODEL_NAME;
+        return LlmConstants.TEMPLATE_MODEL_NAME;
     }
 
     @Override
     public String generateDescription(String content, int maxCodePoints) {
+        if (useSpringAiProvider()) {
+            try {
+                String response = chatClient.prompt()
+                        .system("你是中文社区文案助手，只输出一条精炼描述。")
+                        .user("正文如下：\n" + content + "\n\n请输出不超过 " + maxCodePoints + " 个 Unicode 字符的中文描述。")
+                        .options(buildSpringAiOptions(maxCodePoints))
+                        .call()
+                        .content();
+                if (StringUtils.hasText(response)) {
+                    return response.trim();
+                }
+                if (!llmProperties.isFallbackToTemplate()) {
+                    throw new IllegalStateException("Spring AI description response did not contain text");
+                }
+            } catch (Exception ex) {
+                if (!llmProperties.isFallbackToTemplate()) {
+                    throw new IllegalStateException("Failed to call Spring AI description API", ex);
+                }
+                log.warn("Spring AI description generation failed, falling back: {}", ex.getMessage());
+            }
+        }
+
         if (useHttpProvider()) {
             try {
                 String response = requestText(buildDescriptionPayload(content, maxCodePoints, false));
@@ -74,11 +105,34 @@ public class DefaultLlmGateway implements LlmGateway {
                 log.warn("HTTP description generation failed, falling back to template: {}", ex.getMessage());
             }
         }
+
         return templateDescription(content, maxCodePoints);
     }
 
     @Override
     public String generateRagAnswer(String question, List<RagAnswerService.Context> contexts) {
+        if (useSpringAiProvider()) {
+            try {
+                String response = chatClient.prompt()
+                        .system("你是中文知识助手。只能根据提供的上下文作答；如果上下文不足，请明确说明。")
+                        .user(buildRagPrompt(question, contexts))
+                        .options(buildSpringAiOptions(llmProperties.getHttp().getMaxTokens()))
+                        .call()
+                        .content();
+                if (StringUtils.hasText(response)) {
+                    return response.trim();
+                }
+                if (!llmProperties.isFallbackToTemplate()) {
+                    throw new IllegalStateException("Spring AI RAG response did not contain text");
+                }
+            } catch (Exception ex) {
+                if (!llmProperties.isFallbackToTemplate()) {
+                    throw new IllegalStateException("Failed to call Spring AI RAG API", ex);
+                }
+                log.warn("Spring AI RAG generation failed, falling back: {}", ex.getMessage());
+            }
+        }
+
         if (useHttpProvider()) {
             try {
                 String response = requestText(buildRagPayload(question, contexts, false));
@@ -95,11 +149,39 @@ public class DefaultLlmGateway implements LlmGateway {
                 log.warn("HTTP RAG generation failed, falling back to template: {}", ex.getMessage());
             }
         }
+
         return templateRagAnswer(question, contexts);
     }
 
     @Override
     public boolean streamRagAnswer(String question, List<RagAnswerService.Context> contexts, Consumer<String> consumer) {
+        if (useSpringAiProvider()) {
+            boolean emitted = false;
+            try {
+                Iterable<String> pieces = chatClient.prompt()
+                        .system("你是中文知识助手。只能根据提供的上下文作答；如果上下文不足，请明确说明。")
+                        .user(buildRagPrompt(question, contexts))
+                        .options(buildSpringAiOptions(llmProperties.getHttp().getMaxTokens()))
+                        .stream()
+                        .content()
+                        .toIterable();
+                for (String piece : pieces) {
+                    if (!StringUtils.hasText(piece)) {
+                        continue;
+                    }
+                    consumer.accept(piece);
+                    emitted = true;
+                }
+                return emitted;
+            } catch (Exception ex) {
+                if (!llmProperties.isFallbackToTemplate()) {
+                    throw new IllegalStateException("Failed to stream Spring AI RAG API", ex);
+                }
+                log.warn("Spring AI RAG streaming failed, falling back: {}", ex.getMessage());
+                return false;
+            }
+        }
+
         if (!useHttpProvider() || !llmProperties.getHttp().isStreamEnabled()) {
             return false;
         }
@@ -140,9 +222,23 @@ public class DefaultLlmGateway implements LlmGateway {
         return emitted;
     }
 
+    private boolean useSpringAiProvider() {
+        return chatClient != null
+                && ("spring-ai".equalsIgnoreCase(llmProperties.getProvider())
+                || "deepseek".equalsIgnoreCase(llmProperties.getProvider()));
+    }
+
     private boolean useHttpProvider() {
         return "http".equalsIgnoreCase(llmProperties.getProvider())
                 && StringUtils.hasText(llmProperties.getHttp().getEndpoint());
+    }
+
+    private DeepSeekChatOptions buildSpringAiOptions(int maxTokens) {
+        return DeepSeekChatOptions.builder()
+                .model(llmProperties.getModelName())
+                .temperature(llmProperties.getHttp().getTemperature())
+                .maxTokens(Math.max(1, maxTokens))
+                .build();
     }
 
     private String requestText(Map<String, Object> payload) throws Exception {
@@ -241,7 +337,7 @@ public class DefaultLlmGateway implements LlmGateway {
             prompt.append("No context available.");
             return prompt.toString();
         }
-        int limit = Math.min(contexts.size(), LlmConfig.RAG_CONTEXT_LIMIT);
+        int limit = Math.min(contexts.size(), LlmConstants.RAG_CONTEXT_LIMIT);
         for (int i = 0; i < limit; i++) {
             RagAnswerService.Context context = contexts.get(i);
             prompt.append(i + 1)
@@ -451,7 +547,7 @@ public class DefaultLlmGateway implements LlmGateway {
         answer.append("我先根据社区里已经公开的内容做一个基础回答。\n");
         answer.append("问题：").append(question).append("\n\n");
         answer.append("结合当前命中的帖子，可以先得到这些信息：\n");
-        int limit = Math.min(contexts.size(), LlmConfig.RAG_CONTEXT_LIMIT);
+        int limit = Math.min(contexts.size(), LlmConstants.RAG_CONTEXT_LIMIT);
         for (int i = 0; i < limit; i++) {
             RagAnswerService.Context context = contexts.get(i);
             answer.append(i + 1)

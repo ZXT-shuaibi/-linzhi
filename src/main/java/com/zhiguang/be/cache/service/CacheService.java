@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -312,6 +313,41 @@ public class CacheService {
             redisPatternDeleteFailureCount.increment();
             log.warn("delete redis cache by pattern failed, pattern={}", pattern, ex);
             return 0L;
+        }
+    }
+
+    /**
+     * 预览匹配 pattern 的 Redis Key。
+     * 仅用于运维排查，默认按 limit 截断，避免一次性扫出过多结果。
+     *
+     * @param pattern Redis key 匹配表达式
+     * @param limit 返回上限
+     * @return 匹配到的 key 列表
+     */
+    public List<String> previewRedisKeys(String pattern, int limit) {
+        if (pattern == null || pattern.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        int safeLimit = Math.max(1, limit);
+        try {
+            List<String> keys = stringRedisTemplate.execute((RedisCallback<List<String>>) connection -> {
+                ScanOptions options = ScanOptions.scanOptions()
+                        .match(pattern)
+                        .count(Math.min(Math.max(safeLimit, 50), 500))
+                        .build();
+                List<String> matches = new ArrayList<String>();
+                try (Cursor<byte[]> cursor = connection.scan(options)) {
+                    while (cursor.hasNext() && matches.size() < safeLimit) {
+                        matches.add(new String(cursor.next(), StandardCharsets.UTF_8));
+                    }
+                }
+                return matches;
+            });
+            return keys == null ? Collections.emptyList() : keys;
+        } catch (Exception ex) {
+            redisReadFailureCount.increment();
+            log.warn("preview redis keys failed, pattern={}", pattern, ex);
+            return Collections.emptyList();
         }
     }
 

@@ -2,7 +2,7 @@ package com.zhiguang.be.llm.service.impl;
 
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
-import com.zhiguang.be.llm.LlmConfig;
+import com.zhiguang.be.llm.LlmConstants;
 import com.zhiguang.be.llm.service.KnowPostDescriptionService;
 import com.zhiguang.be.llm.service.LlmGateway;
 import org.springframework.http.HttpStatus;
@@ -26,7 +26,7 @@ public class KnowPostDescriptionServiceImpl implements KnowPostDescriptionServic
         }
 
         String description = postProcess(
-                llmGateway.generateDescription(content, LlmConfig.DESCRIPTION_MAX_CODE_POINTS)
+                llmGateway.generateDescription(content, LlmConstants.DESCRIPTION_MAX_CODE_POINTS)
         );
         if (!description.isEmpty()) {
             return description;
@@ -43,7 +43,7 @@ public class KnowPostDescriptionServiceImpl implements KnowPostDescriptionServic
                 .trim();
         normalized = stripWrappingQuotes(normalized);
         normalized = stripTrailingPunctuation(normalized);
-        return truncateByCodePoint(normalized, LlmConfig.DESCRIPTION_MAX_CODE_POINTS);
+        return truncateByCodePoint(normalized, LlmConstants.DESCRIPTION_MAX_CODE_POINTS);
     }
 
     private String stripWrappingQuotes(String text) {
@@ -85,10 +85,10 @@ public class KnowPostDescriptionServiceImpl implements KnowPostDescriptionServic
         for (String part : parts) {
             String candidate = part.trim();
             if (!candidate.isEmpty()) {
-                return truncateByCodePoint(candidate, LlmConfig.DESCRIPTION_MAX_CODE_POINTS);
+                return truncateByCodePoint(candidate, LlmConstants.DESCRIPTION_MAX_CODE_POINTS);
             }
         }
-        return truncateByCodePoint(normalized, LlmConfig.DESCRIPTION_MAX_CODE_POINTS);
+        return truncateByCodePoint(normalized, LlmConstants.DESCRIPTION_MAX_CODE_POINTS);
     }
 
     private String truncateByCodePoint(String value, int maxCodePoints) {

@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -1059,7 +1060,11 @@ public class InteractionServiceImpl implements InteractionService {
         if (counterEventProducer.isEnabled()) {
             return;
         }
-        flushAggregateBucketsNow();
+        try {
+            flushAggregateBucketsNow();
+        } catch (RedisConnectionFailureException ex) {
+            log.debug("skip aggregate bucket flush because redis is unavailable", ex);
+        }
     }
 
     /**

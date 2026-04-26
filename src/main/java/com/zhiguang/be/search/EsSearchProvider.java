@@ -11,6 +11,8 @@ import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Component;
 
@@ -30,6 +32,8 @@ import java.util.Set;
 @Component
 @ConditionalOnBean(ElasticsearchClient.class)
 public class EsSearchProvider implements SearchProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(EsSearchProvider.class);
 
     private static final double TITLE_EXACT_BOOST = 8.0D;
     private static final double TITLE_PHRASE_BOOST = 4.0D;
@@ -79,89 +83,9 @@ public class EsSearchProvider implements SearchProvider {
 
         SearchResponse<Map<String, Object>> response;
         try {
-            response = elasticsearchClient.search(search -> {
-                search.index(searchProperties.getEs().getIndex())
-                        .size(safeSize + 1)
-                        .query(query -> query.functionScore(functionScore -> {
-                            functionScore.query(inner -> inner.bool(bool -> {
-                                bool.must(must -> must.multiMatch(multiMatch -> multiMatch
-                                        .query(queryText)
-                                        .fields("title^3", "summary^1.5", "tags_text^2")
-                                ));
-                                bool.filter(filter -> filter.term(term -> term.field("status").value("published")));
-                                bool.filter(filter -> filter.term(term -> term.field("visible").value("public")));
-                                if (tagText != null) {
-                                    bool.filter(filter -> filter.term(term -> term.field("tags").value(tagText)));
-                                }
-                                if (lat != null && lng != null && radius != null && radius.doubleValue() > 0D) {
-                                    bool.filter(filter -> filter.geoDistance(geo -> geo
-                                            .field("location")
-                                            .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
-                                            .distance(Math.max(radius.doubleValue(), 1D) + "m")
-                                    ));
-                                }
-                                bool.should(should -> should.term(term -> term
-                                        .field("title_keyword")
-                                        .value(queryText)
-                                        .boost((float) TITLE_EXACT_BOOST)
-                                ));
-                                bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
-                                        .field("title")
-                                        .query(queryText)
-                                        .boost((float) TITLE_PHRASE_BOOST)
-                                ));
-                                return bool;
-                            }));
-
-                            functionScore.functions(fn -> fn
-                                    .filter(filter -> filter.term(term -> term.field("is_top").value(1)))
-                                    .weight(TOP_WEIGHT)
-                            );
-                            functionScore.functions(fn -> fn
-                                    .fieldValueFactor(fieldValueFactor -> fieldValueFactor
-                                            .field("like_count")
-                                            .modifier(FieldValueFactorModifier.Log1p)
-                                            .missing(0.0)
-                                    )
-                                    .weight(LIKE_WEIGHT)
-                            );
-                            functionScore.functions(fn -> fn
-                                    .fieldValueFactor(fieldValueFactor -> fieldValueFactor
-                                            .field("favorite_count")
-                                            .modifier(FieldValueFactorModifier.Log1p)
-                                            .missing(0.0)
-                                    )
-                                    .weight(FAVORITE_WEIGHT)
-                            );
-                            if (lat != null && lng != null) {
-                                int nearbyRadius = resolveNearbyBoostRadius(radius);
-                                functionScore.functions(fn -> fn
-                                        .filter(filter -> filter.geoDistance(geo -> geo
-                                                .field("location")
-                                                .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
-                                                .distance(nearbyRadius + "m")
-                                        ))
-                                        .weight(NEARBY_WEIGHT)
-                                );
-                            }
-                            return functionScore
-                                    .boostMode(FunctionBoostMode.Sum)
-                                    .scoreMode(FunctionScoreMode.Sum);
-                        }))
-                        .highlight(highlight -> highlight
-                                .fields("title", field -> field.numberOfFragments(1))
-                                .fields("summary", field -> field.fragmentSize(Math.max(searchProperties.getSnippetLength(), 40)).numberOfFragments(1))
-                        )
-                        .sort(sort -> sort.score(score -> score.order(SortOrder.Desc)))
-                        .sort(sort -> sort.field(field -> field.field("publish_time").order(SortOrder.Desc).format("epoch_millis")))
-                        .sort(sort -> sort.field(field -> field.field("like_count").order(SortOrder.Desc)))
-                        .sort(sort -> sort.field(field -> field.field("content_id").order(SortOrder.Desc)));
-                if (afterValues != null && !afterValues.isEmpty()) {
-                    search.searchAfter(afterValues);
-                }
-                return search;
-            }, (Class<Map<String, Object>>) (Class<?>) Map.class);
+            response = executeSearch(queryText, safeSize, tagText, afterValues, lat, lng, radius);
         } catch (Exception ex) {
+            log.warn("es search failed, q={}, page={}, size={}, tag={}", queryText, safePage, safeSize, tagText, ex);
             return new SearchPostsData(
                     Collections.<SearchResultItem>emptyList(),
                     new CursorPageMeta(safePage, safeSize, false, null, List.of())
@@ -179,6 +103,9 @@ public class EsSearchProvider implements SearchProvider {
                 continue;
             }
             String postId = asString(source.get("content_id"));
+            if (!hasText(postId)) {
+                continue;
+            }
             InteractionSummary summary = interactionMap.get(postId);
             Double distanceMeters = computeDistanceMeters(lat, lng, asDouble(source.get("latitude")), asDouble(source.get("longitude")));
             items.add(new SearchResultItem(
@@ -222,23 +149,15 @@ public class EsSearchProvider implements SearchProvider {
     @Override
     @SuppressWarnings("unchecked")
     public SuggestData suggest(String q, int size) {
+        if (!hasText(q)) {
+            return new SuggestData(Collections.<SuggestItem>emptyList());
+        }
         int safeSize = normalizeSuggestSize(size);
         SearchResponse<Map<String, Object>> response;
         try {
-            response = elasticsearchClient.search(search -> search
-                            .index(searchProperties.getEs().getIndex())
-                            .suggest(suggest -> suggest
-                                    .suggesters("title_suggest", fieldSuggester -> fieldSuggester
-                                            .prefix(q.trim())
-                                            .completion(completion -> completion
-                                                    .field("title_suggest")
-                                                    .size(safeSize)
-                                                    .skipDuplicates(true)
-                                            )
-                                    )
-                            ),
-                    (Class<Map<String, Object>>) (Class<?>) Map.class);
+            response = executeSuggest(q.trim(), safeSize);
         } catch (Exception ex) {
+            log.warn("es suggest failed, q={}, size={}", q, safeSize, ex);
             return new SuggestData(Collections.<SuggestItem>emptyList());
         }
 
@@ -270,6 +189,123 @@ public class EsSearchProvider implements SearchProvider {
             return new SuggestData(new ArrayList<SuggestItem>(items.subList(0, safeSize)));
         }
         return new SuggestData(items);
+    }
+
+    /**
+     * 执行帖子检索查询，统一收口 ES function_score、排序和高亮配置。
+     */
+    @SuppressWarnings("unchecked")
+    private SearchResponse<Map<String, Object>> executeSearch(
+            String queryText,
+            int safeSize,
+            String tagText,
+            List<FieldValue> afterValues,
+            Double lat,
+            Double lng,
+            Double radius
+    ) throws Exception {
+        return elasticsearchClient.search(search -> {
+            search.index(searchProperties.getEs().getIndex())
+                    .size(safeSize + 1)
+                    .query(query -> query.functionScore(functionScore -> {
+                        functionScore.query(inner -> inner.bool(bool -> {
+                            bool.must(must -> must.multiMatch(multiMatch -> multiMatch
+                                    .query(queryText)
+                                    .fields("title^3", "summary^1.5", "tags_text^2")
+                            ));
+                            bool.filter(filter -> filter.term(term -> term.field("status").value("published")));
+                            bool.filter(filter -> filter.term(term -> term.field("visible").value("public")));
+                            if (tagText != null) {
+                                bool.filter(filter -> filter.term(term -> term.field("tags").value(tagText)));
+                            }
+                            if (lat != null && lng != null && radius != null && radius.doubleValue() > 0D) {
+                                bool.filter(filter -> filter.geoDistance(geo -> geo
+                                        .field("location")
+                                        .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
+                                        .distance(Math.max(radius.doubleValue(), 1D) + "m")
+                                ));
+                            }
+                            bool.should(should -> should.term(term -> term
+                                    .field("title_keyword")
+                                    .value(queryText)
+                                    .boost((float) TITLE_EXACT_BOOST)
+                            ));
+                            bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
+                                    .field("title")
+                                    .query(queryText)
+                                    .boost((float) TITLE_PHRASE_BOOST)
+                            ));
+                            return bool;
+                        }));
+
+                        functionScore.functions(fn -> fn
+                                .filter(filter -> filter.term(term -> term.field("is_top").value(1)))
+                                .weight(TOP_WEIGHT)
+                        );
+                        functionScore.functions(fn -> fn
+                                .fieldValueFactor(fieldValueFactor -> fieldValueFactor
+                                        .field("like_count")
+                                        .modifier(FieldValueFactorModifier.Log1p)
+                                        .missing(0.0)
+                                )
+                                .weight(LIKE_WEIGHT)
+                        );
+                        functionScore.functions(fn -> fn
+                                .fieldValueFactor(fieldValueFactor -> fieldValueFactor
+                                        .field("favorite_count")
+                                        .modifier(FieldValueFactorModifier.Log1p)
+                                        .missing(0.0)
+                                )
+                                .weight(FAVORITE_WEIGHT)
+                        );
+                        if (lat != null && lng != null) {
+                            int nearbyRadius = resolveNearbyBoostRadius(radius);
+                            functionScore.functions(fn -> fn
+                                    .filter(filter -> filter.geoDistance(geo -> geo
+                                            .field("location")
+                                            .location(location -> location.latlon(point -> point.lat(lat).lon(lng)))
+                                            .distance(nearbyRadius + "m")
+                                    ))
+                                    .weight(NEARBY_WEIGHT)
+                            );
+                        }
+                        return functionScore
+                                .boostMode(FunctionBoostMode.Sum)
+                                .scoreMode(FunctionScoreMode.Sum);
+                    }))
+                    .highlight(highlight -> highlight
+                            .fields("title", field -> field.numberOfFragments(1))
+                            .fields("summary", field -> field.fragmentSize(Math.max(searchProperties.getSnippetLength(), 40)).numberOfFragments(1))
+                    )
+                    .sort(sort -> sort.score(score -> score.order(SortOrder.Desc)))
+                    .sort(sort -> sort.field(field -> field.field("publish_time").order(SortOrder.Desc).format("epoch_millis")))
+                    .sort(sort -> sort.field(field -> field.field("like_count").order(SortOrder.Desc)))
+                    .sort(sort -> sort.field(field -> field.field("content_id").order(SortOrder.Desc)));
+            if (afterValues != null && !afterValues.isEmpty()) {
+                search.searchAfter(afterValues);
+            }
+            return search;
+        }, (Class<Map<String, Object>>) (Class<?>) Map.class);
+    }
+
+    /**
+     * 执行联想建议查询。
+     */
+    @SuppressWarnings("unchecked")
+    private SearchResponse<Map<String, Object>> executeSuggest(String queryText, int safeSize) throws Exception {
+        return elasticsearchClient.search(search -> search
+                        .index(searchProperties.getEs().getIndex())
+                        .suggest(suggest -> suggest
+                                .suggesters("title_suggest", fieldSuggester -> fieldSuggester
+                                        .prefix(queryText)
+                                        .completion(completion -> completion
+                                                .field("title_suggest")
+                                                .size(safeSize)
+                                                .skipDuplicates(true)
+                                        )
+                                )
+                        ),
+                (Class<Map<String, Object>>) (Class<?>) Map.class);
     }
 
     private int normalizePageSize(int size) {
@@ -316,7 +352,8 @@ public class EsSearchProvider implements SearchProvider {
         }
         try {
             return interactionService.summaryBatch(currentUserId, "post", targetIds);
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            log.debug("load interaction summary for es search failed, currentUserId={}, targetIds={}", currentUserId, targetIds, ex);
             return Map.of();
         }
     }

@@ -6,6 +6,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -152,6 +155,31 @@ public class HotKeyDetector {
         return counters.size();
     }
 
+    /**
+     * 快照当前最热的一批 Key。
+     *
+     * @param limit 返回条数上限
+     * @return 热点 Key 列表
+     */
+    public List<HotKeySnapshot> snapshotTopKeys(int limit) {
+        int safeLimit = Math.max(1, limit);
+        List<HotKeySnapshot> snapshots = new ArrayList<HotKeySnapshot>();
+        for (Map.Entry<String, AtomicIntegerArray> entry : counters.entrySet()) {
+            int heat = heat(entry.getKey());
+            if (heat <= 0) {
+                continue;
+            }
+            snapshots.add(new HotKeySnapshot(entry.getKey(), heat, level(entry.getKey())));
+        }
+        snapshots.sort(Comparator
+                .comparingInt(HotKeySnapshot::heat).reversed()
+                .thenComparing(HotKeySnapshot::key));
+        if (snapshots.size() <= safeLimit) {
+            return snapshots;
+        }
+        return new ArrayList<HotKeySnapshot>(snapshots.subList(0, safeLimit));
+    }
+
     private boolean enabled() {
         return cacheProperties.getHotkey().isEnabled();
     }
@@ -195,5 +223,15 @@ public class HotKeyDetector {
         LOW,
         MEDIUM,
         HIGH
+    }
+
+    /**
+     * 热点 Key 快照。
+     */
+    public record HotKeySnapshot(
+            String key,
+            int heat,
+            Level level
+    ) {
     }
 }

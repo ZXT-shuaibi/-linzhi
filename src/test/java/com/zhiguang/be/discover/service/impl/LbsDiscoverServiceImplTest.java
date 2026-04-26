@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.cache.config.CacheProperties;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
+import com.zhiguang.be.discover.config.DiscoverProperties;
 import com.zhiguang.be.discover.model.NearbyItem;
 import com.zhiguang.be.discover.model.NearbySearchRequest;
 import com.zhiguang.be.discover.model.NearbySearchResponse;
@@ -74,7 +75,7 @@ class LbsDiscoverServiceImplTest {
         doReturn(hashOperations).when(redisTemplate).opsForHash();
 
         cacheService = new CacheService(redisTemplate, new ObjectMapper(), new CacheProperties());
-        service = new LbsDiscoverServiceImpl(redisTemplate, cacheService, new ObjectMapper());
+        service = new LbsDiscoverServiceImpl(redisTemplate, cacheService, new ObjectMapper(), new DiscoverProperties());
     }
 
     /**
@@ -92,6 +93,7 @@ class LbsDiscoverServiceImplTest {
                     "Cached title",
                     "Cached summary",
                     "https://cdn.example/cached.png",
+                    "Cached address",
                     Collections.singletonList("cached"),
                     "author-1",
                     "Cached author",
@@ -101,6 +103,7 @@ class LbsDiscoverServiceImplTest {
                     66.0,
                     1_700_000_000_000L,
                     8,
+                    3,
                     0.92
             )),
             1,
