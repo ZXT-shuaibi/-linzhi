@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -169,7 +170,7 @@ public class RagIndexService {
         double[] queryVector = ragEmbeddingGateway.embed(normalizedQuestion);
 
         List<ChunkHit> hits = useVectorStore()
-                ? searchFromVectorStore(question, postId, lat, lng, safeTopK, normalizedQuestion, queryTokens, queryVector)
+                ? searchFromVectorStore(postId, lat, lng, safeTopK, normalizedQuestion, queryTokens, queryVector)
                 : searchFromLocalStore(postId, lat, lng, safeTopK, normalizedQuestion, queryTokens, queryVector);
 
         List<RagReference> references = hits.stream()
@@ -179,7 +180,6 @@ public class RagIndexService {
     }
 
     private List<ChunkHit> searchFromVectorStore(
-            String question,
             String postId,
             Double lat,
             Double lng,
@@ -189,7 +189,7 @@ public class RagIndexService {
             double[] queryVector
     ) {
         ensureVectorIndex();
-        List<VectorChunkDocument> documents = searchVectorDocuments(question, postId);
+        List<VectorChunkDocument> documents = searchVectorDocuments(postId, topK, queryVector);
         if (documents.isEmpty()) {
             return List.of();
         }
@@ -199,11 +199,11 @@ public class RagIndexService {
             double score = score(
                     normalizedQuestion,
                     queryTokens,
-                    queryVector,
+                    normalizedSimilarity(document.retrievalScore()),
                     document.title(),
                     document.content(),
                     tokenize(document.content()),
-                    document.vector(),
+                    document.weight(),
                     document.position()
             );
             if (score <= 0D) {
@@ -242,11 +242,11 @@ public class RagIndexService {
                 double score = score(
                         normalizedQuestion,
                         queryTokens,
-                        queryVector,
+                        cosineSimilarity(queryVector, chunk.vector()),
                         post.title(),
                         chunk.content(),
                         chunk.keywords(),
-                        chunk.vector(),
+                        chunk.weight(),
                         chunk.position()
                 );
                 if (score <= 0D) {
@@ -321,6 +321,7 @@ public class RagIndexService {
                     + "\"title\":{\"type\":\"text\"},"
                     + "\"content\":{\"type\":\"text\"},"
                     + "\"position\":{\"type\":\"integer\"},"
+                    + "\"weight\":{\"type\":\"integer\"},"
                     + "\"content_sha256\":{\"type\":\"keyword\"},"
                     + "\"content_etag\":{\"type\":\"keyword\"},"
                     + "\"latitude\":{\"type\":\"double\"},"
@@ -369,12 +370,13 @@ public class RagIndexService {
         deleteVectorChunks(entity.postId());
         StringBuilder ndjson = new StringBuilder();
         for (IndexedChunk chunk : chunks) {
-            VectorChunkDocument document = new VectorChunkDocument(
+            VectorChunkWriteDocument document = new VectorChunkWriteDocument(
                     entity.postId(),
                     chunk.chunkId(),
                     entity.title(),
                     chunk.content(),
                     chunk.position(),
+                    chunk.weight(),
                     entity.contentSha256(),
                     entity.contentEtag(),
                     entity.latitude(),
@@ -412,12 +414,15 @@ public class RagIndexService {
         }
     }
 
-    private List<VectorChunkDocument> searchVectorDocuments(String question, String postId) {
+    private List<VectorChunkDocument> searchVectorDocuments(String postId, int topK, double[] queryVector) {
         List<VectorChunkDocument> documents = new ArrayList<VectorChunkDocument>();
         try {
-            int candidateSize = Math.max(1, ragProperties.getVector().getCandidateSize());
+            int candidateSize = Math.max(
+                    Math.max(1, ragProperties.getVector().getCandidateSize()),
+                    Math.max(1, topK) * 3
+            );
             Request request = new Request("POST", "/" + ragProperties.getVector().getIndexName() + "/_search");
-            request.setJsonEntity(buildSearchBody(question, postId, candidateSize));
+            request.setJsonEntity(buildSearchBody(postId, candidateSize, queryVector));
             JsonNode root = parseResponse(ragVectorRestClient.performRequest(request));
             JsonNode hits = root.path("hits").path("hits");
             if (!hits.isArray()) {
@@ -434,11 +439,12 @@ public class RagIndexService {
                         source.path("title").asText(""),
                         source.path("content").asText(""),
                         source.path("position").asInt(0),
+                        source.path("weight").asInt(1),
                         source.path("content_sha256").asText(null),
                         source.path("content_etag").asText(null),
                         source.path("latitude").isNumber() ? source.path("latitude").asDouble() : null,
                         source.path("longitude").isNumber() ? source.path("longitude").asDouble() : null,
-                        parseVector(source.path("vector"))
+                        hit.path("_score").asDouble(0D)
                 ));
             }
         } catch (Exception ignored) {
@@ -447,23 +453,47 @@ public class RagIndexService {
         return documents;
     }
 
-    private String buildSearchBody(String question, String postId, int candidateSize) {
-        if (hasText(postId)) {
-            return "{"
-                    + "\"size\":" + candidateSize + ","
-                    + "\"query\":{\"term\":{\"post_id\":\"" + escapeJson(postId) + "\"}}"
-                    + "}";
+    private String buildSearchBody(String postId, int candidateSize, double[] queryVector) {
+        try {
+            Map<String, Object> root = new LinkedHashMap<String, Object>();
+            root.put("size", candidateSize);
+            root.put("_source", List.of(
+                    "post_id",
+                    "chunk_id",
+                    "title",
+                    "content",
+                    "position",
+                    "weight",
+                    "content_sha256",
+                    "content_etag",
+                    "latitude",
+                    "longitude"
+            ));
+
+            Map<String, Object> baseQuery;
+            if (hasText(postId)) {
+                baseQuery = Map.of("term", Map.of("post_id", postId));
+            } else {
+                baseQuery = Map.of("match_all", Map.of());
+            }
+
+            Map<String, Object> script = new LinkedHashMap<String, Object>();
+            script.put("source", "cosineSimilarity(params.query_vector, 'vector') + 1.0");
+            script.put("params", Map.of("query_vector", toVectorValues(queryVector)));
+
+            root.put("query", Map.of(
+                    "script_score", Map.of(
+                            "query", baseQuery,
+                            "script", script
+                    )
+            ));
+            if (!hasText(postId)) {
+                root.put("min_score", 1.0D + Math.max(0D, ragProperties.getVector().getMinSimilarity()));
+            }
+            return objectMapper.writeValueAsString(root);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to build vector search body", ex);
         }
-        if (hasText(question)) {
-            return "{"
-                    + "\"size\":" + candidateSize + ","
-                    + "\"query\":{\"multi_match\":{\"query\":\"" + escapeJson(question) + "\",\"fields\":[\"title^2\",\"content\"]}}"
-                    + "}";
-        }
-        return "{"
-                + "\"size\":" + candidateSize + ","
-                + "\"query\":{\"match_all\":{}}"
-                + "}";
     }
 
     private JsonNode parseResponse(Response response) throws Exception {
@@ -664,19 +694,18 @@ public class RagIndexService {
     private double score(
             String normalizedQuestion,
             Set<String> queryTokens,
-            double[] queryVector,
+            double vectorScore,
             String title,
             String content,
             Set<String> keywords,
-            double[] chunkVector,
+            int weight,
             int position
     ) {
         if (!hasText(normalizedQuestion)) {
             return 0D;
         }
 
-        double vectorScore = cosineSimilarity(queryVector, chunkVector);
-        double keywordScore = keywordScore(normalizedQuestion, queryTokens, title, content, keywords, position);
+        double keywordScore = keywordScore(normalizedQuestion, queryTokens, title, content, keywords, weight, position);
         double weightedScore = vectorScore * ragProperties.getVector().getVectorWeight()
                 + keywordScore * ragProperties.getVector().getKeywordWeight();
 
@@ -686,12 +715,21 @@ public class RagIndexService {
         return weightedScore;
     }
 
+    private List<Double> toVectorValues(double[] vector) {
+        List<Double> values = new ArrayList<Double>(vector.length);
+        for (double value : vector) {
+            values.add(value);
+        }
+        return values;
+    }
+
     private double keywordScore(
             String normalizedQuestion,
             Set<String> queryTokens,
             String title,
             String content,
             Set<String> keywords,
+            int weight,
             int position
     ) {
         String normalizedContent = normalizeText(content);
@@ -713,8 +751,13 @@ public class RagIndexService {
                 score += ragProperties.getVector().getTitleBoost();
             }
         }
+        score += Math.max(0D, weight - 1) * 0.03D;
         score += Math.max(0D, 0.08D - position * 0.01D);
         return score;
+    }
+
+    private double normalizedSimilarity(double retrievalScore) {
+        return Math.max(0D, retrievalScore - 1.0D);
     }
 
     private double cosineSimilarity(double[] left, double[] right) {
@@ -778,19 +821,6 @@ public class RagIndexService {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    private double[] parseVector(JsonNode node) {
-        int dimension = Math.max(1, ragProperties.getVector().getDimension());
-        double[] vector = new double[dimension];
-        if (node == null || !node.isArray()) {
-            return vector;
-        }
-        int upperBound = Math.min(dimension, node.size());
-        for (int index = 0; index < upperBound; index++) {
-            vector[index] = node.get(index).asDouble(0D);
-        }
-        return vector;
-    }
-
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -836,6 +866,22 @@ public class RagIndexService {
             String title,
             String content,
             int position,
+            int weight,
+            String contentSha256,
+            String contentEtag,
+            Double latitude,
+            Double longitude,
+            double retrievalScore
+    ) {
+    }
+
+    private record VectorChunkWriteDocument(
+            String postId,
+            String chunkId,
+            String title,
+            String content,
+            int position,
+            int weight,
             String contentSha256,
             String contentEtag,
             Double latitude,
