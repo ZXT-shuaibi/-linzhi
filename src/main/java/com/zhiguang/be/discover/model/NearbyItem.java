@@ -14,6 +14,7 @@ public record NearbyItem(
         String title,
         String summary,
         String coverUrl,
+        String address,
         List<String> tags,
         String authorId,
         String authorName,

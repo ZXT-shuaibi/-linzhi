@@ -252,6 +252,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             metadata.title(),
             metadata.summary(),
             metadata.coverUrl(),
+            metadata.address(),
             metadata.tags(),
             metadata.authorId(),
             metadata.authorName(),
@@ -420,6 +421,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         String title,
         String summary,
         String coverUrl,
+        String address,
         String authorId,
         String authorName,
         String authorAvatar,
@@ -439,6 +441,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                     title,
                     summary,
                     coverUrl,
+                    address,
                     authorId,
                     authorName,
                     authorAvatar,
@@ -529,6 +532,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         String title,
         String summary,
         String coverUrl,
+        String address,
         String authorId,
         String authorName,
         String authorAvatar,
@@ -548,6 +552,9 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         }
         if (StringUtils.hasText(coverUrl)) {
             values.put("coverUrl", coverUrl.trim());
+        }
+        if (StringUtils.hasText(address)) {
+            values.put("address", address.trim());
         }
         if (StringUtils.hasText(authorId)) {
             values.put("authorId", authorId.trim());
@@ -977,6 +984,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         String title = null;
         String summary = null;
         String coverUrl = null;
+        String address = null;
         String authorId = null;
         String authorName = null;
         String authorAvatar = null;
@@ -999,6 +1007,8 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                 summary = asString(entry.getValue());
             } else if ("coverUrl".equals(key)) {
                 coverUrl = asString(entry.getValue());
+            } else if ("address".equals(key)) {
+                address = asString(entry.getValue());
             } else if ("authorId".equals(key)) {
                 authorId = asString(entry.getValue());
             } else if ("authorName".equals(key)) {
@@ -1020,7 +1030,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             }
         }
 
-        return new LbsContentMetadata(title, summary, coverUrl, tags, authorId, authorName, authorAvatar, publishTime, likeCount, favoriteCount, lat, lng);
+        return new LbsContentMetadata(title, summary, coverUrl, address, tags, authorId, authorName, authorAvatar, publishTime, likeCount, favoriteCount, lat, lng);
     }
 
     /**
@@ -1124,6 +1134,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         private final String title;
         private final String summary;
         private final String coverUrl;
+        private final String address;
         private final List<String> tags;
         private final String authorId;
         private final String authorName;
@@ -1147,6 +1158,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                 String title,
                 String summary,
                 String coverUrl,
+                String address,
                 List<String> tags,
                 String authorId,
                 String authorName,
@@ -1160,6 +1172,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             this.title = title;
             this.summary = summary;
             this.coverUrl = coverUrl;
+            this.address = address;
             this.tags = tags;
             this.authorId = authorId;
             this.authorName = authorName;
@@ -1177,7 +1190,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
          * @return 空元数据实例
          */
         private static LbsContentMetadata empty() {
-            return new LbsContentMetadata(null, null, null, Collections.emptyList(), null, null, null, null, null, null, null, null);
+            return new LbsContentMetadata(null, null, null, null, Collections.emptyList(), null, null, null, null, null, null, null, null);
         }
 
         /**
@@ -1195,6 +1208,10 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
 
         private String coverUrl() {
             return coverUrl;
+        }
+
+        private String address() {
+            return address;
         }
 
         private List<String> tags() {

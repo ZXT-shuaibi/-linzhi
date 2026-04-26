@@ -69,6 +69,10 @@ public class RagIndexService {
     /**
      * 确保指定内容已经具备可用索引。
      */
+    /**
+     * 确保指定帖子已经具备可用索引。
+     * 如果内容指纹未变化，则直接复用已有索引。
+     */
     public int ensureIndexed(String postId) {
         if (!hasText(postId)) {
             return 0;
@@ -95,6 +99,9 @@ public class RagIndexService {
         return reindexSinglePost(postId);
     }
 
+    /**
+     * 重建单篇内容索引。
+     */
     /**
      * 重建单篇内容索引。
      */
@@ -135,6 +142,9 @@ public class RagIndexService {
     /**
      * 批量重建公开已发布内容索引。
      */
+    /**
+     * 批量重建公开已发布内容的索引。
+     */
     public int reindexPublicPosts() {
         int pageSize = Math.max(1, ragProperties.getIndex().getRebuildPageSize());
         int maxPages = Math.max(1, ragProperties.getIndex().getRebuildMaxPages());
@@ -163,6 +173,9 @@ public class RagIndexService {
     /**
      * 执行检索并返回命中分片。
      */
+    /**
+     * 执行检索并返回命中的内容分片。
+     */
     public SearchResult search(String question, String postId, Double lat, Double lng, int topK) {
         int safeTopK = Math.max(1, Math.min(topK, ragProperties.getQuery().getMaxTopK()));
         String normalizedQuestion = normalizeText(question);
@@ -179,6 +192,9 @@ public class RagIndexService {
         return new SearchResult(hits, references);
     }
 
+    /**
+     * 先从 ES 向量索引做宽召回，再叠加关键词和位置等业务分数。
+     */
     private List<ChunkHit> searchFromVectorStore(
             String postId,
             Double lat,
@@ -220,6 +236,9 @@ public class RagIndexService {
         return hits.stream().limit(topK).collect(Collectors.toList());
     }
 
+    /**
+     * 本地回退模式下，沿用与向量检索相同的重排思路，保证结果语义尽量一致。
+     */
     private List<ChunkHit> searchFromLocalStore(
             String postId,
             Double lat,
@@ -370,6 +389,7 @@ public class RagIndexService {
         deleteVectorChunks(entity.postId());
         StringBuilder ndjson = new StringBuilder();
         for (IndexedChunk chunk : chunks) {
+            // 写入模型和查询命中模型拆开，避免后续检索结构调整时影响 bulk 文档格式。
             VectorChunkWriteDocument document = new VectorChunkWriteDocument(
                     entity.postId(),
                     chunk.chunkId(),
@@ -414,9 +434,13 @@ public class RagIndexService {
         }
     }
 
+    /**
+     * 从 ES 向量索引中宽召回候选分片，供后续本地重排使用。
+     */
     private List<VectorChunkDocument> searchVectorDocuments(String postId, int topK, double[] queryVector) {
         List<VectorChunkDocument> documents = new ArrayList<VectorChunkDocument>();
         try {
+            // 先宽召回更多候选，再由本地规则做二次排序，更接近 zhiguang 的相似度检索语义。
             int candidateSize = Math.max(
                     Math.max(1, ragProperties.getVector().getCandidateSize()),
                     Math.max(1, topK) * 3
@@ -453,6 +477,10 @@ public class RagIndexService {
         return documents;
     }
 
+    /**
+     * 组装 ES script_score 查询体。
+     * 单帖问答时按 postId 收窄范围，公共问答则对全量公开分片做向量召回。
+     */
     private String buildSearchBody(String postId, int candidateSize, double[] queryVector) {
         try {
             Map<String, Object> root = new LinkedHashMap<String, Object>();
@@ -487,6 +515,7 @@ public class RagIndexService {
                             "script", script
                     )
             ));
+            // 公共问答保留最小相似度门槛，单帖问答则尽量从当前帖子里找上下文。
             if (!hasText(postId)) {
                 root.put("min_score", 1.0D + Math.max(0D, ragProperties.getVector().getMinSimilarity()));
             }
@@ -691,6 +720,9 @@ public class RagIndexService {
         return tokens;
     }
 
+    /**
+     * 组合语义分数、关键词分数和位置信号，得到最终排序分。
+     */
     private double score(
             String normalizedQuestion,
             Set<String> queryTokens,
@@ -723,6 +755,9 @@ public class RagIndexService {
         return values;
     }
 
+    /**
+     * 计算关键词、标题和分片权重带来的业务加分。
+     */
     private double keywordScore(
             String normalizedQuestion,
             Set<String> queryTokens,
@@ -751,11 +786,15 @@ public class RagIndexService {
                 score += ragProperties.getVector().getTitleBoost();
             }
         }
+        // 标题、摘要等高权重分片在语义接近时应当比普通正文更容易被顶上来。
         score += Math.max(0D, weight - 1) * 0.03D;
         score += Math.max(0D, 0.08D - position * 0.01D);
         return score;
     }
 
+    /**
+     * script_score 使用的是 cosineSimilarity + 1.0，这里还原回更直观的相似度区间。
+     */
     private double normalizedSimilarity(double retrievalScore) {
         return Math.max(0D, retrievalScore - 1.0D);
     }

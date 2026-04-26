@@ -498,6 +498,87 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /discover/map/geocode:
+    get:
+      tags: [Discover]
+      summary: 地址转坐标
+      operationId: discoverGeocode
+      security: []
+      parameters:
+        - name: address
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: city
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DiscoverGeoPoint'
+  /discover/map/reverse-geocode:
+    get:
+      tags: [Discover]
+      summary: 坐标转地址
+      operationId: discoverReverseGeocode
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/LatParam'
+        - $ref: '#/components/parameters/LngParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DiscoverReverseGeoData'
+  /discover/map/pois:
+    get:
+      tags: [Discover]
+      summary: 周边 POI 搜索
+      operationId: discoverSearchPois
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/LatParam'
+        - $ref: '#/components/parameters/LngParam'
+        - name: keyword
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/RadiusParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DiscoverPoiItem'
   /posts/drafts:
     post:
       tags: [Posts]
@@ -2299,6 +2380,9 @@ components:
         coverUrl:
           type: string
           nullable: true
+        address:
+          type: string
+          nullable: true
         tags:
           type: array
           items:
@@ -2351,6 +2435,91 @@ components:
           type: integer
         size:
           type: integer
+    DiscoverGeoPoint:
+      type: object
+      properties:
+        lat:
+          type: number
+          format: double
+          nullable: true
+        lng:
+          type: number
+          format: double
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        province:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        district:
+          type: string
+          nullable: true
+        adCode:
+          type: string
+          nullable: true
+    DiscoverReverseGeoData:
+      type: object
+      properties:
+        lat:
+          type: number
+          format: double
+          nullable: true
+        lng:
+          type: number
+          format: double
+          nullable: true
+        formattedAddress:
+          type: string
+          nullable: true
+        province:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        district:
+          type: string
+          nullable: true
+        township:
+          type: string
+          nullable: true
+        street:
+          type: string
+          nullable: true
+        adCode:
+          type: string
+          nullable: true
+    DiscoverPoiItem:
+      type: object
+      properties:
+        id:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        lat:
+          type: number
+          format: double
+          nullable: true
+        lng:
+          type: number
+          format: double
+          nullable: true
+        distance:
+          type: number
+          format: double
+          nullable: true
     CreateDraftRequest:
       type: object
       description: 当前版本草稿类型固定为 image_text，无需额外字段

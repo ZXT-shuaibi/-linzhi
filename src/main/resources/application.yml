@@ -198,8 +198,15 @@ discover:
     max-radius-meters: 50000
     max-page-size: 100
     fail-open-on-search-error: false
-
-social:
+    map-provider:
+      enabled: false
+      provider: amap
+      api-key:
+      geocode-endpoint: https://restapi.amap.com/v3/geocode/geo
+      reverse-geocode-endpoint: https://restapi.amap.com/v3/geocode/regeo
+      poi-search-endpoint: https://restapi.amap.com/v5/place/around
+  
+  social:
   relation:
     rate-limit:
       capacity: 100

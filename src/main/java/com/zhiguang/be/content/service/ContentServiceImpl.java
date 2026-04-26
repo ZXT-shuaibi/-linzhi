@@ -627,6 +627,7 @@ public class ContentServiceImpl implements ContentService {
                 detailRow.title(),
                 detailRow.description(),
                 imageUrls.isEmpty() ? null : imageUrls.get(0),
+                detailRow.address(),
                 detailRow.creatorId(),
                 detailRow.authorNickname(),
                 detailRow.authorAvatar(),

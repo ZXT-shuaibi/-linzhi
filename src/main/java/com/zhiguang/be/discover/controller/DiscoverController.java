@@ -3,6 +3,7 @@ package com.zhiguang.be.discover.controller;
 import com.zhiguang.be.common.api.ApiResponse;
 import com.zhiguang.be.discover.model.NearbySearchRequest;
 import com.zhiguang.be.discover.model.NearbySearchResponse;
+import com.zhiguang.be.discover.service.DiscoverMapService;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -22,14 +23,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class DiscoverController {
 
     private final LbsDiscoverService lbsDiscoverService;
+    private final DiscoverMapService discoverMapService;
 
     /**
      * 构造发现控制器并注入 LBS 服务。
      *
      * @param lbsDiscoverService 附近搜索与位置管理服务
      */
-    public DiscoverController(LbsDiscoverService lbsDiscoverService) {
+    public DiscoverController(LbsDiscoverService lbsDiscoverService, DiscoverMapService discoverMapService) {
         this.lbsDiscoverService = lbsDiscoverService;
+        this.discoverMapService = discoverMapService;
     }
 
     /**
@@ -72,6 +75,44 @@ public class DiscoverController {
     }
 
     /**
+     * 地址转坐标。
+     * 当前先预留地图服务接入位，后续接入高德等外部服务后可直接返回真实结果。
+     */
+    @GetMapping("/map/geocode")
+    public ApiResponse<DiscoverMapService.GeoPoint> geocode(
+            @RequestParam String address,
+            @RequestParam(required = false) String city
+    ) {
+        return ApiResponse.success(discoverMapService.geocode(address, city).orElse(null));
+    }
+
+    /**
+     * 坐标转地址。
+     */
+    @GetMapping("/map/reverse-geocode")
+    public ApiResponse<DiscoverMapService.ReverseGeoResult> reverseGeocode(
+            @RequestParam Double lat,
+            @RequestParam Double lng
+    ) {
+        return ApiResponse.success(discoverMapService.reverseGeocode(lat, lng).orElse(null));
+    }
+
+    /**
+     * 周边 POI 搜索。
+     */
+    @GetMapping("/map/pois")
+    public ApiResponse<java.util.List<DiscoverMapService.PoiItem>> searchPois(
+            @RequestParam Double lat,
+            @RequestParam Double lng,
+            @RequestParam String keyword,
+            @RequestParam(required = false) Integer radius,
+            @RequestParam(required = false, defaultValue = "1") Integer page,
+            @RequestParam(required = false, defaultValue = "10") Integer size
+    ) {
+        return ApiResponse.success(discoverMapService.searchPoi(lat, lng, keyword, radius, page, size));
+    }
+
+    /**
      * 新增或更新某条内容的地理位置索引。
      * 除坐标外，也支持同时写入标题、发布时间和点赞数等辅助元数据。
      *
@@ -92,11 +133,12 @@ public class DiscoverController {
         @RequestParam Double lat,
         @RequestParam Double lng,
         @RequestParam(required = false) String title,
+        @RequestParam(required = false) String address,
         @RequestParam(required = false) Long publishTime,
         @RequestParam(required = false) Integer likeCount,
         @RequestParam(required = false) Integer favoriteCount
     ) {
-        lbsDiscoverService.addLocation(id, type, lat, lng, title, publishTime, likeCount, favoriteCount);
+        lbsDiscoverService.addLocation(id, type, lat, lng, title, null, null, address, null, null, null, null, publishTime, likeCount, favoriteCount);
         return ApiResponse.success(null);
     }
 
