@@ -8,6 +8,7 @@ import com.zhiguang.be.platform.model.PlatformHotKeyData;
 import com.zhiguang.be.platform.model.PlatformHotKeyResetRequest;
 import com.zhiguang.be.platform.model.PlatformObservabilityData;
 import com.zhiguang.be.platform.model.PlatformOpsSnapshotData;
+import com.zhiguang.be.platform.model.PlatformRedisMetricsData;
 import com.zhiguang.be.platform.model.PlatformRuntimeData;
 import com.zhiguang.be.platform.model.PlatformThreadPoolData;
 import com.zhiguang.be.platform.service.PlatformService;
@@ -74,6 +75,14 @@ public class PlatformController {
     @GetMapping("/cache/metrics")
     public ApiResponse<PlatformCacheMetricsData> cacheMetrics() {
         return ApiResponse.success(platformService.getCacheMetrics());
+    }
+
+    /**
+     * 查询 Redis 运行指标。
+     */
+    @GetMapping("/redis/metrics")
+    public ApiResponse<PlatformRedisMetricsData> redisMetrics() {
+        return ApiResponse.success(platformService.getRedisMetrics());
     }
 
     /**

@@ -13,6 +13,7 @@ import com.zhiguang.be.platform.model.PlatformJvmMetricsData;
 import com.zhiguang.be.platform.model.PlatformModuleStatusData;
 import com.zhiguang.be.platform.model.PlatformObservabilityData;
 import com.zhiguang.be.platform.model.PlatformOpsSnapshotData;
+import com.zhiguang.be.platform.model.PlatformRedisMetricsData;
 import com.zhiguang.be.platform.model.PlatformRuntimeData;
 import com.zhiguang.be.platform.model.PlatformThreadPoolData;
 import com.zhiguang.be.platform.service.PlatformService;
@@ -145,6 +146,8 @@ public class PlatformServiceImpl implements PlatformService {
         return new PlatformCacheMetricsData(
                 snapshot.localHitCount(),
                 snapshot.localMissCount(),
+                snapshot.localRequestCount(),
+                snapshot.localHitRate(),
                 snapshot.localExpiredCount(),
                 snapshot.localManualEvictionCount(),
                 snapshot.localCapacityEvictionCount(),
@@ -152,7 +155,27 @@ public class PlatformServiceImpl implements PlatformService {
                 snapshot.redisWriteFailureCount(),
                 snapshot.redisDeleteFailureCount(),
                 snapshot.redisPatternDeleteFailureCount(),
-                snapshot.redisPatternDeletedKeyCount()
+                snapshot.redisPatternDeletedKeyCount(),
+                snapshot.redisFailureCount()
+        );
+    }
+
+    @Override
+    public PlatformRedisMetricsData getRedisMetrics() {
+        CacheService.RedisMetricsSnapshot snapshot = cacheService.snapshotRedisMetrics();
+        return new PlatformRedisMetricsData(
+                snapshot.available(),
+                snapshot.ping(),
+                snapshot.dbSize(),
+                snapshot.redisVersion(),
+                snapshot.role(),
+                snapshot.usedMemoryHuman(),
+                snapshot.usedMemoryBytes(),
+                snapshot.connectedClients(),
+                snapshot.blockedClients(),
+                snapshot.expiredKeys(),
+                snapshot.evictedKeys(),
+                snapshot.errorMessage()
         );
     }
 
@@ -171,6 +194,9 @@ public class PlatformServiceImpl implements PlatformService {
                 resolveActuatorExposures(),
                 snapshotJvmMetrics(),
                 getCacheMetrics(),
+                getRedisMetrics(),
+                cacheHotkeyEnabled,
+                hotKeyDetector.trackedKeyCount(),
                 listThreadPools()
         );
     }
@@ -316,15 +342,15 @@ public class PlatformServiceImpl implements PlatformService {
         modules.add(new PlatformModuleStatusData("social", "COMPLETED", "社交互动与计数主链已经闭环"));
         modules.add(new PlatformModuleStatusData("feed", "COMPLETED", "首页 Feed 主链已经闭环"));
         modules.add(new PlatformModuleStatusData("storage", "BASIC_READY", "独立存储入口已经接通"));
-        modules.add(new PlatformModuleStatusData("search", "BASIC_READY", "搜索、ES 同步与 outbox 链路可用"));
-        modules.add(new PlatformModuleStatusData("profile", "BASIC_READY", "个人主页基础聚合已经可用"));
-        modules.add(new PlatformModuleStatusData("discover", "BASIC_READY", "发现模块已经接入互动与地图能力"));
-        modules.add(new PlatformModuleStatusData("llm", "BASIC_READY", "已经接入 Spring AI ChatClient 风格模型链路"));
-        modules.add(new PlatformModuleStatusData("rag", "BASIC_READY", "已经接入 Spring AI VectorStore 风格向量检索"));
+        modules.add(new PlatformModuleStatusData("search", "ENHANCED_READY", "db/es 双 provider、ES 同步与 outbox 链路可用"));
+        modules.add(new PlatformModuleStatusData("profile", "ENHANCED_READY", "个人主页聚合与资料视图已经可用"));
+        modules.add(new PlatformModuleStatusData("discover", "BASIC_READY", "发现模块已接入互动汇总与地图服务抽象"));
+        modules.add(new PlatformModuleStatusData("llm", "ENHANCED_READY", "模板与 HTTP provider 双模式已经打通"));
+        modules.add(new PlatformModuleStatusData("rag", "ENHANCED_READY", "流式问答、重建入口与向量检索链路已具备"));
         modules.add(new PlatformModuleStatusData("trade", "BASIC_READY", "交易主链已经打通，仍在持续增强"));
-        modules.add(new PlatformModuleStatusData("cache", "BASIC_READY", "缓存治理与热点观测能力已经落地"));
-        modules.add(new PlatformModuleStatusData("threadpool", "BASIC_READY", "线程池双模式与运行摘要已经可观测"));
-        modules.add(new PlatformModuleStatusData("platform", "BASIC_READY", "平台治理入口已覆盖运行、缓存、线程池与热点观测"));
+        modules.add(new PlatformModuleStatusData("cache", "ENHANCED_READY", "缓存治理、热点探测与 Redis 指标已经可观测"));
+        modules.add(new PlatformModuleStatusData("threadpool", "ENHANCED_READY", "线程池双模式与运行摘要已经可观测"));
+        modules.add(new PlatformModuleStatusData("platform", "BASIC_READY", "平台治理已覆盖运行、缓存、线程池、Redis 与热点观测"));
         return modules;
     }
 }

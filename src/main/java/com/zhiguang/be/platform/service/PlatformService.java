@@ -7,6 +7,7 @@ import com.zhiguang.be.platform.model.PlatformHotKeyData;
 import com.zhiguang.be.platform.model.PlatformHotKeyResetRequest;
 import com.zhiguang.be.platform.model.PlatformObservabilityData;
 import com.zhiguang.be.platform.model.PlatformOpsSnapshotData;
+import com.zhiguang.be.platform.model.PlatformRedisMetricsData;
 import com.zhiguang.be.platform.model.PlatformRuntimeData;
 import com.zhiguang.be.platform.model.PlatformThreadPoolData;
 
@@ -31,6 +32,11 @@ public interface PlatformService {
      * 查询缓存整体指标。
      */
     PlatformCacheMetricsData getCacheMetrics();
+
+    /**
+     * 查询 Redis 运行指标。
+     */
+    PlatformRedisMetricsData getRedisMetrics();
 
     /**
      * 查询线程池运行摘要。

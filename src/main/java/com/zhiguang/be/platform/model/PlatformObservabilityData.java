@@ -11,6 +11,9 @@ public record PlatformObservabilityData(
         List<String> actuatorExposedEndpoints,
         PlatformJvmMetricsData jvm,
         PlatformCacheMetricsData cacheMetrics,
+        PlatformRedisMetricsData redisMetrics,
+        boolean hotKeyEnabled,
+        int trackedHotKeyCount,
         List<PlatformThreadPoolData> threadPools
 ) {
 }

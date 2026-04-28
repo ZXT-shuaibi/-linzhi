@@ -6,6 +6,8 @@ package com.zhiguang.be.platform.model;
 public record PlatformCacheMetricsData(
         long localHitCount,
         long localMissCount,
+        long localRequestCount,
+        double localHitRate,
         long localExpiredCount,
         long localManualEvictionCount,
         long localCapacityEvictionCount,
@@ -13,6 +15,7 @@ public record PlatformCacheMetricsData(
         long redisWriteFailureCount,
         long redisDeleteFailureCount,
         long redisPatternDeleteFailureCount,
-        long redisPatternDeletedKeyCount
+        long redisPatternDeletedKeyCount,
+        long redisFailureCount
 ) {
 }

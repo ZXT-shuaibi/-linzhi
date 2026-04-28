@@ -1830,6 +1830,123 @@ paths:
                         $ref: '#/components/schemas/MetricsOverview'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /__deprecated/platform/runtime:
+    get:
+      tags: [Ops]
+      summary: 查询平台运行摘要
+      operationId: getPlatformRuntime
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PlatformRuntimeData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /__deprecated/platform/cache/regions:
+    get:
+      tags: [Ops]
+      summary: 查询本地缓存区域摘要
+      operationId: listPlatformCacheRegions
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PlatformCacheRegionData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /__deprecated/platform/cache/metrics:
+    get:
+      tags: [Ops]
+      summary: 鏌ヨ缂撳瓨鏁翠綋鎸囨爣
+      operationId: getPlatformCacheMetrics
+      x-maturity: 宸插疄鐜?
+      x-source: 鍩轰簬褰撳墠浠ｇ爜瀹炵幇
+      responses:
+        '200':
+          description: 鏌ヨ鎴愬姛
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PlatformCacheMetricsData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /__deprecated/platform/threadpools:
+    get:
+      tags: [Ops]
+      summary: 鏌ヨ绾跨▼姹犺繍琛屾憳瑕?
+      operationId: listPlatformThreadPools
+      x-maturity: 宸插疄鐜?
+      x-source: 鍩轰簬褰撳墠浠ｇ爜瀹炵幇
+      responses:
+        '200':
+          description: 鏌ヨ鎴愬姛
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PlatformThreadPoolData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /__deprecated/platform/cache/evict:
+    post:
+      tags: [Ops]
+      summary: 手动清理缓存
+      operationId: evictPlatformCache
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformCacheEvictRequest'
+      responses:
+        '200':
+          description: 清理成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /platform/runtime:
     get:
       tags: [Ops]
@@ -1849,6 +1966,56 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/PlatformRuntimeData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/observability:
+    get:
+      tags: [Ops]
+      summary: 查询平台可观测性摘要
+      operationId: getPlatformObservability
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PlatformObservabilityData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/snapshot:
+    get:
+      tags: [Ops]
+      summary: 查询平台全景快照
+      operationId: getPlatformSnapshot
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      parameters:
+        - name: hotKeyLimit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PlatformOpsSnapshotData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
   /platform/cache/regions:
@@ -1877,13 +2044,13 @@ paths:
   /platform/cache/metrics:
     get:
       tags: [Ops]
-      summary: 鏌ヨ缂撳瓨鏁翠綋鎸囨爣
+      summary: 查询缓存整体指标
       operationId: getPlatformCacheMetrics
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬褰撳墠浠ｇ爜瀹炵幇
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -1895,16 +2062,133 @@ paths:
                         $ref: '#/components/schemas/PlatformCacheMetricsData'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
+  /platform/redis/metrics:
+    get:
+      tags: [Ops]
+      summary: 查询 Redis 运行指标
+      operationId: getPlatformRedisMetrics
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PlatformRedisMetricsData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/cache/hotkeys:
+    get:
+      tags: [Ops]
+      summary: 查询热点 Key 统计
+      operationId: listPlatformHotKeys
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/PlatformHotKeyData'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/cache/redis-keys:
+    get:
+      tags: [Ops]
+      summary: 预览匹配的 Redis Key
+      operationId: previewPlatformRedisKeys
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      parameters:
+        - name: pattern
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /platform/cache/hotkeys/reset:
+    post:
+      tags: [Ops]
+      summary: 重置单个热点 Key 统计
+      operationId: resetPlatformHotKey
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformHotKeyResetRequest'
+      responses:
+        '200':
+          description: 重置成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: string
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /platform/threadpools:
     get:
       tags: [Ops]
-      summary: 鏌ヨ绾跨▼姹犺繍琛屾憳瑕?
+      summary: 查询线程池运行摘要
       operationId: listPlatformThreadPools
-      x-maturity: 宸插疄鐜?
-      x-source: 鍩轰簬褰撳墠浠ｇ爜瀹炵幇
+      x-maturity: 已实现
+      x-source: 基于当前代码实现
       responses:
         '200':
-          description: 鏌ヨ鎴愬姛
+          description: 查询成功
           content:
             application/json:
               schema:
@@ -3421,6 +3705,12 @@ components:
         localMissCount:
           type: integer
           format: int64
+        localRequestCount:
+          type: integer
+          format: int64
+        localHitRate:
+          type: number
+          format: double
         localExpiredCount:
           type: integer
           format: int64
@@ -3445,6 +3735,119 @@ components:
         redisPatternDeletedKeyCount:
           type: integer
           format: int64
+        redisFailureCount:
+          type: integer
+          format: int64
+    PlatformJvmMetricsData:
+      type: object
+      properties:
+        uptimeMillis:
+          type: integer
+          format: int64
+        heapUsedBytes:
+          type: integer
+          format: int64
+        heapCommittedBytes:
+          type: integer
+          format: int64
+        heapMaxBytes:
+          type: integer
+          format: int64
+        nonHeapUsedBytes:
+          type: integer
+          format: int64
+        liveThreadCount:
+          type: integer
+        daemonThreadCount:
+          type: integer
+        peakThreadCount:
+          type: integer
+        availableProcessors:
+          type: integer
+        systemLoadAverage:
+          type: number
+          format: double
+    PlatformRedisMetricsData:
+      type: object
+      properties:
+        available:
+          type: boolean
+        ping:
+          type: string
+        dbSize:
+          type: integer
+          format: int64
+        redisVersion:
+          type: string
+        role:
+          type: string
+        usedMemoryHuman:
+          type: string
+        usedMemoryBytes:
+          type: integer
+          format: int64
+        connectedClients:
+          type: integer
+          format: int64
+        blockedClients:
+          type: integer
+          format: int64
+        expiredKeys:
+          type: integer
+          format: int64
+        evictedKeys:
+          type: integer
+          format: int64
+        errorMessage:
+          type: string
+    PlatformHotKeyData:
+      type: object
+      properties:
+        key:
+          type: string
+        heat:
+          type: integer
+        level:
+          type: string
+    PlatformObservabilityData:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        actuatorExposedEndpoints:
+          type: array
+          items:
+            type: string
+        jvm:
+          $ref: '#/components/schemas/PlatformJvmMetricsData'
+        cacheMetrics:
+          $ref: '#/components/schemas/PlatformCacheMetricsData'
+        redisMetrics:
+          $ref: '#/components/schemas/PlatformRedisMetricsData'
+        hotKeyEnabled:
+          type: boolean
+        trackedHotKeyCount:
+          type: integer
+        threadPools:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformThreadPoolData'
+    PlatformOpsSnapshotData:
+      type: object
+      properties:
+        runtime:
+          $ref: '#/components/schemas/PlatformRuntimeData'
+        observability:
+          $ref: '#/components/schemas/PlatformObservabilityData'
+        cacheRegions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformCacheRegionData'
+        hotKeys:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformHotKeyData'
     PlatformThreadPoolData:
       type: object
       properties:
@@ -3490,6 +3893,13 @@ components:
         redisKey:
           type: string
         redisPattern:
+          type: string
+    PlatformHotKeyResetRequest:
+      type: object
+      required:
+        - key
+      properties:
+        key:
           type: string
     CounterEventPayload:
       type: object

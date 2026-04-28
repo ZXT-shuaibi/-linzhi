@@ -18,6 +18,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -170,9 +171,18 @@ public class CacheService {
      * 快照缓存整体指标。
      */
     public CacheMetricsSnapshot snapshotMetrics() {
+        long localHits = localHitCount.sum();
+        long localMisses = localMissCount.sum();
+        long localRequests = localHits + localMisses;
+        long redisFailures = redisReadFailureCount.sum()
+                + redisWriteFailureCount.sum()
+                + redisDeleteFailureCount.sum()
+                + redisPatternDeleteFailureCount.sum();
         return new CacheMetricsSnapshot(
-                localHitCount.sum(),
-                localMissCount.sum(),
+                localHits,
+                localMisses,
+                localRequests,
+                localRequests == 0L ? 0.0D : (double) localHits / (double) localRequests,
                 localExpiredCount.sum(),
                 localManualEvictionCount.sum(),
                 localCapacityEvictionCount.sum(),
@@ -180,8 +190,56 @@ public class CacheService {
                 redisWriteFailureCount.sum(),
                 redisDeleteFailureCount.sum(),
                 redisPatternDeleteFailureCount.sum(),
-                redisPatternDeletedKeyCount.sum()
+                redisPatternDeletedKeyCount.sum(),
+                redisFailures
         );
+    }
+
+    /**
+     * 快照 Redis 运行指标。
+     */
+    public RedisMetricsSnapshot snapshotRedisMetrics() {
+        try {
+            RedisMetricsSnapshot snapshot = stringRedisTemplate.execute((RedisCallback<RedisMetricsSnapshot>) connection -> {
+                Properties info = connection.info();
+                String ping = connection.ping();
+                Long dbSize = connection.dbSize();
+                return new RedisMetricsSnapshot(
+                        true,
+                        ping == null ? "UNKNOWN" : ping,
+                        dbSize == null ? -1L : dbSize.longValue(),
+                        property(info, "redis_version"),
+                        property(info, "role"),
+                        property(info, "used_memory_human"),
+                        longProperty(info, "used_memory"),
+                        longProperty(info, "connected_clients"),
+                        longProperty(info, "blocked_clients"),
+                        longProperty(info, "expired_keys"),
+                        longProperty(info, "evicted_keys"),
+                        null
+                );
+            });
+            return snapshot == null
+                    ? new RedisMetricsSnapshot(false, "UNKNOWN", -1L, null, null, null, 0L, 0L, 0L, 0L, 0L, "Redis 响应为空")
+                    : snapshot;
+        } catch (Exception ex) {
+            redisReadFailureCount.increment();
+            log.warn("snapshot redis metrics failed", ex);
+            return new RedisMetricsSnapshot(
+                    false,
+                    "ERROR",
+                    -1L,
+                    null,
+                    null,
+                    null,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    ex.getMessage()
+            );
+        }
     }
 
     /**
@@ -422,6 +480,25 @@ public class CacheService {
         return adder == null ? 0L : adder.sum();
     }
 
+    private String property(Properties properties, String key) {
+        return properties == null ? null : properties.getProperty(key);
+    }
+
+    private long longProperty(Properties properties, String key) {
+        if (properties == null) {
+            return 0L;
+        }
+        String value = properties.getProperty(key);
+        if (value == null || value.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
+    }
+
     /**
      * 本地缓存条目。
      */
@@ -462,6 +539,8 @@ public class CacheService {
     public record CacheMetricsSnapshot(
             long localHitCount,
             long localMissCount,
+            long localRequestCount,
+            double localHitRate,
             long localExpiredCount,
             long localManualEvictionCount,
             long localCapacityEvictionCount,
@@ -469,7 +548,24 @@ public class CacheService {
             long redisWriteFailureCount,
             long redisDeleteFailureCount,
             long redisPatternDeleteFailureCount,
-            long redisPatternDeletedKeyCount
+            long redisPatternDeletedKeyCount,
+            long redisFailureCount
+    ) {
+    }
+
+    public record RedisMetricsSnapshot(
+            boolean available,
+            String ping,
+            long dbSize,
+            String redisVersion,
+            String role,
+            String usedMemoryHuman,
+            long usedMemoryBytes,
+            long connectedClients,
+            long blockedClients,
+            long expiredKeys,
+            long evictedKeys,
+            String errorMessage
     ) {
     }
 }
