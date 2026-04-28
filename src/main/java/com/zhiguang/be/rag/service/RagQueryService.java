@@ -1,12 +1,19 @@
 package com.zhiguang.be.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.llm.LlmConstants;
+import com.zhiguang.be.llm.config.LlmProperties;
+import com.zhiguang.be.llm.service.LlmGateway;
 import com.zhiguang.be.llm.service.RagAnswerService;
 import com.zhiguang.be.rag.config.RagProperties;
 import com.zhiguang.be.rag.model.RagQueryRequest;
 import com.zhiguang.be.rag.model.SseChunk;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.deepseek.DeepSeekChatOptions;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
@@ -17,29 +24,37 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * RAG 问答服务。
- * 当前先用轻量索引做召回，再交给 llm 模块生成回答内容。
+ * 参考 zhiguang 的主链，优先使用 VectorStore 做上下文召回，
+ * 再直接通过 Spring AI ChatClient 生成回答。
+ * 当 Spring AI 不可用时，再回退到当前项目的 LLM 网关兜底，保证主链可用。
  */
 @Service
 public class RagQueryService {
 
     private final RagIndexService ragIndexService;
-    private final RagAnswerService ragAnswerService;
+    private final LlmGateway llmGateway;
     private final ObjectMapper objectMapper;
     private final Executor ragQueryExecutor;
     private final RagProperties ragProperties;
+    private final LlmProperties llmProperties;
+    private final ChatClient chatClient;
 
     public RagQueryService(
             RagIndexService ragIndexService,
-            RagAnswerService ragAnswerService,
+            LlmGateway llmGateway,
             ObjectMapper objectMapper,
             @Qualifier("ragQueryExecutor") Executor ragQueryExecutor,
-            RagProperties ragProperties
+            RagProperties ragProperties,
+            LlmProperties llmProperties,
+            ObjectProvider<ChatClient> chatClientProvider
     ) {
         this.ragIndexService = ragIndexService;
-        this.ragAnswerService = ragAnswerService;
+        this.llmGateway = llmGateway;
         this.objectMapper = objectMapper;
         this.ragQueryExecutor = ragQueryExecutor;
         this.ragProperties = ragProperties;
+        this.llmProperties = llmProperties;
+        this.chatClient = chatClientProvider.getIfAvailable();
     }
 
     /**
@@ -52,7 +67,7 @@ public class RagQueryService {
     }
 
     /**
-     * 后台异步输出 SSE 分片。
+     * 后台异步输出 SSE 片段。
      */
     private void doStream(RagQueryRequest request, SseEmitter emitter) {
         try {
@@ -68,14 +83,25 @@ public class RagQueryService {
             List<com.zhiguang.be.rag.model.RagReference> references = searchResult.references();
 
             AtomicInteger seq = new AtomicInteger(1);
-            boolean streamed = ragAnswerService.streamAnswer(
+            boolean streamed = streamWithSpringAi(
                     request.question(),
                     contexts,
                     piece -> sendQuietly(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null))
             );
 
             if (!streamed) {
-                String answer = ragAnswerService.buildAnswer(request.question(), contexts);
+                streamed = llmGateway.streamRagAnswer(
+                        request.question(),
+                        contexts,
+                        piece -> sendQuietly(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null))
+                );
+            }
+
+            if (!streamed) {
+                String answer = buildWithSpringAi(request.question(), contexts);
+                if (!StringUtils.hasText(answer)) {
+                    answer = llmGateway.generateRagAnswer(request.question(), contexts);
+                }
                 for (String piece : splitAnswer(answer, ragProperties.getStream().getChunkSize())) {
                     send(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null));
                     sleep(ragProperties.getStream().getChunkDelayMillis());
@@ -118,6 +144,104 @@ public class RagQueryService {
     }
 
     /**
+     * 直接通过 Spring AI ChatClient 进行流式回答。
+     */
+    private boolean streamWithSpringAi(
+            String question,
+            List<RagAnswerService.Context> contexts,
+            java.util.function.Consumer<String> consumer
+    ) {
+        if (!useSpringAiProvider()) {
+            return false;
+        }
+        boolean emitted = false;
+        try {
+            Iterable<String> pieces = chatClient.prompt()
+                    .system("你是中文知识助手。只能根据提供的上下文作答；如果上下文不足，请明确说明。")
+                    .user(buildRagPrompt(question, contexts))
+                    .options(buildSpringAiOptions(llmProperties.getHttp().getMaxTokens()))
+                    .stream()
+                    .content()
+                    .toIterable();
+            for (String piece : pieces) {
+                if (!StringUtils.hasText(piece)) {
+                    continue;
+                }
+                consumer.accept(piece);
+                emitted = true;
+            }
+            return emitted;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    /**
+     * 直接通过 Spring AI ChatClient 生成完整回答。
+     */
+    private String buildWithSpringAi(String question, List<RagAnswerService.Context> contexts) {
+        if (!useSpringAiProvider()) {
+            return null;
+        }
+        try {
+            String answer = chatClient.prompt()
+                    .system("你是中文知识助手。只能根据提供的上下文作答；如果上下文不足，请明确说明。")
+                    .user(buildRagPrompt(question, contexts))
+                    .options(buildSpringAiOptions(llmProperties.getHttp().getMaxTokens()))
+                    .call()
+                    .content();
+            return StringUtils.hasText(answer) ? answer.trim() : null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 组装与 zhiguang 风格接近的 RAG 提示词。
+     */
+    private String buildRagPrompt(String question, List<RagAnswerService.Context> contexts) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("问题：").append(question).append("\n\n");
+        prompt.append("上下文如下（可能不完整）：\n");
+        if (contexts == null || contexts.isEmpty()) {
+            prompt.append("暂无可用上下文。");
+            return prompt.toString();
+        }
+        int limit = Math.min(contexts.size(), LlmConstants.RAG_CONTEXT_LIMIT);
+        for (int index = 0; index < limit; index++) {
+            RagAnswerService.Context context = contexts.get(index);
+            prompt.append(index + 1)
+                    .append(". 标题：")
+                    .append(context.title())
+                    .append("\n   内容：")
+                    .append(context.content())
+                    .append("\n");
+        }
+        prompt.append("\n请基于以上上下文用中文回答。");
+        return prompt.toString();
+    }
+
+    /**
+     * 构建 Spring AI 请求参数。
+     */
+    private DeepSeekChatOptions buildSpringAiOptions(int maxTokens) {
+        return DeepSeekChatOptions.builder()
+                .model(llmProperties.getModelName())
+                .temperature(llmProperties.getHttp().getTemperature())
+                .maxTokens(Math.max(1, maxTokens))
+                .build();
+    }
+
+    /**
+     * 判断当前是否应优先走 Spring AI 主链。
+     */
+    private boolean useSpringAiProvider() {
+        return chatClient != null
+                && ("spring-ai".equalsIgnoreCase(llmProperties.getProvider())
+                || "deepseek".equalsIgnoreCase(llmProperties.getProvider()));
+    }
+
+    /**
      * 将回答切成多个小片段，便于 SSE 流式输出。
      */
     private List<String> splitAnswer(String answer, int chunkSize) {
@@ -149,7 +273,7 @@ public class RagQueryService {
         try {
             send(emitter, eventName, chunk);
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to send SSE chunk", ex);
+            throw new IllegalStateException("发送 SSE 片段失败", ex);
         }
     }
 
