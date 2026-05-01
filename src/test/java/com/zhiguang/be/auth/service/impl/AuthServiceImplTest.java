@@ -71,7 +71,7 @@ class AuthServiceImplTest {
     @Test
     void registerShouldPersistBcryptPasswordAndRequireLogin() {
         TestFixture fixture = new TestFixture();
-        RegisterRequest request = new RegisterRequest("13800138000", "tester00", "Passw0rd!", "tester", "123456");
+        RegisterRequest request = new RegisterRequest("13800138000", "tester00", "Passw0rd!", "Passw0rd!", "tester", "123456");
 
         RegisterResult result = fixture.service.register(request, CLIENT_INFO);
 
@@ -83,6 +83,24 @@ class AuthServiceImplTest {
         assertTrue(persisted.passwordHash().startsWith("$2"));
         verify(fixture.verificationService).verifyOrThrow(eq(VerificationScene.REGISTER), eq("13800138000"), eq("123456"));
         verify(fixture.loginLogService).record(eq(result.userId()), eq("13800138000"), eq("REGISTER"), any(), any(), eq("SUCCESS"), eq("注册成功"));
+    }
+
+    /**
+     * 注册未传账号和昵称时，服务端会使用手机号和默认昵称补齐数据库必填字段。
+     */
+    @Test
+    void registerShouldGenerateDefaultAccountAndNicknameWhenMissing() {
+        TestFixture fixture = new TestFixture();
+
+        RegisterResult result = fixture.service.register(
+                new RegisterRequest("13800138012", null, "Passw0rd!", "Passw0rd!", null, "123456"),
+                CLIENT_INFO
+        );
+
+        AuthUserEntity persisted = fixture.userMapper.findByPhone("13800138012").orElseThrow();
+        assertEquals("13800138012", result.account());
+        assertEquals("13800138012", persisted.account());
+        assertEquals("邻里用户8012", persisted.nickname());
     }
 
     /**
@@ -114,35 +132,51 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 登录成功后才会签发 JWT 双令牌，并支持账号登录。
+     * 手机号 + 密码登录成功后才会签发 JWT 双令牌。
      */
     @Test
     void loginShouldIssueTokensAfterSuccessfulCredentials() {
         TestFixture fixture = new TestFixture();
         RegisterResult result = fixture.service.register(new RegisterRequest("13800138001", "tester01", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
 
-        AuthSessionData session = fixture.service.login(new LoginRequest("tester01", "Passw0rd!", "h5", null), CLIENT_INFO);
+        AuthSessionData session = fixture.service.login(new LoginRequest("13800138001", "Passw0rd!", "h5", null), CLIENT_INFO);
 
         assertEquals(result.userId(), session.userId());
         assertNotNull(session.tokens());
         assertTrue(session.tokens().accessToken() != null && !session.tokens().accessToken().isBlank());
         assertTrue(session.tokens().refreshToken() != null && !session.tokens().refreshToken().isBlank());
-        verify(fixture.loginLogService).record(eq(result.userId()), eq("tester01"), eq("PASSWORD"), any(), any(), eq("SUCCESS"), eq("登录成功"));
+        verify(fixture.loginLogService).record(eq(result.userId()), eq("13800138001"), eq("PASSWORD"), any(), any(), eq("SUCCESS"), eq("登录成功"));
     }
 
     /**
-     * 未注册账号应返回独立状态码，且不污染失败计数。
+     * 手机号 + 短信验证码也能完成登录。
+     */
+    @Test
+    void loginShouldIssueTokensAfterSuccessfulSmsCode() {
+        TestFixture fixture = new TestFixture();
+        RegisterResult result = fixture.service.register(new RegisterRequest("13800138009", "tester09", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
+
+        AuthSessionData session = fixture.service.login(new LoginRequest("13800138009", null, "h5", "654321", null), CLIENT_INFO);
+
+        assertEquals(result.userId(), session.userId());
+        assertNotNull(session.tokens());
+        verify(fixture.verificationService).verifyOrThrow(eq(VerificationScene.LOGIN), eq("13800138009"), eq("654321"));
+        verify(fixture.loginLogService).record(eq(result.userId()), eq("13800138009"), eq("CODE"), any(), any(), eq("SUCCESS"), eq("登录成功"));
+    }
+
+    /**
+     * 未注册手机号应返回独立状态码，且不污染失败计数。
      */
     @Test
     void loginShouldReturnNotFoundWhenAccountIsMissingAndNotPolluteFailureCount() {
         TestFixture fixture = new TestFixture();
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.login(new LoginRequest("ghost01", "Passw0rd!", "h5", null), CLIENT_INFO));
+                () -> fixture.service.login(new LoginRequest("13800138999", "Passw0rd!", "h5", null), CLIENT_INFO));
 
         assertEquals(ErrorCode.ACCOUNT_NOT_FOUND, ex.errorCode());
         assertEquals(HttpStatus.NOT_FOUND, ex.httpStatus());
-        assertEquals(0, fixture.failureTracker.getFailureCount("ghost01"));
+        assertEquals(0, fixture.failureTracker.getFailureCount("13800138999"));
     }
 
     /**
@@ -174,15 +208,50 @@ class AuthServiceImplTest {
     }
 
     /**
+     * 注册要求两次输入的密码一致。
+     */
+    @Test
+    void registerShouldRejectMismatchedConfirmPassword() {
+        TestFixture fixture = new TestFixture();
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> fixture.service.register(
+                        new RegisterRequest("13800138013", null, "Passw0rd!", "Passw0rd2", null, "123456"),
+                        CLIENT_INFO
+                ));
+
+        assertEquals(ErrorCode.BAD_REQUEST, ex.errorCode());
+        assertEquals(HttpStatus.BAD_REQUEST, ex.httpStatus());
+    }
+
+    /**
+     * 登录凭证必须在密码和短信验证码之间二选一。
+     */
+    @Test
+    void loginShouldRejectAmbiguousCredentialMode() {
+        TestFixture fixture = new TestFixture();
+
+        BusinessException both = assertThrows(BusinessException.class,
+                () -> fixture.service.login(new LoginRequest("13800138014", "Passw0rd!", "h5", "123456", null), CLIENT_INFO));
+        BusinessException neither = assertThrows(BusinessException.class,
+                () -> fixture.service.login(new LoginRequest("13800138014", null, "h5", null, null), CLIENT_INFO));
+
+        assertEquals(ErrorCode.BAD_REQUEST, both.errorCode());
+        assertEquals(HttpStatus.BAD_REQUEST, both.httpStatus());
+        assertEquals(ErrorCode.BAD_REQUEST, neither.errorCode());
+        assertEquals(HttpStatus.BAD_REQUEST, neither.httpStatus());
+    }
+
+    /**
      * 命中风控阈值后，登录会要求并校验真实验证码。
      */
     @Test
     void loginShouldVerifyCaptchaCodeWhenRiskTriggered() {
         TestFixture fixture = new TestFixture();
         fixture.service.register(new RegisterRequest("13800138006", "tester06", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
-        fixture.failureTracker.setFailureCount("tester06", 3);
+        fixture.failureTracker.setFailureCount("13800138006", 3);
 
-        fixture.service.login(new LoginRequest("tester06", "Passw0rd!", "h5", "654321"), CLIENT_INFO);
+        fixture.service.login(new LoginRequest("13800138006", "Passw0rd!", "h5", "654321"), CLIENT_INFO);
 
         verify(fixture.verificationService).verifyOrThrow(eq(VerificationScene.LOGIN), eq("13800138006"), eq("654321"));
     }
@@ -194,7 +263,7 @@ class AuthServiceImplTest {
     void refreshTokenShouldBeSingleUse() {
         TestFixture fixture = new TestFixture();
         fixture.service.register(new RegisterRequest("13800138002", "tester02", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
-        AuthSessionData session = fixture.service.login(new LoginRequest("tester02", "Passw0rd!", "h5", null), CLIENT_INFO);
+        AuthSessionData session = fixture.service.login(new LoginRequest("13800138002", "Passw0rd!", "h5", null), CLIENT_INFO);
 
         AuthTokens firstRefresh = fixture.service.refreshToken(session.tokens().refreshToken());
         assertTrue(firstRefresh.refreshToken() != null && !firstRefresh.refreshToken().isBlank());
@@ -212,7 +281,7 @@ class AuthServiceImplTest {
     void refreshShouldRevokeAllSessionsWhenUserIdIsBlacklisted() {
         TestFixture fixture = new TestFixture();
         RegisterResult result = fixture.service.register(new RegisterRequest("13800138003", "tester03", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
-        AuthSessionData loginSession = fixture.service.login(new LoginRequest("tester03", "Passw0rd!", "h5", null), CLIENT_INFO);
+        AuthSessionData loginSession = fixture.service.login(new LoginRequest("13800138003", "Passw0rd!", "h5", null), CLIENT_INFO);
         fixture.loginBlacklistStore.block(result.userId());
 
         BusinessException blocked = assertThrows(BusinessException.class,
@@ -229,16 +298,16 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 手机号进入黑名单后，即使改用账号登录也会被拒绝。
+     * 手机号进入黑名单后会拒绝登录。
      */
     @Test
-    void loginShouldBeBlockedByPhoneBlacklistEvenWhenUsingAccount() {
+    void loginShouldBeBlockedByPhoneBlacklist() {
         TestFixture fixture = new TestFixture();
         fixture.service.register(new RegisterRequest("13800138004", "tester04", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
         fixture.loginBlacklistStore.block("13800138004");
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.login(new LoginRequest("tester04", "Passw0rd!", "h5", null), CLIENT_INFO));
+                () -> fixture.service.login(new LoginRequest("13800138004", "Passw0rd!", "h5", null), CLIENT_INFO));
         assertEquals(ErrorCode.LOGIN_BLOCKED, ex.errorCode());
         assertEquals(HttpStatus.FORBIDDEN, ex.httpStatus());
     }
@@ -253,7 +322,7 @@ class AuthServiceImplTest {
         fixture.loginBlacklistStore.block(result.userId());
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.login(new LoginRequest("tester14", "Passw0rd!", "h5", null), CLIENT_INFO));
+                () -> fixture.service.login(new LoginRequest("13800138104", "Passw0rd!", "h5", null), CLIENT_INFO));
         assertEquals(ErrorCode.LOGIN_BLOCKED, ex.errorCode());
         assertEquals(HttpStatus.FORBIDDEN, ex.httpStatus());
     }
@@ -283,7 +352,7 @@ class AuthServiceImplTest {
     void logoutShouldBlockOldAccessTokens() {
         TestFixture fixture = new TestFixture();
         RegisterResult result = fixture.service.register(new RegisterRequest("13800138107", "tester17", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
-        AuthSessionData session = fixture.service.login(new LoginRequest("tester17", "Passw0rd!", "h5", null), CLIENT_INFO);
+        AuthSessionData session = fixture.service.login(new LoginRequest("13800138107", "Passw0rd!", "h5", null), CLIENT_INFO);
 
         ActionResult logoutResult = fixture.service.logout(session.tokens().refreshToken(), "current_device");
 
