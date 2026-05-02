@@ -1,5 +1,7 @@
 package com.zhiguang.be.trade.model;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 
@@ -11,6 +13,7 @@ public record TradeOrderData(
         String activityId,
         String activityTitle,
         String activityCover,
+        @JsonFormat(shape = JsonFormat.Shape.STRING)
         BigDecimal amount,
         int quantity,
         String status,

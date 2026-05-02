@@ -278,6 +278,27 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '429':
           $ref: '#/components/responses/TooManyRequestsError'
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current authenticated user
+      operationId: getAuthMe
+      x-maturity: implemented
+      x-source: current code
+      responses:
+        '200':
+          description: Query succeeded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthUserResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /profile/me:
     get:
       tags: [Profile]
@@ -2269,6 +2290,17 @@ components:
           type: string
         tokens:
           $ref: '#/components/schemas/AuthTokens'
+    AuthUserResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+        phone:
+          type: string
+        account:
+          type: string
+        nickname:
+          type: string
     RegisterResult:
       type: object
       properties:
@@ -2288,6 +2320,8 @@ components:
       properties:
         identifier:
           type: string
+          pattern: '^1\d{10}$'
+          description: 手机号
         scene:
           type: string
           enum: [register, login, password_reset]
@@ -2305,13 +2339,13 @@ components:
           type: integer
     RegisterRequest:
       type: object
-      required: [phone, account, password, nickname, smsCode]
+      required: [phone, password, confirmPassword, nickname, smsCode]
       properties:
         phone:
           type: string
-        account:
-          type: string
         password:
+          type: string
+        confirmPassword:
           type: string
         nickname:
           type: string
@@ -2319,16 +2353,23 @@ components:
           type: string
     LoginRequest:
       type: object
-      required: [identifier, password]
+      required: [identifier]
       properties:
         identifier:
           type: string
+          pattern: '^1\d{10}$'
+          description: 登录手机号
         password:
           type: string
+          description: 密码登录时必填；与 smsCode 二选一
+        smsCode:
+          type: string
+          description: 短信验证码登录时必填；与 password 二选一
         channel:
           type: string
         captchaCode:
           type: string
+          description: 密码登录命中风控时补充的验证码
     RefreshTokenRequest:
       type: object
       required: [refreshToken]
@@ -3120,11 +3161,11 @@ components:
           format: uri
           nullable: true
         originalPrice:
-          type: number
-          format: double
+          type: string
+          description: Decimal amount string
         seckillPrice:
-          type: number
-          format: double
+          type: string
+          description: Decimal amount string
         totalStock:
           type: integer
           minimum: 1
@@ -3155,11 +3196,11 @@ components:
           format: uri
           nullable: true
         originalPrice:
-          type: number
-          format: double
+          type: string
+          description: Decimal amount string
         seckillPrice:
-          type: number
-          format: double
+          type: string
+          description: Decimal amount string
         totalStock:
           type: integer
         availableStock:
@@ -3226,8 +3267,8 @@ components:
           format: uri
           nullable: true
         amount:
-          type: number
-          format: double
+          type: string
+          description: Decimal amount string
         quantity:
           type: integer
         status:

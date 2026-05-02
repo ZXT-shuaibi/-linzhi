@@ -136,15 +136,16 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public RegisterResult register(RegisterRequest request, ClientInfo clientInfo) {
         String phone = normalizeIdentifier(request.phone());
-        String accountName = normalizeAccount(request.account());
-        validateRegisterInput(phone, accountName);
+        String accountName = phone;
+        String nickname = normalizeIdentifier(request.nickname());
+        validateRegisterInput(phone, accountName, nickname, request.password(), request.confirmPassword());
         verificationService.verifyOrThrow(VerificationScene.REGISTER, phone, request.smsCode());
 
         ensureRegisterTargetAvailable(phone, accountName);
 
         String userId = String.valueOf(snowflakeIdGenerator.nextId());
         String encodedPassword = passwordEncoder.encode(request.password());
-        AuthUserEntity account = new AuthUserEntity(userId, phone, accountName, request.nickname(), encodedPassword);
+        AuthUserEntity account = new AuthUserEntity(userId, phone, accountName, nickname, encodedPassword);
 
         if (!authUserMapper.saveIfAbsent(account)) {
             throw resolveRegisterConflict(phone, accountName);
@@ -168,6 +169,7 @@ public class AuthServiceImpl implements AuthService {
         String identifier = normalizeIdentifier(request.identifier());
         String channel = resolveLoginLogChannel(request);
         validateLoginIdentifier(identifier);
+        validateLoginCredentialPresent(request);
 
         try {
             ensureIdentifierNotBlocked(identifier);
@@ -178,7 +180,7 @@ public class AuthServiceImpl implements AuthService {
             throw ex;
         }
 
-        AuthUserEntity account = authUserMapper.findByIdentifier(identifier).orElse(null);
+        AuthUserEntity account = authUserMapper.findByPhone(identifier).orElse(null);
         if (account == null) {
             auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "账号未注册"));
             loginLogService.record(null, identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "FAILED", "账号未注册");
@@ -187,17 +189,23 @@ public class AuthServiceImpl implements AuthService {
 
         try {
             ensureAccountNotBlocked(account, identifier);
-            validateCaptchaWhenRequired(identifier, account, request.captchaCode());
+            if (StringUtils.hasText(request.password())) {
+                validateCaptchaWhenRequired(identifier, account, request.captchaCode());
+            } else {
+                validateSmsLoginCode(identifier, account, request.smsCode());
+            }
         } catch (BusinessException ex) {
             if (ex.errorCode() == ErrorCode.LOGIN_BLOCKED) {
                 loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "BLOCKED", ex.getMessage());
-            } else if (ex.errorCode() == ErrorCode.CAPTCHA_REQUIRED || ex.errorCode() == ErrorCode.INVALID_CAPTCHA) {
+            } else if (ex.errorCode() == ErrorCode.CAPTCHA_REQUIRED
+                    || ex.errorCode() == ErrorCode.INVALID_CAPTCHA
+                    || ex.errorCode() == ErrorCode.INVALID_SMS_CODE) {
                 loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "FAILED", ex.getMessage());
             }
             throw ex;
         }
 
-        if (!passwordEncoder.matches(request.password(), account.passwordHash())) {
+        if (StringUtils.hasText(request.password()) && !passwordEncoder.matches(request.password(), account.passwordHash())) {
             recordFailure(identifier, account);
             auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "密码错误"));
             loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "FAILED", "密码错误");
@@ -319,7 +327,7 @@ public class AuthServiceImpl implements AuthService {
             return identifier;
         }
 
-        AuthUserEntity account = authUserMapper.findByIdentifier(identifier).orElse(null);
+        AuthUserEntity account = authUserMapper.findByPhone(identifier).orElse(null);
         if (account == null) {
             auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标未注册"));
             throw new BusinessException(ErrorCode.ACCOUNT_NOT_FOUND, HttpStatus.NOT_FOUND);
@@ -342,9 +350,9 @@ public class AuthServiceImpl implements AuthService {
             return;
         }
 
-        if (!IdentifierValidator.isValidPhoneOrAccount(identifier)) {
-            auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标格式不正确"));
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "发送目标必须为手机号或账号");
+        if (!IdentifierValidator.isValidPhone(identifier)) {
+            auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标手机号格式不正确"));
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "发送目标必须为合法手机号");
         }
     }
 
@@ -354,20 +362,26 @@ public class AuthServiceImpl implements AuthService {
      * @param phone 注册手机号
      * @param account 注册账号
      */
-    private void validateRegisterInput(String phone, String account) {
+    private void validateRegisterInput(String phone, String account, String nickname, String password, String confirmPassword) {
         validatePhone(phone, "注册");
         validateAccount(account, "注册账号");
+        if (!StringUtils.hasText(nickname)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "昵称不能为空");
+        }
+        if (!StringUtils.hasText(password) || !StringUtils.hasText(confirmPassword) || !password.equals(confirmPassword)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "两次输入的密码不一致");
+        }
     }
 
     /**
-     * 校验登录标识格式。
+     * 校验登录手机号格式。
      *
-     * @param identifier 登录标识
+     * @param identifier 登录手机号
      */
     private void validateLoginIdentifier(String identifier) {
-        if (!IdentifierValidator.isValidPhoneOrAccount(identifier)) {
-            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "登录标识格式不正确"));
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "登录标识必须为手机号或账号");
+        if (!IdentifierValidator.isValidPhone(identifier)) {
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "登录手机号格式不正确"));
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "登录手机号格式不正确");
         }
     }
 
@@ -377,6 +391,17 @@ public class AuthServiceImpl implements AuthService {
      * @param phone 手机号
      * @param scene 场景说明
      */
+    private void validateLoginCredentialPresent(LoginRequest request) {
+        boolean passwordLogin = StringUtils.hasText(request.password());
+        boolean smsLogin = StringUtils.hasText(request.smsCode());
+        if (!passwordLogin && !smsLogin) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "密码或短信验证码不能为空");
+        }
+        if (passwordLogin && smsLogin) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "密码和短信验证码只能二选一");
+        }
+    }
+
     private void validatePhone(String phone, String scene) {
         if (!IdentifierValidator.isValidPhone(phone)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, scene + "手机号格式不正确");
@@ -525,6 +550,26 @@ public class AuthServiceImpl implements AuthService {
      * @param ex 验证码异常
      * @return 映射后的登录异常
      */
+    private void validateSmsLoginCode(String identifier, AuthUserEntity account, String smsCode) {
+        if (!StringUtils.hasText(smsCode)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "短信验证码不能为空");
+        }
+
+        try {
+            verificationService.verifyOrThrow(VerificationScene.LOGIN, account.phone(), smsCode);
+        } catch (BusinessException ex) {
+            if (ex.errorCode() == ErrorCode.INVALID_SMS_CODE
+                    || ex.errorCode() == ErrorCode.VERIFICATION_MISMATCH
+                    || ex.errorCode() == ErrorCode.VERIFICATION_NOT_FOUND
+                    || ex.errorCode() == ErrorCode.VERIFICATION_EXPIRED) {
+                recordFailure(identifier, account);
+                auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "短信验证码校验失败"));
+                throw mapSmsVerificationException(ex);
+            }
+            throw ex;
+        }
+    }
+
     private BusinessException mapCaptchaVerificationException(BusinessException ex) {
         if (ex.errorCode() == ErrorCode.VERIFICATION_MISMATCH) {
             return new BusinessException(ErrorCode.INVALID_CAPTCHA, HttpStatus.BAD_REQUEST, "登录验证码错误");
@@ -544,6 +589,19 @@ public class AuthServiceImpl implements AuthService {
      * @param identifier 原始登录标识
      * @param account 用户实体
      */
+    private BusinessException mapSmsVerificationException(BusinessException ex) {
+        if (ex.errorCode() == ErrorCode.VERIFICATION_MISMATCH || ex.errorCode() == ErrorCode.INVALID_SMS_CODE) {
+            return new BusinessException(ErrorCode.INVALID_SMS_CODE, HttpStatus.BAD_REQUEST, "短信验证码错误");
+        }
+        if (ex.errorCode() == ErrorCode.VERIFICATION_EXPIRED) {
+            return new BusinessException(ErrorCode.INVALID_SMS_CODE, HttpStatus.BAD_REQUEST, "短信验证码已过期");
+        }
+        if (ex.errorCode() == ErrorCode.VERIFICATION_NOT_FOUND) {
+            return new BusinessException(ErrorCode.INVALID_SMS_CODE, HttpStatus.BAD_REQUEST, "短信验证码不存在或已失效");
+        }
+        return new BusinessException(ErrorCode.INVALID_SMS_CODE, HttpStatus.BAD_REQUEST, "短信验证码错误或已过期");
+    }
+
     private void recordFailure(String identifier, AuthUserEntity account) {
         for (String relatedIdentifier : relatedIdentifiers(identifier, account)) {
             failureTracker.recordFailure(relatedIdentifier);
