@@ -14,6 +14,10 @@ public record SendCodeResponse(
         String phone,
         VerificationScene scene,
         String code,
-        int expireSeconds
+        int expireSeconds,
+        int resendAfterSeconds
 ) {
+    public SendCodeResponse(String phone, VerificationScene scene, String code, int expireSeconds) {
+        this(phone, scene, code, expireSeconds, expireSeconds);
+    }
 }
