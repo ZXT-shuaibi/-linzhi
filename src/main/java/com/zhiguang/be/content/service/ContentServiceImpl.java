@@ -33,11 +33,13 @@ import com.zhiguang.be.social.service.UserSocialCounterService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -67,6 +69,7 @@ public class ContentServiceImpl implements ContentService {
 
     private static final String EVENT_POST_PUBLISHED = "POST_PUBLISHED";
     private static final String EVENT_POST_VISIBILITY_CHANGED = "POST_VISIBILITY_CHANGED";
+    private static final String EVENT_POST_TOP_CHANGED = "POST_TOP_CHANGED";
     private static final String EVENT_POST_DELETED = "POST_DELETED";
 
     private static final String DISCOVER_TYPE = "knowledge";
@@ -81,6 +84,15 @@ public class ContentServiceImpl implements ContentService {
     private final SearchIndexService searchIndexService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final ObjectMapper objectMapper;
+
+    @Value("${content.draft-ttl-days:7}")
+    private long draftTtlDays;
+
+    @Value("${content.draft-cleanup-batch-size:100}")
+    private int draftCleanupBatchSize;
+
+    @Value("${content.outbox-max-retry-attempts:5}")
+    private int outboxMaxRetryAttempts;
 
     /**
      * 注入内容模块依赖。
@@ -205,6 +217,13 @@ public class ContentServiceImpl implements ContentService {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "objectKey 与当前文章不匹配");
         }
 
+        if (hasText(entity.contentObjectKey())) {
+            if (isSameConfirmedContent(entity, request)) {
+                return;
+            }
+            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "正文已确认，不能重复覆盖");
+        }
+
         String nextStatus = hasText(entity.title()) ? STATUS_METADATA_COMPLETED : STATUS_CONTENT_CONFIRMED;
         int updated = knowPostMapper.updateContent(
                 postId,
@@ -218,6 +237,10 @@ public class ContentServiceImpl implements ContentService {
                 Instant.now()
         );
         if (updated == 0) {
+            KnowPostEntity latest = knowPostMapper.findById(postId);
+            if (isSameConfirmedContent(latest, request)) {
+                return;
+            }
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "正文确认失败，请刷新后重试");
         }
     }
@@ -338,10 +361,13 @@ public class ContentServiceImpl implements ContentService {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertPublished(entity);
 
-        int updated = knowPostMapper.updateTop(postId, creatorId, isTop, Instant.now());
+        Instant now = Instant.now();
+        int updated = knowPostMapper.updateTop(postId, creatorId, isTop, now);
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章置顶状态更新失败，请刷新后重试");
         }
+        enqueuePostSyncEvent(postId, EVENT_POST_TOP_CHANGED, now);
+        syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), entity.visible(), entity.publishTime());
         syncSearchIndex(postId);
         feedCacheInvalidationService.invalidatePostAfterCommit(postId);
         return getDetail(postId, creatorId);
@@ -385,7 +411,8 @@ public class ContentServiceImpl implements ContentService {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章删除失败，请刷新后重试");
         }
 
-        if (STATUS_PUBLISHED.equals(entity.status())) {
+        KnowPostEntity deletedEntity = knowPostMapper.findById(postId);
+        if (wasPublishedBeforeDelete(entity, deletedEntity)) {
             incrementPublishedPostCounter(creatorId, -1);
         }
         enqueuePostSyncEvent(postId, EVENT_POST_DELETED, now);
@@ -448,15 +475,34 @@ public class ContentServiceImpl implements ContentService {
      */
     @Scheduled(fixedDelayString = "${content.outbox-reconcile-delay-ms:10000}")
     public void reconcileDiscoverOutbox() {
-        List<OutboxEventEntity> events = knowPostMapper.listPendingOutbox(20);
+        int maxRetryAttempts = normalizedOutboxMaxRetryAttempts();
+        List<OutboxEventEntity> events = knowPostMapper.listPendingOutbox(20, maxRetryAttempts);
         for (OutboxEventEntity event : events) {
             try {
+                reconcileSearchState(event);
                 reconcileDiscoverState(event.aggregateId());
                 knowPostMapper.markOutboxPublished(event.id(), Instant.now());
             } catch (Exception ex) {
-                knowPostMapper.markOutboxFailed(event.id(), abbreviateError(ex.getMessage()));
+                knowPostMapper.markOutboxFailed(event.id(), abbreviateError(ex.getMessage()), maxRetryAttempts);
                 log.warn("Failed to reconcile outbox event {} for post {}: {}", event.id(), event.aggregateId(), ex.getMessage());
             }
+        }
+    }
+
+    /**
+     * 定时清理长时间未发布的草稿。
+     */
+    @Scheduled(fixedDelayString = "${content.draft-cleanup-delay-ms:3600000}")
+    public void cleanupExpiredDrafts() {
+        if (draftTtlDays <= 0) {
+            return;
+        }
+        Instant now = Instant.now();
+        Instant expiresBefore = now.minus(Duration.ofDays(draftTtlDays));
+        int batchSize = Math.max(draftCleanupBatchSize, 1);
+        int cleaned = knowPostMapper.softDeleteExpiredDrafts(expiresBefore, now, batchSize);
+        if (cleaned > 0) {
+            log.info("Cleaned expired content drafts, count={}", cleaned);
         }
     }
 
@@ -501,6 +547,46 @@ public class ContentServiceImpl implements ContentService {
     /**
      * 写入一条 post outbox 事件。
      */
+    private boolean isSameConfirmedContent(KnowPostEntity entity, ConfirmContentRequest request) {
+        return entity != null
+                && Objects.equals(entity.contentObjectKey(), request.objectKey())
+                && Objects.equals(entity.contentEtag(), request.etag())
+                && Objects.equals(entity.contentSize(), request.size())
+                && Objects.equals(entity.contentSha256(), request.sha256());
+    }
+
+    private boolean wasPublishedBeforeDelete(KnowPostEntity beforeDelete, KnowPostEntity afterDelete) {
+        return (beforeDelete != null && STATUS_PUBLISHED.equals(beforeDelete.status()))
+                || (afterDelete != null && afterDelete.publishTime() != null);
+    }
+
+    private void reconcileSearchState(OutboxEventEntity event) throws Exception {
+        if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
+            return;
+        }
+        Long postId = parseOptionalPostId(event.aggregateId());
+        if (postId == null) {
+            return;
+        }
+        if (EVENT_POST_DELETED.equals(event.eventType())) {
+            searchIndexService.deletePostStrict(postId);
+            return;
+        }
+        if (isSearchSyncEvent(event.eventType())) {
+            searchIndexService.syncPostStrict(postId);
+        }
+    }
+
+    private boolean isSearchSyncEvent(String eventType) {
+        return EVENT_POST_PUBLISHED.equals(eventType)
+                || EVENT_POST_VISIBILITY_CHANGED.equals(eventType)
+                || EVENT_POST_TOP_CHANGED.equals(eventType);
+    }
+
+    private int normalizedOutboxMaxRetryAttempts() {
+        return Math.max(outboxMaxRetryAttempts, 1);
+    }
+
     private void enqueuePostSyncEvent(String postId, String eventType, Instant occurredAt) {
         String eventId = String.valueOf(snowflakeIdGenerator.nextId());
         knowPostMapper.insertOutbox(new OutboxEventEntity(
@@ -905,39 +991,6 @@ public class ContentServiceImpl implements ContentService {
      */
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
-    }
-
-    /**
-     * 校验图片 URL 是否属于当前文章。
-     */
-    private String normalizeOwnedImageUrl(String postId, String rawValue) {
-        String normalized = normalizeNullableText(rawValue);
-        if (normalized == null) {
-            return null;
-        }
-        String objectKeyPrefix = "posts/" + postId + "/images/";
-        if (normalized.startsWith(objectKeyPrefix)) {
-            return buildPublicUrl(normalized);
-        }
-        String publicPrefix = buildPublicUrl(objectKeyPrefix);
-        if (normalized.startsWith(publicPrefix)) {
-            return normalized;
-        }
-        throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "图片资源与当前文章不匹配");
-    }
-
-    /**
-     * 构建公开访问地址。
-     */
-    private String buildPublicUrl(String objectKey) {
-        return storageService.toPublicUrl(objectKey);
-    }
-
-    /**
-     * 去掉 baseUrl 末尾多余斜杠。
-     */
-    private String normalizeBaseUrl(String baseUrl) {
-        return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
     }
 
     /**

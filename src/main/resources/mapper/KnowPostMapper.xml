@@ -220,16 +220,6 @@
          limit #{limit} offset #{offset}
     </select>
 
-    <select id="existsFollowingRelation" resultType="boolean">
-        select exists(
-            select 1
-              from following
-             where from_user_id = cast(#{viewerId} as bigint)
-               and to_user_id = cast(#{creatorId} as bigint)
-               and rel_status = 1
-        )
-    </select>
-
     <update id="updateContent">
         update know_posts
            set status = #{status},
@@ -242,6 +232,7 @@
          where id = cast(#{postId} as bigint)
            and creator_id = cast(#{creatorId} as bigint)
            and status in ('draft', 'content_confirmed', 'metadata_completed')
+           and content_object_key is null
     </update>
 
     <update id="updateMetadata">
@@ -301,6 +292,24 @@
            and status &lt;&gt; 'deleted'
     </update>
 
+    <update id="softDeleteExpiredDrafts">
+        update know_posts
+           set status = 'deleted',
+               updated_at = #{updatedAt}
+         where id in (
+             select id
+               from (
+                   select id
+                     from know_posts
+                    where status in ('draft', 'content_confirmed', 'metadata_completed')
+                      and publish_time is null
+                      and updated_at &lt; #{expiresBefore}
+                    order by updated_at asc, id asc
+                    limit #{limit}
+               ) expired_drafts
+         )
+    </update>
+
     <insert id="insertOutbox" parameterType="com.zhiguang.be.content.model.OutboxEventEntity">
         insert into outbox(
             id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, created_at, published_at
@@ -322,6 +331,7 @@
           from outbox
          where aggregate_type = 'post'
            and status in ('pending', 'failed')
+           and retry_count &lt; #{maxRetryAttempts}
          order by created_at asc, id asc
          limit #{limit}
     </select>
@@ -337,7 +347,10 @@
 
     <update id="markOutboxFailed">
         update outbox
-           set status = 'failed',
+           set status = case
+                   when retry_count + 1 &gt;= #{maxRetryAttempts} then 'dead'
+                   else 'failed'
+               end,
                retry_count = retry_count + 1,
                last_error = #{lastError}
          where id = cast(#{eventId} as bigint)

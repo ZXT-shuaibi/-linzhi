@@ -73,9 +73,9 @@ public class SearchCanalOutboxConsumer {
                     continue;
                 }
                 if ("POST_DELETED".equals(payload.eventType())) {
-                    searchIndexService.deletePost(postId);
+                    searchIndexService.deletePostStrict(postId);
                 } else {
-                    searchIndexService.syncPost(postId);
+                    searchIndexService.syncPostStrict(postId);
                 }
             } catch (Exception ex) {
                 log.warn("搜索 outbox 投影失败，message={}", message, ex);
@@ -89,6 +89,7 @@ public class SearchCanalOutboxConsumer {
     private boolean isPostEvent(String eventType) {
         return "POST_PUBLISHED".equals(eventType)
                 || "POST_VISIBILITY_CHANGED".equals(eventType)
+                || "POST_TOP_CHANGED".equals(eventType)
                 || "POST_DELETED".equals(eventType);
     }
 

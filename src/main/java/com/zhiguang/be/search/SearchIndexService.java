@@ -124,28 +124,46 @@ public class SearchIndexService {
      * 同步单篇内容到搜索索引。
      */
     public void syncPost(Long postId) {
+        try {
+            syncPostStrict(postId);
+        } catch (Exception ignored) {
+            // 不阻断内容主流程，失败由 outbox 重放或全量重建修正。
+        }
+    }
+
+    /**
+     * 严格同步单篇内容到搜索索引，失败时抛出异常供 outbox 重试。
+     */
+    public void syncPostStrict(Long postId) throws Exception {
         if (postId == null) {
             return;
         }
-        syncRow(searchMapper.findSearchIndexDocumentRow(postId), loadInteractionSummary(postId));
+        syncRowStrict(searchMapper.findSearchIndexDocumentRow(postId), loadInteractionSummary(postId));
     }
 
     /**
      * 从搜索索引中删除内容。
      */
     public void deletePost(Long postId) {
+        try {
+            deletePostStrict(postId);
+        } catch (Exception ignored) {
+            // 删除失败不阻断主链路，失败由 outbox 重放或全量重建修正。
+        }
+    }
+
+    /**
+     * 严格删除搜索索引中的内容，失败时抛出异常供 outbox 重试。
+     */
+    public void deletePostStrict(Long postId) throws Exception {
         if (postId == null) {
             return;
         }
-        try {
-            elasticsearchClient.delete(request -> request
-                    .index(indexName())
-                    .id(String.valueOf(postId))
-                    .refresh(Refresh.WaitFor)
-            );
-        } catch (Exception ignored) {
-            // 删除失败不阻断主链路，后续可通过重建修正。
-        }
+        elasticsearchClient.delete(request -> request
+                .index(indexName())
+                .id(String.valueOf(postId))
+                .refresh(Refresh.WaitFor)
+        );
     }
 
     /**
@@ -156,26 +174,30 @@ public class SearchIndexService {
     }
 
     private void syncRow(SearchIndexDocumentRow row, InteractionSummary interactionSummary) {
+        try {
+            syncRowStrict(row, interactionSummary);
+        } catch (Exception ignored) {
+            // 不阻断内容主流程，ES 异常可由 outbox 重放或后续重建修正。
+        }
+    }
+
+    private void syncRowStrict(SearchIndexDocumentRow row, InteractionSummary interactionSummary) throws Exception {
         if (row == null || row.postId() == null) {
             return;
         }
         if (!"published".equals(row.status()) || !"public".equals(row.visible())) {
-            deletePost(row.postId());
+            deletePostStrict(row.postId());
             return;
         }
 
         List<String> tags = parseStringList(row.tagsJson());
         Map<String, Object> document = buildDocument(row, tags, interactionSummary);
-        try {
-            elasticsearchClient.index(request -> request
-                    .index(indexName())
-                    .id(String.valueOf(row.postId()))
-                    .document(document)
-                    .refresh(Refresh.WaitFor)
-            );
-        } catch (Exception ignored) {
-            // 不阻断内容主流程，ES 异常可由后续重建修正。
-        }
+        elasticsearchClient.index(request -> request
+                .index(indexName())
+                .id(String.valueOf(row.postId()))
+                .document(document)
+                .refresh(Refresh.WaitFor)
+        );
     }
 
     private Map<String, Object> buildDocument(

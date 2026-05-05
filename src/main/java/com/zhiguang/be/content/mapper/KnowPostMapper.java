@@ -57,14 +57,6 @@ public interface KnowPostMapper {
     );
 
     /**
-     * 判断查看者是否关注了内容作者。
-     */
-    boolean existsFollowingRelation(
-            @Param("viewerId") String viewerId,
-            @Param("creatorId") String creatorId
-    );
-
-    /**
      * 更新正文确认结果。
      */
     int updateContent(
@@ -141,6 +133,15 @@ public interface KnowPostMapper {
     );
 
     /**
+     * 软删除超过保留期的未发布草稿。
+     */
+    int softDeleteExpiredDrafts(
+            @Param("expiresBefore") Instant expiresBefore,
+            @Param("updatedAt") Instant updatedAt,
+            @Param("limit") int limit
+    );
+
+    /**
      * 插入 outbox 事件。
      */
     void insertOutbox(OutboxEventEntity entity);
@@ -148,7 +149,10 @@ public interface KnowPostMapper {
     /**
      * 查询待处理 outbox 事件。
      */
-    List<OutboxEventEntity> listPendingOutbox(@Param("limit") int limit);
+    List<OutboxEventEntity> listPendingOutbox(
+            @Param("limit") int limit,
+            @Param("maxRetryAttempts") int maxRetryAttempts
+    );
 
     /**
      * 标记 outbox 已发布。
@@ -158,5 +162,9 @@ public interface KnowPostMapper {
     /**
      * 标记 outbox 发布失败。
      */
-    int markOutboxFailed(@Param("eventId") String eventId, @Param("lastError") String lastError);
+    int markOutboxFailed(
+            @Param("eventId") String eventId,
+            @Param("lastError") String lastError,
+            @Param("maxRetryAttempts") int maxRetryAttempts
+    );
 }
