@@ -39,6 +39,39 @@ public class StorageController {
         return ApiResponse.success(storageService.createPresign(requireUserId(jwt), request));
     }
 
+    @PostMapping("/multipart/init")
+    public ApiResponse<StorageMultipartInitData> initiateMultipartUpload(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody StorageMultipartInitRequest request
+    ) {
+        return ApiResponse.success(storageService.initiateMultipartUpload(requireUserId(jwt), request));
+    }
+
+    @PostMapping("/multipart/part/presign")
+    public ApiResponse<StorageMultipartPartPresignData> createMultipartPartPresign(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody StorageMultipartPartPresignRequest request
+    ) {
+        return ApiResponse.success(storageService.createMultipartPartPresign(requireUserId(jwt), request));
+    }
+
+    @PostMapping("/multipart/complete")
+    public ApiResponse<StorageMultipartCompleteData> completeMultipartUpload(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody StorageMultipartCompleteRequest request
+    ) {
+        return ApiResponse.success(storageService.completeMultipartUpload(requireUserId(jwt), request));
+    }
+
+    @PostMapping("/multipart/abort")
+    public ApiResponse<Void> abortMultipartUpload(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody StorageMultipartAbortRequest request
+    ) {
+        storageService.abortMultipartUpload(requireUserId(jwt), request);
+        return ApiResponse.success(null);
+    }
+
     private long requireUserId(Jwt jwt) {
         if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");

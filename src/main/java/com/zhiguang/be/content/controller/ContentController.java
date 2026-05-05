@@ -48,7 +48,7 @@ public class ContentController {
      * 创建内容草稿。
      * 参考 zhiguang，这一步不再额外接收空请求体。
      */
-    @PostMapping("/posts/drafts")
+    @PostMapping({"/posts/drafts", "/knowposts/drafts"})
     public ApiResponse<DraftData> createDraft(@AuthenticationPrincipal Jwt jwt) {
         return ApiResponse.success(contentService.createDraft(requireUserId(jwt)));
     }
@@ -59,7 +59,7 @@ public class ContentController {
     /**
      * 确认正文上传成功。
      */
-    @PostMapping("/posts/{postId}/content/confirm")
+    @PostMapping({"/posts/{postId}/content/confirm", "/knowposts/{postId}/content/confirm"})
     public ApiResponse<Void> confirmContent(
             @PathVariable long postId,
             @Valid @RequestBody ConfirmContentRequest request,
@@ -72,7 +72,7 @@ public class ContentController {
     /**
      * 更新文章元数据。
      */
-    @PutMapping("/posts/{postId}/metadata")
+    @PutMapping({"/posts/{postId}/metadata", "/knowposts/{postId}/metadata"})
     public ApiResponse<PostDetail> updateMetadata(
             @PathVariable long postId,
             @Valid @RequestBody UpdatePostMetadataRequest request,
@@ -84,7 +84,7 @@ public class ContentController {
     /**
      * 兼容 zhiguang 风格的 PATCH 元数据更新。
      */
-    @PatchMapping("/posts/{postId}")
+    @PatchMapping({"/posts/{postId}", "/knowposts/{postId}"})
     public ApiResponse<PostDetail> patchMetadata(
             @PathVariable long postId,
             @Valid @RequestBody UpdatePostMetadataRequest request,
@@ -96,7 +96,7 @@ public class ContentController {
     /**
      * 发布文章。
      */
-    @PostMapping("/posts/{postId}/publish")
+    @PostMapping({"/posts/{postId}/publish", "/knowposts/{postId}/publish"})
     public ApiResponse<PostDetail> publish(@PathVariable long postId, @AuthenticationPrincipal Jwt jwt) {
         return ApiResponse.success(contentService.publish(requireUserId(jwt), String.valueOf(postId)));
     }
@@ -104,7 +104,7 @@ public class ContentController {
     /**
      * 更新文章置顶状态。
      */
-    @PatchMapping("/posts/{postId}/top")
+    @PatchMapping({"/posts/{postId}/top", "/knowposts/{postId}/top"})
     public ApiResponse<PostDetail> updateTop(
             @PathVariable long postId,
             @RequestParam boolean isTop,
@@ -116,7 +116,7 @@ public class ContentController {
     /**
      * 更新文章可见性。
      */
-    @PatchMapping("/posts/{postId}/visibility")
+    @PatchMapping({"/posts/{postId}/visibility", "/knowposts/{postId}/visibility"})
     public ApiResponse<PostDetail> updateVisibility(
             @PathVariable long postId,
             @RequestParam
@@ -130,7 +130,7 @@ public class ContentController {
     /**
      * 删除文章。
      */
-    @DeleteMapping("/posts/{postId}")
+    @DeleteMapping({"/posts/{postId}", "/knowposts/{postId}"})
     public ApiResponse<Void> delete(@PathVariable long postId, @AuthenticationPrincipal Jwt jwt) {
         contentService.delete(requireUserId(jwt), String.valueOf(postId));
         return ApiResponse.success(null);
@@ -140,7 +140,7 @@ public class ContentController {
      * 查询公开内容流。
      * 若请求携带 accessToken，则补充用户维度字段。
      */
-    @GetMapping("/posts/feed")
+    @GetMapping({"/posts/feed", "/knowposts/feed"})
     public ApiResponse<PostPageData> feed(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
@@ -152,7 +152,7 @@ public class ContentController {
     /**
      * 查询当前用户已发布内容。
      */
-    @GetMapping("/posts/mine")
+    @GetMapping({"/posts/mine", "/knowposts/mine"})
     public ApiResponse<PostPageData> mine(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
@@ -164,7 +164,7 @@ public class ContentController {
     /**
      * 查询文章详情。
      */
-    @GetMapping("/posts/{postId}")
+    @GetMapping({"/posts/{postId}", "/knowposts/{postId}"})
     public ApiResponse<PostDetail> getDetail(@PathVariable long postId, @AuthenticationPrincipal Jwt jwt) {
         return ApiResponse.success(contentService.getDetail(String.valueOf(postId), optionalUserId(jwt)));
     }

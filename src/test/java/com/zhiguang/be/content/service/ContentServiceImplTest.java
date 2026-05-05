@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -158,6 +159,48 @@ class ContentServiceImplTest {
                 anyString(),
                 any()
         );
+    }
+
+    @Test
+    void confirmContentShouldValidateUploadedObjectMetadataBeforeSaving() {
+        ConfirmContentRequest request = new ConfirmContentRequest(
+                "posts/1001/content/content.md",
+                "\"etag-1\"",
+                sha('d'),
+                128L
+        );
+        when(knowPostMapper.findById("1001")).thenReturn(unconfirmedPost("1001", "7", "draft"));
+        when(storageService.toPublicUrl("posts/1001/content/content.md"))
+                .thenReturn("https://oss.local/posts/1001/content/content.md");
+        when(knowPostMapper.updateContent(
+                eq("1001"),
+                eq("7"),
+                eq("metadata_completed"),
+                eq("https://oss.local/posts/1001/content/content.md"),
+                eq("posts/1001/content/content.md"),
+                eq("\"etag-1\""),
+                eq(128L),
+                eq(sha('d')),
+                any()
+        )).thenReturn(1);
+
+        service.confirmContent("7", "1001", request);
+
+        verify(storageService).validateUploadedObject("posts/1001/content/content.md", "\"etag-1\"", 128L);
+    }
+
+    @Test
+    void publishShouldReturnCurrentDetailWhenPostIsAlreadyPublished() {
+        Instant publishedAt = Instant.now().minusSeconds(3600);
+        when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7", "published", publishedAt));
+        when(knowPostMapper.findDetailById("1001")).thenReturn(detail("1001", "7", false, publishedAt));
+
+        service.publish("7", "1001");
+
+        verify(knowPostMapper, never()).publish(anyString(), anyString(), anyString(), anyString(), any(), any());
+        verify(userSocialCounterService, never()).incrementPosts(anyLong(), anyInt());
+        verify(knowPostMapper, never()).insertOutbox(any());
+        verify(feedCacheInvalidationService, never()).invalidatePostAfterCommit(anyString());
     }
 
     @Test
@@ -325,6 +368,35 @@ class ContentServiceImplTest {
                 Instant.now().minusSeconds(7200),
                 Instant.now().minusSeconds(3600),
                 publishTime
+        );
+    }
+
+    private KnowPostEntity unconfirmedPost(String postId, String creatorId, String status) {
+        return new KnowPostEntity(
+                postId,
+                creatorId,
+                null,
+                null,
+                "title",
+                "summary",
+                31.2D,
+                121.4D,
+                null,
+                "address",
+                null,
+                null,
+                null,
+                null,
+                null,
+                Boolean.FALSE,
+                "image_text",
+                "public",
+                null,
+                null,
+                status,
+                Instant.now().minusSeconds(7200),
+                Instant.now().minusSeconds(3600),
+                null
         );
     }
 

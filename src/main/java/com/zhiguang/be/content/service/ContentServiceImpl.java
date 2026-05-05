@@ -224,6 +224,8 @@ public class ContentServiceImpl implements ContentService {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "正文已确认，不能重复覆盖");
         }
 
+        storageService.validateUploadedObject(request.objectKey(), request.etag(), request.size());
+
         String nextStatus = hasText(entity.title()) ? STATUS_METADATA_COMPLETED : STATUS_CONTENT_CONFIRMED;
         int updated = knowPostMapper.updateContent(
                 postId,
@@ -328,6 +330,9 @@ public class ContentServiceImpl implements ContentService {
     @Transactional
     public PostDetail publish(String creatorId, String postId) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
+        if (STATUS_PUBLISHED.equals(entity.status())) {
+            return getDetail(postId, creatorId);
+        }
         assertMutable(entity);
         if (!hasText(entity.contentUrl())) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "请先确认正文上传");

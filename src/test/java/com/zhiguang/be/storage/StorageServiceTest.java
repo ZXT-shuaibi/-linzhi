@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -95,6 +96,88 @@ class StorageServiceTest {
         );
 
         assertEquals(ErrorCode.BAD_REQUEST, exception.errorCode());
+    }
+
+    @Test
+    void initiateMultipartUploadShouldReturnOwnedObjectKeyAndResumePartSize() {
+        when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7"));
+
+        StorageMultipartInitData data = storageService.initiateMultipartUpload(
+                7L,
+                new StorageMultipartInitRequest(
+                        "knowpost_content",
+                        "1001",
+                        "content.md",
+                        "text/markdown",
+                        ".md",
+                        25L * 1024L * 1024L
+                )
+        );
+
+        assertTrue(data.objectKey().startsWith("posts/1001/content/"));
+        assertTrue(data.objectKey().endsWith(".md"));
+        assertTrue(data.uploadId().startsWith("mock-"));
+        assertEquals(5L * 1024L * 1024L, data.partSize());
+        assertEquals("text/markdown", data.headers().get("Content-Type"));
+        assertEquals("https://mock-oss.local/public/" + data.objectKey(), data.publicUrl());
+        assertNotNull(data.expireAt());
+    }
+
+    @Test
+    void createMultipartPartPresignShouldReturnPartSpecificPutUrl() {
+        when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7"));
+
+        StorageMultipartPartPresignData data = storageService.createMultipartPartPresign(
+                7L,
+                new StorageMultipartPartPresignRequest(
+                        "posts/1001/content/content.md",
+                        "mock-upload-1",
+                        2,
+                        "text/markdown"
+                )
+        );
+
+        assertTrue(data.uploadUrl().contains("posts%2F1001%2Fcontent%2Fcontent.md"));
+        assertTrue(data.uploadUrl().contains("uploadId=mock-upload-1"));
+        assertTrue(data.uploadUrl().contains("partNumber=2"));
+        assertEquals("text/markdown", data.headers().get("Content-Type"));
+        assertNotNull(data.expireAt());
+    }
+
+    @Test
+    void completeMultipartUploadShouldSortPartsAndReturnPublicUrl() {
+        when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7"));
+
+        StorageMultipartCompleteData data = storageService.completeMultipartUpload(
+                7L,
+                new StorageMultipartCompleteRequest(
+                        "posts/1001/content/content.md",
+                        "mock-upload-1",
+                        List.of(
+                                new StorageMultipartPart(2, "\"etag-2\""),
+                                new StorageMultipartPart(1, "\"etag-1\"")
+                        )
+                )
+        );
+
+        assertEquals("posts/1001/content/content.md", data.objectKey());
+        assertEquals("https://mock-oss.local/public/posts/1001/content/content.md", data.publicUrl());
+        assertTrue(data.etag().contains("mock-upload-1"));
+    }
+
+    @Test
+    void abortMultipartUploadShouldRejectObjectKeysOwnedByAnotherPost() {
+        when(knowPostMapper.findById("1001")).thenReturn(post("1001", "8"));
+
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> storageService.abortMultipartUpload(
+                        7L,
+                        new StorageMultipartAbortRequest("posts/1001/content/content.md", "mock-upload-1")
+                )
+        );
+
+        assertEquals(ErrorCode.FORBIDDEN, exception.errorCode());
     }
 
     private KnowPostEntity post(String postId, String creatorId) {

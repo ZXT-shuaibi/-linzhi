@@ -15,6 +15,7 @@ public class StorageProperties {
     private String mockUploadBaseUrl = "https://mock-oss.local/upload";
     private String publicBaseUrl = "https://mock-oss.local/public";
     private long presignExpireSeconds = 600L;
+    private long multipartPartSizeBytes = 5L * 1024L * 1024L;
     private final Oss oss = new Oss();
 
     public String getProvider() {
@@ -47,6 +48,14 @@ public class StorageProperties {
 
     public void setPresignExpireSeconds(long presignExpireSeconds) {
         this.presignExpireSeconds = presignExpireSeconds;
+    }
+
+    public long getMultipartPartSizeBytes() {
+        return multipartPartSizeBytes;
+    }
+
+    public void setMultipartPartSizeBytes(long multipartPartSizeBytes) {
+        this.multipartPartSizeBytes = multipartPartSizeBytes;
     }
 
     public Oss getOss() {
