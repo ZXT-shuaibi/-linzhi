@@ -1,17 +1,24 @@
 package com.zhiguang.be.storage;
 
+import com.aliyun.oss.HttpMethod;
+import com.aliyun.oss.OSS;
+import com.aliyun.oss.OSSClientBuilder;
+import com.aliyun.oss.model.GeneratePresignedUrlRequest;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.content.mapper.KnowPostMapper;
 import com.zhiguang.be.content.model.KnowPostEntity;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -52,11 +59,11 @@ public class StorageService {
             }
         }
 
-        Instant expireAt = Instant.now().plusSeconds(storageProperties.getPresignExpireSeconds());
+        Instant expireAt = Instant.now().plus(presignTtl());
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Content-Type", contentType);
         return new StoragePresignData(
-                buildUploadUrl(objectKey),
+                buildUploadUrl(objectKey, contentType, expireAt),
                 objectKey,
                 toPublicUrl(objectKey),
                 expireAt,
@@ -65,6 +72,9 @@ public class StorageService {
     }
 
     public String toPublicUrl(String objectKey) {
+        if (isOssProvider()) {
+            return normalizeBaseUrl(resolveOssPublicBaseUrl()) + "/" + objectKey;
+        }
         return normalizeBaseUrl(storageProperties.getPublicBaseUrl()) + "/" + objectKey;
     }
 
@@ -132,9 +142,48 @@ public class StorageService {
         return postId;
     }
 
-    private String buildUploadUrl(String objectKey) {
+    private String buildUploadUrl(String objectKey, String contentType, Instant expireAt) {
+        if (isOssProvider()) {
+            return buildOssUploadUrl(objectKey, contentType, expireAt);
+        }
         return normalizeBaseUrl(storageProperties.getMockUploadBaseUrl()) + "/"
                 + URLEncoder.encode(objectKey, StandardCharsets.UTF_8);
+    }
+
+    private String buildOssUploadUrl(String objectKey, String contentType, Instant expireAt) {
+        StorageProperties.Oss ossProperties = storageProperties.getOss();
+        String endpoint = requireText(ossProperties.getEndpoint(), "OSS endpoint is not configured");
+        String bucketName = requireText(ossProperties.getBucketName(), "OSS bucket name is not configured");
+        String accessKeyId = resolveCredential(
+                ossProperties.getAccessKeyId(),
+                "ALIYUN_OSS_ACCESS_KEY_ID",
+                "ALIBABA_CLOUD_ACCESS_KEY_ID"
+        );
+        String accessKeySecret = resolveCredential(
+                ossProperties.getAccessKeySecret(),
+                "ALIYUN_OSS_ACCESS_KEY_SECRET",
+                "ALIBABA_CLOUD_ACCESS_KEY_SECRET"
+        );
+        requireText(accessKeyId, "OSS access key ID is not configured");
+        requireText(accessKeySecret, "OSS access key secret is not configured");
+
+        OSS ossClient = buildOssClient(endpoint, accessKeyId, accessKeySecret, ossProperties.getSecurityToken());
+        try {
+            GeneratePresignedUrlRequest presignedUrlRequest =
+                    new GeneratePresignedUrlRequest(bucketName, objectKey, HttpMethod.PUT);
+            presignedUrlRequest.setExpiration(Date.from(expireAt));
+            presignedUrlRequest.setContentType(contentType);
+            return ossClient.generatePresignedUrl(presignedUrlRequest).toString();
+        } finally {
+            ossClient.shutdown();
+        }
+    }
+
+    private OSS buildOssClient(String endpoint, String accessKeyId, String accessKeySecret, String securityToken) {
+        if (StringUtils.hasText(securityToken)) {
+            return new OSSClientBuilder().build(endpoint, accessKeyId, accessKeySecret, securityToken);
+        }
+        return new OSSClientBuilder().build(endpoint, accessKeyId, accessKeySecret);
     }
 
     private String normalizeScene(String scene) {
@@ -242,6 +291,57 @@ public class StorageService {
             );
         }
         return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+    }
+
+    private boolean isOssProvider() {
+        return "oss".equalsIgnoreCase(storageProperties.getProvider());
+    }
+
+    private String resolveOssPublicBaseUrl() {
+        StorageProperties.Oss ossProperties = storageProperties.getOss();
+        if (StringUtils.hasText(ossProperties.getPublicBaseUrl())) {
+            return ossProperties.getPublicBaseUrl();
+        }
+        String endpoint = requireText(ossProperties.getEndpoint(), "OSS endpoint is not configured");
+        String bucketName = requireText(ossProperties.getBucketName(), "OSS bucket name is not configured");
+        String normalizedEndpoint = stripScheme(endpoint);
+        return "https://" + bucketName + "." + normalizedEndpoint;
+    }
+
+    private String stripScheme(String endpoint) {
+        String normalized = endpoint.trim();
+        if (normalized.startsWith("https://")) {
+            return normalized.substring("https://".length());
+        }
+        if (normalized.startsWith("http://")) {
+            return normalized.substring("http://".length());
+        }
+        return normalized;
+    }
+
+    private Duration presignTtl() {
+        long seconds = Math.max(storageProperties.getPresignExpireSeconds(), 1L);
+        return Duration.ofSeconds(seconds);
+    }
+
+    private String requireText(String value, String message) {
+        if (!StringUtils.hasText(value)) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, message);
+        }
+        return value.trim();
+    }
+
+    private String resolveCredential(String configured, String... envNames) {
+        if (StringUtils.hasText(configured)) {
+            return configured.trim();
+        }
+        for (String envName : envNames) {
+            String envValue = System.getenv(envName);
+            if (StringUtils.hasText(envValue)) {
+                return envValue.trim();
+            }
+        }
+        return null;
     }
 
     private String randomToken() {

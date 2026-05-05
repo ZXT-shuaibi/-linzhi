@@ -60,6 +60,29 @@ class StorageServiceTest {
     }
 
     @Test
+    void createPresignShouldGenerateOssPutUrlWhenProviderIsOss() {
+        StorageProperties storageProperties = new StorageProperties();
+        storageProperties.setProvider("oss");
+        storageProperties.setPresignExpireSeconds(600L);
+        storageProperties.getOss().setEndpoint("https://oss-cn-hangzhou.aliyuncs.com");
+        storageProperties.getOss().setBucketName("zhiguang-test");
+        storageProperties.getOss().setAccessKeyId("test-ak");
+        storageProperties.getOss().setAccessKeySecret("test-sk");
+        storageService = new StorageService(storageProperties, knowPostMapper);
+
+        StoragePresignData data = storageService.createPresign(
+                7L,
+                new StoragePresignRequest("profile_avatar", null, "avatar.png", "image/png", null)
+        );
+
+        assertTrue(data.uploadUrl().startsWith("https://zhiguang-test.oss-cn-hangzhou.aliyuncs.com/avatars/7/"));
+        assertTrue(data.uploadUrl().contains("OSSAccessKeyId=test-ak"));
+        assertTrue(data.uploadUrl().contains("Signature="));
+        assertEquals("https://zhiguang-test.oss-cn-hangzhou.aliyuncs.com/" + data.objectKey(), data.publicUrl());
+        assertEquals("image/png", data.headers().get("Content-Type"));
+    }
+
+    @Test
     void createPresignShouldRejectTextContentTypeForImageScene() {
         when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7"));
 
