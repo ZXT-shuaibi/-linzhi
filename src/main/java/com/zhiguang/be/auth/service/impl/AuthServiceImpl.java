@@ -136,24 +136,23 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public RegisterResult register(RegisterRequest request, ClientInfo clientInfo) {
         String phone = normalizeIdentifier(request.phone());
-        String accountName = phone;
         String nickname = normalizeIdentifier(request.nickname());
-        validateRegisterInput(phone, accountName, nickname, request.password(), request.confirmPassword());
+        validateRegisterInput(phone, nickname, request.password(), request.confirmPassword());
         verificationService.verifyOrThrow(VerificationScene.REGISTER, phone, request.smsCode());
 
-        ensureRegisterTargetAvailable(phone, accountName);
+        ensurePhoneAvailable(phone);
 
         String userId = String.valueOf(snowflakeIdGenerator.nextId());
         String encodedPassword = passwordEncoder.encode(request.password());
-        AuthUserEntity account = new AuthUserEntity(userId, phone, accountName, request.nickname(), encodedPassword);
+        AuthUserEntity account = new AuthUserEntity(userId, phone, request.nickname(), encodedPassword);
 
         if (!authUserMapper.saveIfAbsent(account)) {
-            throw resolveRegisterConflict(phone, accountName);
+            throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
         }
 
         auditLogger.log(AuditEvent.of("REGISTER_SUCCESS", phone, true, "用户注册成功，等待登录"));
         loginLogService.record(userId, phone, "REGISTER", safeIp(clientInfo), safeUserAgent(clientInfo), "SUCCESS", "注册成功");
-        return new RegisterResult(userId, phone, accountName, "login", "registered");
+        return new RegisterResult(userId, phone, "login", "registered");
     }
 
     /**
@@ -311,7 +310,7 @@ public class AuthServiceImpl implements AuthService {
     public AuthUserResponse me(String userId) {
         AuthUserEntity account = authUserMapper.findByUserId(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "用户不存在"));
-        return new AuthUserResponse(account.userId(), account.phone(), account.account(), account.nickname());
+        return new AuthUserResponse(account.userId(), account.phone(), account.nickname());
     }
 
     /**
@@ -365,9 +364,8 @@ public class AuthServiceImpl implements AuthService {
      * @param phone 注册手机号
      * @param account 注册账号
      */
-    private void validateRegisterInput(String phone, String account, String nickname, String password, String confirmPassword) {
+    private void validateRegisterInput(String phone, String nickname, String password, String confirmPassword) {
         validatePhone(phone, "注册");
-        validateAccount(account, "注册账号");
         if (!StringUtils.hasText(nickname)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "昵称不能为空");
         }
@@ -406,47 +404,17 @@ public class AuthServiceImpl implements AuthService {
      * @param account 账号
      * @param scene 场景说明
      */
-    private void validateAccount(String account, String scene) {
-        if (!IdentifierValidator.isValidAccount(account)) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, scene + "格式不正确");
-        }
-    }
-
     /**
-     * 检查注册目标是否可用。
+     * 检查手机号是否可用。
      *
      * @param phone 手机号
      * @param account 账号
      */
-    private void ensureRegisterTargetAvailable(String phone, String account) {
+    private void ensurePhoneAvailable(String phone) {
         if (authUserMapper.existsByPhone(phone)) {
             auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "手机号已注册"));
             throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
         }
-
-        if (authUserMapper.existsByAccount(account)) {
-            auditLogger.log(AuditEvent.of("REGISTER_FAILED", account, false, "账号已存在"));
-            throw new BusinessException(ErrorCode.ACCOUNT_EXISTS, HttpStatus.CONFLICT);
-        }
-    }
-
-    /**
-     * 解析并发注册时的最终冲突原因。
-     *
-     * @param phone 手机号
-     * @param account 账号
-     * @return 对应业务异常
-     */
-    private BusinessException resolveRegisterConflict(String phone, String account) {
-        if (authUserMapper.existsByPhone(phone)) {
-            auditLogger.log(AuditEvent.of("REGISTER_FAILED", phone, false, "手机号已注册"));
-            return new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
-        }
-        if (authUserMapper.existsByAccount(account)) {
-            auditLogger.log(AuditEvent.of("REGISTER_FAILED", account, false, "账号已存在"));
-            return new BusinessException(ErrorCode.ACCOUNT_EXISTS, HttpStatus.CONFLICT);
-        }
-        return new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.CONFLICT, "注册信息提交失败");
     }
 
     /**
@@ -617,9 +585,6 @@ public class AuthServiceImpl implements AuthService {
         if (account != null && StringUtils.hasText(account.phone())) {
             identifiers.add(account.phone());
         }
-        if (account != null && StringUtils.hasText(account.account())) {
-            identifiers.add(account.account());
-        }
         return identifiers;
     }
 
@@ -685,16 +650,6 @@ public class AuthServiceImpl implements AuthService {
      */
     private String normalizeIdentifier(String identifier) {
         return identifier == null ? "" : identifier.trim();
-    }
-
-    /**
-     * 规范化账号文本。
-     *
-     * @param account 原始账号
-     * @return 规范化结果
-     */
-    private String normalizeAccount(String account) {
-        return normalizeIdentifier(account);
     }
 
     /**

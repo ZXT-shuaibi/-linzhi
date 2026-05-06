@@ -77,8 +77,8 @@ class AuthServiceImplTest {
 
         assertEquals("login", result.nextAction());
         assertEquals("registered", result.status());
-        assertEquals("13800138000", result.account());
-        AuthUserEntity persisted = fixture.userMapper.findByAccount("13800138000").orElseThrow();
+        assertEquals("13800138000", result.phone());
+        AuthUserEntity persisted = fixture.userMapper.findByPhone("13800138000").orElseThrow();
         assertEquals("13800138000", persisted.phone());
         assertNotEquals("Passw0rd!", persisted.passwordHash());
         assertTrue(persisted.passwordHash().startsWith("$2"));
@@ -332,7 +332,6 @@ class AuthServiceImplTest {
 
         assertEquals(result.userId(), response.userId());
         assertEquals("13800138105", response.phone());
-        assertEquals("13800138105", response.account());
         assertEquals("tester", response.nickname());
     }
 
@@ -340,15 +339,13 @@ class AuthServiceImplTest {
      * 内存用户映射会同时拦截重复手机号和重复账号。
      */
     @Test
-    void saveIfAbsentShouldRejectDuplicatePhoneOrAccount() {
+    void saveIfAbsentShouldRejectDuplicatePhone() {
         InMemoryAuthUserMapper mapper = new InMemoryAuthUserMapper();
-        AuthUserEntity first = new AuthUserEntity("u1", "13800138005", "tester05", "n1", "hash1");
-        AuthUserEntity duplicatePhone = new AuthUserEntity("u2", "13800138005", "tester05b", "n2", "hash2");
-        AuthUserEntity duplicateAccount = new AuthUserEntity("u3", "13800138055", "tester05", "n3", "hash3");
+        AuthUserEntity first = new AuthUserEntity("u1", "13800138005", "n1", "hash1");
+        AuthUserEntity duplicatePhone = new AuthUserEntity("u2", "13800138005", "n2", "hash2");
 
         assertTrue(mapper.saveIfAbsent(first));
         assertFalse(mapper.saveIfAbsent(duplicatePhone));
-        assertFalse(mapper.saveIfAbsent(duplicateAccount));
     }
 
     /**

@@ -6,13 +6,11 @@ package com.zhiguang.be.auth.model;
  *
  * @param userId 用户唯一 ID
  * @param phone 手机号
- * @param account 登录账号
  * @param nickname 昵称
  */
 public record AuthUserResponse(
         String userId,
         String phone,
-        String account,
         String nickname
 ) {
 }

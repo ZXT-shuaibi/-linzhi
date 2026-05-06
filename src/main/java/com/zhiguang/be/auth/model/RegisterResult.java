@@ -6,14 +6,12 @@ package com.zhiguang.be.auth.model;
  *
  * @param userId 用户唯一 ID
  * @param phone 注册手机号
- * @param account 注册账号
  * @param nextAction 下一步动作
  * @param status 当前状态
  */
 public record RegisterResult(
         String userId,
         String phone,
-        String account,
         String nextAction,
         String status
 ) {

@@ -134,9 +134,6 @@ public class AuthBlocklistService {
         if (StringUtils.hasText(account.phone())) {
             identifiers.add(account.phone());
         }
-        if (StringUtils.hasText(account.account())) {
-            identifiers.add(account.account());
-        }
         return identifiers;
     }
 
