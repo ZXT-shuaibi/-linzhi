@@ -152,6 +152,13 @@ public class StorageService {
     public StorageObjectMetadata validateUploadedObject(String objectKey, String expectedEtag, Long expectedSize) {
         String normalizedObjectKey = requireText(objectKey, "objectKey is required");
         if (!isOssProvider()) {
+            String publicBaseUrl = properties.getPublicBaseUrl();
+            if (!normalizedObjectKey.startsWith(publicBaseUrl)) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid object key for mock provider");
+            }
+            if (expectedSize != null && expectedSize <= 0) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid object size");
+            }
             return new StorageObjectMetadata(
                     normalizedObjectKey,
                     expectedEtag,
