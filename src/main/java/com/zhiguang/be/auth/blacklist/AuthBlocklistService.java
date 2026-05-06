@@ -118,7 +118,7 @@ public class AuthBlocklistService {
     }
 
     /**
-     * 汇总一个账号在认证域里会用到的登录标识。
+     * 汇总一个账号在认证域里会用到的登录标识（userId + 手机号）。
      *
      * @param account 认证域用户
      * @return 相关标识集合

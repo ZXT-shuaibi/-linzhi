@@ -26,7 +26,7 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
      * @param expiresAt 过期时间
      */
     @Override
-    public void save(String userId, String jti, Instant expiresAt) {
+    public synchronized void save(String userId, String jti, Instant expiresAt) {
         String key = toKey(userId, jti);
         refreshKeyToExpiresAt.put(key, expiresAt);
         userToKeys.computeIfAbsent(userId, ignored -> ConcurrentHashMap.newKeySet()).add(key);
@@ -61,7 +61,7 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
      * @return 消费成功返回 true，否则返回 false
      */
     @Override
-    public boolean consumeIfValid(String userId, String jti) {
+    public synchronized boolean consumeIfValid(String userId, String jti) {
         String key = toKey(userId, jti);
         Instant expiresAt = refreshKeyToExpiresAt.remove(key);
         if (expiresAt == null) {
@@ -119,7 +119,7 @@ public class InMemoryRefreshTokenStore implements RefreshTokenStore {
      * @param userId 用户 ID
      */
     @Override
-    public void removeAll(String userId) {
+    public synchronized void removeAll(String userId) {
         Set<String> keys = userToKeys.remove(userId);
         if (keys == null) {
             return;

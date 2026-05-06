@@ -43,11 +43,13 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
         return Boolean.TRUE.equals(exists);
     }
 
+    private static final Duration DEFAULT_BLOCK_TTL = Duration.ofHours(1);
+
     /**
      * 把指定标识写入 Redis 登录黑名单。
      *
      * @param identifier 登录标识
-     * @param ttl 黑名单有效时长，为空或非正数时不设置过期
+     * @param ttl 黑名单有效时长，为空或非正数时使用默认值
      */
     @Override
     public void block(String identifier, Duration ttl) {
@@ -55,11 +57,8 @@ public class RedisLoginBlacklistStore implements LoginBlacklistStore {
             return;
         }
         String key = toKey(identifier);
-        if (ttl == null || ttl.isNegative() || ttl.isZero()) {
-            redisTemplate.opsForValue().set(key, "1");
-            return;
-        }
-        redisTemplate.opsForValue().set(key, "1", ttl);
+        Duration effectiveTtl = (ttl == null || ttl.isNegative() || ttl.isZero()) ? DEFAULT_BLOCK_TTL : ttl;
+        redisTemplate.opsForValue().set(key, "1", effectiveTtl);
     }
 
     /**

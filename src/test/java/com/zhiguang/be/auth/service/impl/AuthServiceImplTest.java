@@ -92,7 +92,7 @@ class AuthServiceImplTest {
     @Test
     void sendCodeShouldDelegateToVerificationService() {
         TestFixture fixture = new TestFixture();
-        SendCodeResponse expected = new SendCodeResponse("13800138008", VerificationScene.REGISTER, "654321", 600);
+        SendCodeResponse expected = new SendCodeResponse("13800138008", VerificationScene.REGISTER, "654321", 600, 600);
         when(fixture.verificationService.sendCode(eq(VerificationScene.REGISTER), eq("13800138008"))).thenReturn(expected);
 
         SendCodeResponse actual = fixture.service.sendCode(new SendCodeRequest("13800138008", VerificationScene.REGISTER));
@@ -155,7 +155,7 @@ class AuthServiceImplTest {
         TestFixture fixture = new TestFixture();
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.login(new LoginRequest("tester01", null, "h5", null), CLIENT_INFO));
+                () -> fixture.service.login(new LoginRequest("13800138999", null, "h5", null), CLIENT_INFO));
 
         assertEquals(ErrorCode.BAD_REQUEST, ex.errorCode());
         assertEquals(HttpStatus.BAD_REQUEST, ex.httpStatus());
@@ -169,11 +169,11 @@ class AuthServiceImplTest {
         TestFixture fixture = new TestFixture();
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.login(new LoginRequest("ghost01", "Passw0rd!", "h5", null), CLIENT_INFO));
+                () -> fixture.service.login(new LoginRequest("13800138888", "Passw0rd!", "h5", null), CLIENT_INFO));
 
         assertEquals(ErrorCode.ACCOUNT_NOT_FOUND, ex.errorCode());
         assertEquals(HttpStatus.NOT_FOUND, ex.httpStatus());
-        assertEquals(0, fixture.failureTracker.getFailureCount("ghost01"));
+        assertEquals(0, fixture.failureTracker.getFailureCount("13800138888"));
     }
 
     /**
@@ -390,7 +390,7 @@ class AuthServiceImplTest {
         private TestFixture() {
             doNothing().when(verificationService).verifyOrThrow(any(), anyString(), anyString());
             when(verificationService.sendCode(eq(VerificationScene.REGISTER), eq("13800138008")))
-                    .thenReturn(new SendCodeResponse("13800138008", VerificationScene.REGISTER, "654321", 600));
+                    .thenReturn(new SendCodeResponse("13800138008", VerificationScene.REGISTER, "654321", 600, 600));
         }
     }
 

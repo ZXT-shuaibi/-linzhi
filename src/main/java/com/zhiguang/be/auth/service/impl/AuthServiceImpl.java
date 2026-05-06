@@ -136,7 +136,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public RegisterResult register(RegisterRequest request, ClientInfo clientInfo) {
         String phone = normalizeIdentifier(request.phone());
-        String nickname = normalizeIdentifier(request.nickname());
+        String nickname = request.nickname() == null ? null : request.nickname().trim();
         validateRegisterInput(phone, nickname, request.password(), request.confirmPassword());
         verificationService.verifyOrThrow(VerificationScene.REGISTER, phone, request.smsCode());
 
@@ -147,7 +147,7 @@ public class AuthServiceImpl implements AuthService {
         AuthUserEntity account = new AuthUserEntity(userId, phone, request.nickname(), encodedPassword);
 
         if (!authUserMapper.saveIfAbsent(account)) {
-            throw new BusinessException(ErrorCode.PHONE_EXISTS, HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "手机号已注册");
         }
 
         auditLogger.log(AuditEvent.of("REGISTER_SUCCESS", phone, true, "用户注册成功，等待登录"));
@@ -183,7 +183,7 @@ public class AuthServiceImpl implements AuthService {
             throw ex;
         }
 
-        AuthUserEntity account = authUserMapper.findByIdentifier(identifier).orElse(null);
+        AuthUserEntity account = authUserMapper.findByPhone(identifier).orElse(null);
         if (account == null) {
             auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "账号未注册"));
             loginLogService.record(null, identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "FAILED", "账号未注册");
@@ -329,7 +329,7 @@ public class AuthServiceImpl implements AuthService {
             return identifier;
         }
 
-        AuthUserEntity account = authUserMapper.findByIdentifier(identifier).orElse(null);
+        AuthUserEntity account = authUserMapper.findByPhone(identifier).orElse(null);
         if (account == null) {
             auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标未注册"));
             throw new BusinessException(ErrorCode.ACCOUNT_NOT_FOUND, HttpStatus.NOT_FOUND);
@@ -352,9 +352,9 @@ public class AuthServiceImpl implements AuthService {
             return;
         }
 
-        if (!IdentifierValidator.isValidPhoneOrAccount(identifier)) {
-            auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标格式不正确"));
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "发送目标必须为手机号或账号");
+        if (!IdentifierValidator.isValidPhone(identifier)) {
+            auditLogger.log(AuditEvent.of("SEND_CODE_FAILED", identifier, false, "发送目标手机号格式不正确"));
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "发送目标必须为合法手机号");
         }
     }
 
@@ -362,7 +362,9 @@ public class AuthServiceImpl implements AuthService {
      * 校验注册输入格式。
      *
      * @param phone 注册手机号
-     * @param account 注册账号
+     * @param nickname 昵称
+     * @param password 密码
+     * @param confirmPassword 确认密码
      */
     private void validateRegisterInput(String phone, String nickname, String password, String confirmPassword) {
         validatePhone(phone, "注册");
@@ -374,15 +376,10 @@ public class AuthServiceImpl implements AuthService {
         }
     }
 
-    /**
-     * 校验登录标识格式。
-     *
-     * @param identifier 登录标识
-     */
     private void validateLoginIdentifier(String identifier) {
-        if (!IdentifierValidator.isValidPhoneOrAccount(identifier)) {
-            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "登录标识格式不正确"));
-            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "登录标识必须为手机号或账号");
+        if (!IdentifierValidator.isValidPhone(identifier)) {
+            auditLogger.log(AuditEvent.of("LOGIN_FAILED", identifier, false, "手机号格式不正确"));
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "手机号格式不正确");
         }
     }
 
@@ -399,16 +396,9 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 校验账号格式。
-     *
-     * @param account 账号
-     * @param scene 场景说明
-     */
-    /**
      * 检查手机号是否可用。
      *
      * @param phone 手机号
-     * @param account 账号
      */
     private void ensurePhoneAvailable(String phone) {
         if (authUserMapper.existsByPhone(phone)) {
@@ -435,7 +425,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * 在查出账号后，检查用户 ID、手机号和账号名是否命中黑名单或失败阈值。
+     * 在查出账号后，检查用户 ID 和手机号是否命中黑名单或失败阈值。
      *
      * @param account 用户实体
      * @param identifier 原始登录标识

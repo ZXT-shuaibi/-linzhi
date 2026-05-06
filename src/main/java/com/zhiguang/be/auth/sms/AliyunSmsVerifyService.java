@@ -98,18 +98,16 @@ public class AliyunSmsVerifyService {
         return !props.isEnabled() || props.isExposeCode();
     }
 
-    private Client client() throws Exception {
-        Client existing = client;
-        if (existing != null) {
-            return existing;
+    private synchronized Client client() throws Exception {
+        if (client != null) {
+            return client;
         }
         Config config = new Config()
                 .setAccessKeyId(resolveCredential(props.getAccessKeyId(), "ALIBABA_CLOUD_ACCESS_KEY_ID"))
                 .setAccessKeySecret(resolveCredential(props.getAccessKeySecret(), "ALIBABA_CLOUD_ACCESS_KEY_SECRET"))
                 .setEndpoint(props.getEndpoint());
-        Client created = new Client(config);
-        client = created;
-        return created;
+        client = new Client(config);
+        return client;
     }
 
     private void validateConfigured() {

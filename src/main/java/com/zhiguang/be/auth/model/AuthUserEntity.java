@@ -26,4 +26,16 @@ public class AuthUserEntity {
     public AuthUserEntity withPasswordHash(String newPasswordHash) {
         return new AuthUserEntity(this.userId, this.phone, this.nickname, newPasswordHash);
     }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof AuthUserEntity that)) return false;
+        return userId.equals(that.userId);
+    }
+
+    @Override
+    public int hashCode() {
+        return userId.hashCode();
+    }
 }

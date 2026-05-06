@@ -50,9 +50,9 @@ public class ProtectedApiBlacklistFilter extends OncePerRequestFilter {
     /**
      * 构造受保护接口黑名单过滤器。
      *
+     * @param blocklistService 认证黑名单写入服务
      * @param accessTokenBlocklistStore 访问令牌失效黑名单存储组件
      * @param loginBlacklistStore 登录黑名单存储组件
-     * @param refreshTokenStore refresh token 存储组件
      * @param objectMapper JSON 序列化组件
      */
     public ProtectedApiBlacklistFilter(

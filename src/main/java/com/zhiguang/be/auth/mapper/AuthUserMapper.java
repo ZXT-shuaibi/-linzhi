@@ -20,10 +20,6 @@ public interface AuthUserMapper {
 
     Optional<AuthUserEntity> findByPhone(@Param("phone") String phone);
 
-    default Optional<AuthUserEntity> findByIdentifier(@Param("identifier") String identifier) {
-        return findByPhone(identifier);
-    }
-
     Optional<AuthUserEntity> findByUserId(@Param("userId") String userId);
 
     void update(AuthUserEntity entity);

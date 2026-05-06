@@ -56,8 +56,8 @@ public class VerificationService {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "验证码发送参数不完整");
         }
 
-        enforceSendInterval(scene, phone, properties.getSendInterval());
         enforceDailyLimit(scene, phone, properties.getDailyLimit());
+        enforceAndMarkSendInterval(scene, phone, properties.getSendInterval());
 
         if (smsVerifyService.isEnabled()) {
             String exposedCode = smsVerifyService.send(
@@ -66,9 +66,7 @@ public class VerificationService {
                     properties.getCodeTtl(),
                     properties.getSendInterval()
             );
-            markSendInterval(scene, phone, properties.getSendInterval());
             incrementDailyCount(scene, phone, properties.getDailyLimit());
-
             return new SendCodeResponse(
                     phone,
                     scene,
@@ -80,7 +78,6 @@ public class VerificationService {
 
         String code = generateCode(properties.getCodeLength());
         codeStore.saveCode(scene.value(), phone, code, properties.getCodeTtl(), properties.getMaxAttempts());
-        markSendInterval(scene, phone, properties.getSendInterval());
         incrementDailyCount(scene, phone, properties.getDailyLimit());
 
         return new SendCodeResponse(
@@ -121,22 +118,15 @@ public class VerificationService {
         throw new BusinessException(ErrorCode.VERIFICATION_MISMATCH, HttpStatus.BAD_REQUEST, "验证码错误");
     }
 
-    private void enforceSendInterval(VerificationScene scene, String phone, Duration interval) {
+    private void enforceAndMarkSendInterval(VerificationScene scene, String phone, Duration interval) {
         if (interval == null || interval.isZero() || interval.isNegative()) {
             return;
         }
-        String key = sendIntervalKey(scene, phone);
-        String existing = stringRedisTemplate.opsForValue().get(key);
-        if (existing != null) {
+        Boolean acquired = stringRedisTemplate.opsForValue()
+                .setIfAbsent(sendIntervalKey(scene, phone), "1", interval);
+        if (!Boolean.TRUE.equals(acquired)) {
             throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "验证码发送过于频繁");
         }
-    }
-
-    private void markSendInterval(VerificationScene scene, String phone, Duration interval) {
-        if (interval == null || interval.isZero() || interval.isNegative()) {
-            return;
-        }
-        stringRedisTemplate.opsForValue().set(sendIntervalKey(scene, phone), "1", interval);
     }
 
     private void enforceDailyLimit(VerificationScene scene, String phone, int limit) {

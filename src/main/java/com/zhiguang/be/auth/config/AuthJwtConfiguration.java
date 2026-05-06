@@ -56,7 +56,7 @@ public class AuthJwtConfiguration {
             if (!properties.isAllowEphemeralKeys()) {
                 throw new IllegalStateException("JWT key material is missing and security.jwt.allow-ephemeral-keys=false");
             }
-// // 仅在显式允许时生成临时密钥，避免生产环境因重启导致令牌整体失效。
+            // 仅在显式允许时生成临时密钥，避免生产环境因重启导致令牌整体失效。
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
             KeyPair pair = generator.generateKeyPair();
