@@ -80,7 +80,6 @@ class AuthServiceImplTest {
         assertEquals("13800138000", result.account());
         AuthUserEntity persisted = fixture.userMapper.findByAccount("13800138000").orElseThrow();
         assertEquals("13800138000", persisted.phone());
-        assertEquals("tester", persisted.nickname());
         assertNotEquals("Passw0rd!", persisted.passwordHash());
         assertTrue(persisted.passwordHash().startsWith("$2"));
         verify(fixture.verificationService).verifyOrThrow(eq(VerificationScene.REGISTER), eq("13800138000"), eq("123456"));
@@ -116,7 +115,7 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 登录成功后才会签发 JWT 双令牌，并使用手机号作为登录入口。
+     * 登录成功后才会签发 JWT 双令牌，并支持账号登录。
      */
     @Test
     void loginShouldIssueTokensAfterSuccessfulCredentials() {
@@ -133,42 +132,48 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 未注册手机号应返回独立状态码，且不污染失败计数。
+     * 验证码登录不需要提交密码，会校验登录验证码后签发令牌。
      */
     @Test
-    void loginShouldIssueTokensWithSmsCode() {
+    void loginShouldIssueTokensAfterSuccessfulLoginCode() {
         TestFixture fixture = new TestFixture();
-        RegisterResult result = fixture.service.register(new RegisterRequest("13800138121", "Passw0rd!", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
+        RegisterResult result = fixture.service.register(new RegisterRequest("13800138009", "Passw0rd!", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
 
-        AuthSessionData session = fixture.service.login(new LoginRequest("13800138121", null, "654321", "h5", null), CLIENT_INFO);
+        AuthSessionData session = fixture.service.login(new LoginRequest("13800138009", null, "h5", "654321"), CLIENT_INFO);
 
         assertEquals(result.userId(), session.userId());
         assertNotNull(session.tokens());
-        verify(fixture.verificationService).verifyOrThrow(eq(VerificationScene.LOGIN), eq("13800138121"), eq("654321"));
-        verify(fixture.loginLogService).record(eq(result.userId()), eq("13800138121"), eq("CODE"), any(), any(), eq("SUCCESS"), anyString());
+        verify(fixture.verificationService).verifyOrThrow(eq(VerificationScene.LOGIN), eq("13800138009"), eq("654321"));
+        verify(fixture.loginLogService).record(eq(result.userId()), eq("13800138009"), eq("CODE"), any(), any(), eq("SUCCESS"), eq("登录成功"));
     }
 
+    /**
+     * 登录请求必须至少提供密码或验证码。
+     */
     @Test
     void loginShouldRejectMissingCredential() {
         TestFixture fixture = new TestFixture();
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.login(new LoginRequest("13800138122", null, null, "h5", null), CLIENT_INFO));
+                () -> fixture.service.login(new LoginRequest("tester01", null, "h5", null), CLIENT_INFO));
 
         assertEquals(ErrorCode.BAD_REQUEST, ex.errorCode());
         assertEquals(HttpStatus.BAD_REQUEST, ex.httpStatus());
     }
 
+    /**
+     * 未注册账号应返回独立状态码，且不污染失败计数。
+     */
     @Test
-    void loginShouldReturnNotFoundWhenPhoneIsMissingAndNotPolluteFailureCount() {
+    void loginShouldReturnNotFoundWhenAccountIsMissingAndNotPolluteFailureCount() {
         TestFixture fixture = new TestFixture();
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.login(new LoginRequest("13800139999", "Passw0rd!", "h5", null), CLIENT_INFO));
+                () -> fixture.service.login(new LoginRequest("ghost01", "Passw0rd!", "h5", null), CLIENT_INFO));
 
         assertEquals(ErrorCode.ACCOUNT_NOT_FOUND, ex.errorCode());
         assertEquals(HttpStatus.NOT_FOUND, ex.httpStatus());
-        assertEquals(0, fixture.failureTracker.getFailureCount("13800139999"));
+        assertEquals(0, fixture.failureTracker.getFailureCount("ghost01"));
     }
 
     /**
@@ -186,28 +191,14 @@ class AuthServiceImplTest {
     }
 
     /**
-     * register 在直接调用 service 时也会要求昵称。
-     */
-    @Test
-    void registerShouldRejectBlankNickname() {
-        TestFixture fixture = new TestFixture();
-
-        BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.register(new RegisterRequest("13800138011", "Passw0rd!", "Passw0rd!", " ", "123456"), CLIENT_INFO));
-
-        assertEquals(ErrorCode.BAD_REQUEST, ex.errorCode());
-        assertEquals(HttpStatus.BAD_REQUEST, ex.httpStatus());
-    }
-
-    /**
-     * 注册要求两次输入的密码一致。
+     * register 在直接调用 service 时也会校验账号格式。
      */
     @Test
     void registerShouldRejectMismatchedConfirmPassword() {
         TestFixture fixture = new TestFixture();
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> fixture.service.register(new RegisterRequest("13800138012", "Passw0rd!", "Passw0rd2", "tester", "123456"), CLIENT_INFO));
+                () -> fixture.service.register(new RegisterRequest("13800138011", "Passw0rd!", "Different1", "tester", "123456"), CLIENT_INFO));
 
         assertEquals(ErrorCode.BAD_REQUEST, ex.errorCode());
         assertEquals(HttpStatus.BAD_REQUEST, ex.httpStatus());
@@ -269,10 +260,10 @@ class AuthServiceImplTest {
     }
 
     /**
-     * 手机号进入黑名单后会被拒绝登录。
+     * 手机号进入黑名单后，即使改用账号登录也会被拒绝。
      */
     @Test
-    void loginShouldBeBlockedByPhoneBlacklist() {
+    void loginShouldBeBlockedByPhoneBlacklistEvenWhenUsingAccount() {
         TestFixture fixture = new TestFixture();
         fixture.service.register(new RegisterRequest("13800138004", "Passw0rd!", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
         fixture.loginBlacklistStore.block("13800138004");
