@@ -411,6 +411,10 @@ public class ContentServiceImpl implements ContentService {
         );
     }
 
+    /**
+     * 定时补偿 discover 和 search 同步事件。
+     * 从 outbox 表中取出待处理的事件，重放到 discover 和 search 索引。
+     */
     @Scheduled(fixedDelayString = "${content.outbox-reconcile-delay-ms:10000}")
     public void reconcileDiscoverOutbox() {
         int maxRetryAttempts = normalizedOutboxMaxRetryAttempts();
@@ -427,6 +431,10 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
+    /**
+     * 定时清理长时间未发布的过期草稿。
+     * 超过 draftTtlDays 天仍未发布的草稿将被软删除。
+     */
     @Scheduled(fixedDelayString = "${content.draft-cleanup-delay-ms:3600000}")
     public void cleanupExpiredDrafts() {
         if (draftTtlDays <= 0) {

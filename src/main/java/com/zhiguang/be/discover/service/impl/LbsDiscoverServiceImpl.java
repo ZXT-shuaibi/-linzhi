@@ -675,7 +675,10 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     }
 
     /**
-     * 灏嗗唴閮ㄥ瓨鍌ㄧ被鍨嬫槧灏勪负瀵瑰 API 绾﹀畾鐨勫疄浣撶被鍨嬨€?
+     * 将内部存储类型映射为对外 API 约定的实体类型。
+     *
+     * @param normalizedType 规范化后的内部类型
+     * @return 对外暴露的实体类型
      */
     private String externalType(String normalizedType) {
         if (discoverProperties.getDefaultType().equals(normalizedType)) {

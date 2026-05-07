@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 发现模块控制器。
- * 对外暴露附近搜索和位置索引维护相关的 HTTP 接口。
+ * 负责附近搜索、地图服务和位置索引管理。
  */
 @RestController
 @RequestMapping("/api/v1/discover")
@@ -25,22 +25,16 @@ public class DiscoverController {
     private final LbsDiscoverService lbsDiscoverService;
     private final DiscoverMapService discoverMapService;
 
-    /**
-     * 构造发现控制器并注入 LBS 服务。
-     *
-     * @param lbsDiscoverService 附近搜索与位置管理服务
-     */
     public DiscoverController(LbsDiscoverService lbsDiscoverService, DiscoverMapService discoverMapService) {
         this.lbsDiscoverService = lbsDiscoverService;
         this.discoverMapService = discoverMapService;
     }
 
     /**
-     * 查询指定坐标附近的内容。
-     * 请求体中包含经纬度、搜索半径、分页参数和可选的类型过滤条件。
+     * 附近搜索（POST），支持更丰富的查询条件。
      *
      * @param request 附近搜索请求
-     * @return 标准响应包装的搜索结果
+     * @return 附近搜索结果
      */
     @PostMapping("/nearby")
     public ApiResponse<NearbySearchResponse> searchNearby(@Valid @RequestBody NearbySearchRequest request) {
@@ -48,16 +42,16 @@ public class DiscoverController {
     }
 
     /**
-     * 鎻愪緵鍖垮悕 GET 鏌ヨ鍏ュ彛锛屼究浜庡墠绔祻瑙堥〉鐩存帴鎸夋煡璇㈠弬鏁伴〉鍖栨媺鍙栭檮杩戠粨鏋溿€?
+     * 提供匿名 GET 查询入口，便于前端浏览页直接按查询参数页化拉取附近结果。
      *
-     * @param lat 绾害
-     * @param lng 缁忓害
-     * @param radius 鎼滅储鍗婂緞锛堢背锛?
-     * @param page 椤电爜
-     * @param size 姣忛〉鏁伴噺
-     * @param entityType 瀵瑰鏆撮湶鐨勫疄浣撶被鍨嬶紝褰撳墠鍏煎 post / merchant / mixed
-     * @param tag 鍙€夋爣绛捐繃婊?
-     * @return 鏍囧噯鍝嶅簲鍖呰鐨勬悳绱㈢粨鏋?
+     * @param lat 纬度
+     * @param lng 经度
+     * @param radius 搜索半径（米）
+     * @param page 页码
+     * @param size 每页数量
+     * @param entityType 对外暴露的实体类型，当前兼容 post / merchant / mixed
+     * @param tag 可选标签过滤
+     * @return 标准响应包装的搜索结果
      */
     @GetMapping("/nearby")
     public ApiResponse<NearbySearchResponse> searchNearbyByQuery(
@@ -77,6 +71,10 @@ public class DiscoverController {
     /**
      * 地址转坐标。
      * 当前先预留地图服务接入位，后续接入高德等外部服务后可直接返回真实结果。
+     *
+     * @param address 地址文本
+     * @param city 城市（可选）
+     * @return 地理坐标点
      */
     @GetMapping("/map/geocode")
     public ApiResponse<DiscoverMapService.GeoPoint> geocode(
@@ -88,6 +86,10 @@ public class DiscoverController {
 
     /**
      * 坐标转地址。
+     *
+     * @param lat 纬度
+     * @param lng 经度
+     * @return 反转地理编码结果
      */
     @GetMapping("/map/reverse-geocode")
     public ApiResponse<DiscoverMapService.ReverseGeoResult> reverseGeocode(
@@ -99,6 +101,14 @@ public class DiscoverController {
 
     /**
      * 周边 POI 搜索。
+     *
+     * @param lat 纬度
+     * @param lng 经度
+     * @param keyword 搜索关键词
+     * @param radius 搜索半径（米）
+     * @param page 页码
+     * @param size 每页数量
+     * @return POI 列表
      */
     @GetMapping("/map/pois")
     public ApiResponse<java.util.List<DiscoverMapService.PoiItem>> searchPois(
@@ -114,13 +124,20 @@ public class DiscoverController {
 
     /**
      * 新增或更新某条内容的地理位置索引。
-     * 除坐标外，也支持同时写入标题、发布时间和点赞数等辅助元数据。
+     * 除坐标外，也支持同时写入标题、地址、作者和互动数等辅助元数据。
      *
      * @param id 内容唯一标识
      * @param type 内容类型
      * @param lat 纬度
      * @param lng 经度
      * @param title 内容标题
+     * @param summary 内容摘要
+     * @param coverUrl 封面图 URL
+     * @param address 地址文本
+     * @param authorId 作者 ID
+     * @param authorName 作者昵称
+     * @param authorAvatar 作者头像
+     * @param tagsJson 标签 JSON
      * @param publishTime 发布时间时间戳
      * @param likeCount 点赞数
      * @param favoriteCount 收藏数
