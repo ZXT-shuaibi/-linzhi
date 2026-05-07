@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zhiguang.be.comment.mapper.CommentMapper">
+
+    <resultMap id="CommentRowMap" type="com.zhiguang.be.comment.model.CommentRow">
+        <id column="comment_id" property="commentId"/>
+        <result column="post_id" property="postId"/>
+        <result column="user_id" property="userId"/>
+        <result column="content" property="content"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="nickname" property="nickname"/>
+        <result column="avatar" property="avatar"/>
+    </resultMap>
+
+    <sql id="CommentRowColumns">
+        c.id as comment_id,
+        c.post_id,
+        c.user_id,
+        c.content,
+        c.created_at,
+        u.nickname,
+        u.avatar
+    </sql>
+
+    <insert id="insertComment">
+        insert into post_comments(id, post_id, user_id, content, status, created_at, updated_at)
+        values (#{commentId}, #{postId}, #{userId}, #{content}, 'active', current_timestamp, current_timestamp)
+    </insert>
+
+    <select id="listComments" resultMap="CommentRowMap">
+        select
+        <include refid="CommentRowColumns"/>
+          from post_comments c
+          join users u on u.id = c.user_id
+         where c.post_id = #{postId}
+           and c.status = 'active'
+         order by c.created_at desc, c.id desc
+         limit #{limit} offset #{offset}
+    </select>
+
+    <select id="findById" resultMap="CommentRowMap">
+        select
+        <include refid="CommentRowColumns"/>
+          from post_comments c
+          join users u on u.id = c.user_id
+         where c.id = #{commentId}
+           and c.status = 'active'
+    </select>
+</mapper>

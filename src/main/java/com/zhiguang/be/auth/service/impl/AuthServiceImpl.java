@@ -240,7 +240,7 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        AuthTokens tokens = jwtService.issueTokens(claims.userId(), claims.role());
+        AuthTokens tokens = jwtService.issueTokens(account.userId(), account.role());
         RefreshTokenClaims newClaims = jwtService.verifyRefreshToken(tokens.refreshToken());
         if (!refreshTokenStore.rotate(claims.userId(), claims.jti(), newClaims.jti(), newClaims.expiresAt())) {
             auditLogger.log(AuditEvent.of("REFRESH_FAILED", account.phone(), false, "刷新令牌已失效"));
@@ -310,7 +310,7 @@ public class AuthServiceImpl implements AuthService {
     public AuthUserResponse me(String userId) {
         AuthUserEntity account = authUserMapper.findByUserId(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "用户不存在"));
-        return new AuthUserResponse(account.userId(), account.phone(), account.nickname());
+        return new AuthUserResponse(account.userId(), account.phone(), account.nickname(), account.role());
     }
 
     /**

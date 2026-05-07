@@ -19,6 +19,7 @@ import co.elastic.clients.elasticsearch.core.search.Highlight;
 import co.elastic.clients.elasticsearch.core.search.HighlightField;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
 import co.elastic.clients.util.NamedValue;
+import com.zhiguang.be.common.geo.GeoDistances;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
 import org.slf4j.Logger;
@@ -35,6 +36,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import static com.zhiguang.be.common.util.Texts.hasText;
 
 /**
  * Elasticsearch 搜索提供者。
@@ -388,10 +391,6 @@ public class EsSearchProvider implements SearchProvider {
         return Math.min(size, Math.max(searchProperties.getMaxSuggestSize(), 1));
     }
 
-    private boolean hasText(String value) {
-        return value != null && !value.isBlank();
-    }
-
     private int resolveNearbyBoostRadius(Double radius) {
         if (radius == null || radius.doubleValue() <= 0D) {
             return DEFAULT_NEARBY_BOOST_RADIUS_METERS;
@@ -600,13 +599,6 @@ public class EsSearchProvider implements SearchProvider {
         if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) {
             return null;
         }
-        double earthRadius = 6371000D;
-        double dLat = Math.toRadians(lat2.doubleValue() - lat1.doubleValue());
-        double dLng = Math.toRadians(lng2.doubleValue() - lng1.doubleValue());
-        double a = Math.sin(dLat / 2D) * Math.sin(dLat / 2D)
-                + Math.cos(Math.toRadians(lat1.doubleValue())) * Math.cos(Math.toRadians(lat2.doubleValue()))
-                * Math.sin(dLng / 2D) * Math.sin(dLng / 2D);
-        double c = 2D * Math.atan2(Math.sqrt(a), Math.sqrt(1D - a));
-        return earthRadius * c;
+        return GeoDistances.haversineMeters(lat1, lng1, lat2, lng2);
     }
 }

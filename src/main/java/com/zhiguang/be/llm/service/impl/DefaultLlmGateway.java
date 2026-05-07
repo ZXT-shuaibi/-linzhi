@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.function.Consumer;
 
 /**
@@ -126,6 +127,7 @@ public class DefaultLlmGateway implements LlmGateway {
                     throw new IllegalStateException("Spring AI RAG response did not contain text");
                 }
             } catch (Exception ex) {
+                throwIfCancelled(ex);
                 if (!llmProperties.isFallbackToTemplate()) {
                     throw new IllegalStateException("Failed to call Spring AI RAG API", ex);
                 }
@@ -143,6 +145,7 @@ public class DefaultLlmGateway implements LlmGateway {
                     throw new IllegalStateException("LLM RAG response did not contain text");
                 }
             } catch (Exception ex) {
+                throwIfCancelled(ex);
                 if (!llmProperties.isFallbackToTemplate()) {
                     throw new IllegalStateException("Failed to call LLM RAG API", ex);
                 }
@@ -174,6 +177,7 @@ public class DefaultLlmGateway implements LlmGateway {
                 }
                 return emitted;
             } catch (Exception ex) {
+                throwIfCancelled(ex);
                 if (!llmProperties.isFallbackToTemplate()) {
                     throw new IllegalStateException("Failed to stream Spring AI RAG API", ex);
                 }
@@ -213,6 +217,7 @@ public class DefaultLlmGateway implements LlmGateway {
                 }
             }
         } catch (Exception ex) {
+            throwIfCancelled(ex);
             if (!llmProperties.isFallbackToTemplate()) {
                 throw new IllegalStateException("Failed to stream LLM RAG API", ex);
             }
@@ -220,6 +225,19 @@ public class DefaultLlmGateway implements LlmGateway {
             return false;
         }
         return emitted;
+    }
+
+    private void throwIfCancelled(Exception ex) {
+        if (ex instanceof CancellationException cancellationException) {
+            throw cancellationException;
+        }
+        if (ex instanceof InterruptedException) {
+            Thread.currentThread().interrupt();
+            throw new CancellationException("LLM request interrupted");
+        }
+        if (Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("LLM request interrupted");
+        }
     }
 
     private boolean useSpringAiProvider() {

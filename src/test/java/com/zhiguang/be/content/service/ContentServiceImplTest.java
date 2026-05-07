@@ -21,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -201,6 +203,53 @@ class ContentServiceImplTest {
         verify(userSocialCounterService, never()).incrementPosts(anyLong(), anyInt());
         verify(knowPostMapper, never()).insertOutbox(any());
         verify(feedCacheInvalidationService, never()).invalidatePostAfterCommit(anyString());
+    }
+
+    @Test
+    void publishShouldDeferExternalSideEffectsUntilTransactionCommit() {
+        Instant publishedAt = Instant.now();
+        when(searchIndexService.isLocalSyncEnabled()).thenReturn(true);
+        when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7", "metadata_completed", null));
+        when(knowPostMapper.publish(eq("1001"), eq("7"), eq("public"), eq("published"), any(), any())).thenReturn(1);
+        when(knowPostMapper.findDetailById("1001")).thenReturn(detail("1001", "7", false, publishedAt));
+        when(snowflakeIdGenerator.nextId()).thenReturn(9001L);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.publish(7L, 1001L);
+
+            verify(knowPostMapper).insertOutbox(any());
+            verify(userSocialCounterService, never()).incrementPosts(anyLong(), anyInt());
+            verify(lbsDiscoverService, never()).addLocation(
+                    anyString(), anyString(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), anyInt());
+            verify(searchIndexService, never()).syncPost(anyLong());
+
+            for (TransactionSynchronization synchronization : TransactionSynchronizationManager.getSynchronizations()) {
+                synchronization.afterCommit();
+            }
+
+            verify(userSocialCounterService).incrementPosts(7L, 1);
+            verify(searchIndexService).syncPost(1001L);
+            verify(lbsDiscoverService).addLocation(
+                    eq("1001"),
+                    eq("knowledge"),
+                    eq(31.2D),
+                    eq(121.4D),
+                    eq("title"),
+                    eq("summary"),
+                    any(),
+                    eq("address"),
+                    eq("7"),
+                    eq("author"),
+                    any(),
+                    any(),
+                    eq(publishedAt.toEpochMilli()),
+                    eq(0),
+                    eq(0)
+            );
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

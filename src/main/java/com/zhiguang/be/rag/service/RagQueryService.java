@@ -13,16 +13,21 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * RAG 问答服务。
  * 当前先用轻量索引做召回，再交给 llm 模块生成回答内容。
  */
 @Service
-public class RagQueryService {
+public class RagQueryService implements RagQueryOperations {
 
     private static final Logger log = LoggerFactory.getLogger(RagQueryService.class);
     private final RagIndexService ragIndexService;
@@ -48,17 +53,25 @@ public class RagQueryService {
     /**
      * 发起流式问答。
      */
+    @Override
     public SseEmitter stream(RagQueryRequest request) {
         SseEmitter emitter = new SseEmitter(ragProperties.getStream().getTimeoutMillis());
-        CompletableFuture.runAsync(() -> doStream(request, emitter), ragQueryExecutor);
+        StreamCancellation cancellation = new StreamCancellation();
+        emitter.onCompletion(cancellation::cancel);
+        emitter.onTimeout(cancellation::cancel);
+        emitter.onError(ignored -> cancellation.cancel());
+
+        Future<?> future = submitStreamTask(() -> doStream(request, emitter, cancellation));
+        cancellation.attach(future);
         return emitter;
     }
 
     /**
      * 后台异步输出 SSE 分片。
      */
-    private void doStream(RagQueryRequest request, SseEmitter emitter) {
+    private void doStream(RagQueryRequest request, SseEmitter emitter, StreamCancellation cancellation) {
         try {
+            cancellation.throwIfCancelled();
             int topK = normalizeTopK(request.topK());
             RagIndexService.SearchResult searchResult = ragIndexService.search(
                     request.question(),
@@ -69,30 +82,47 @@ public class RagQueryService {
             );
             List<RagAnswerService.Context> contexts = toContexts(searchResult.hits());
             List<com.zhiguang.be.rag.model.RagReference> references = searchResult.references();
+            cancellation.throwIfCancelled();
 
             AtomicInteger seq = new AtomicInteger(1);
             boolean streamed = ragAnswerService.streamAnswer(
                     request.question(),
                     contexts,
-                    piece -> sendQuietly(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null))
+                    piece -> sendOrCancel(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null), cancellation)
             );
 
+            cancellation.throwIfCancelled();
             if (!streamed) {
                 String answer = ragAnswerService.buildAnswer(request.question(), contexts);
                 for (String piece : splitAnswer(answer, ragProperties.getStream().getChunkSize())) {
+                    cancellation.throwIfCancelled();
                     send(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null));
                     sleep(ragProperties.getStream().getChunkDelayMillis());
                 }
             }
 
+            cancellation.throwIfCancelled();
             send(emitter, "done", new SseChunk("done", seq.get(), "", references, "stop", null));
+            cancellation.markCompleted();
+            emitter.complete();
+        } catch (CancellationException ex) {
+            log.debug("RAG stream cancelled");
+            cancellation.markCompleted();
             emitter.complete();
         } catch (Exception ex) {
+            if (cancellation.isCancelled()) {
+                log.debug("RAG stream stopped after client disconnect");
+                cancellation.markCompleted();
+                emitter.complete();
+                return;
+            }
             log.warn("RAG stream error", ex);
             try {
                 send(emitter, "error", new SseChunk("error", 1, "", List.of(), null, "RAG_INTERNAL_ERROR"));
+                cancellation.markCompleted();
                 emitter.complete();
             } catch (Exception ignored) {
+                cancellation.markCompleted();
                 emitter.completeWithError(ex);
             }
         }
@@ -149,11 +179,13 @@ public class RagQueryService {
     /**
      * 安静发送单个流式片段。
      */
-    private void sendQuietly(SseEmitter emitter, String eventName, SseChunk chunk) {
+    private void sendOrCancel(SseEmitter emitter, String eventName, SseChunk chunk, StreamCancellation cancellation) {
         try {
+            cancellation.throwIfCancelled();
             send(emitter, eventName, chunk);
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to send SSE chunk", ex);
+            cancellation.cancel();
+            throw new CancellationException("SSE client disconnected");
         }
     }
 
@@ -165,6 +197,51 @@ public class RagQueryService {
             Thread.sleep(millis);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private Future<?> submitStreamTask(Runnable task) {
+        if (ragQueryExecutor instanceof ExecutorService executorService) {
+            return executorService.submit(task);
+        }
+        return CompletableFuture.runAsync(task, ragQueryExecutor);
+    }
+
+    private static final class StreamCancellation {
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private final AtomicBoolean completed = new AtomicBoolean(false);
+        private final AtomicReference<Future<?>> futureRef = new AtomicReference<>();
+
+        private void attach(Future<?> future) {
+            futureRef.set(future);
+            if (cancelled.get()) {
+                future.cancel(true);
+            }
+        }
+
+        private void cancel() {
+            if (completed.get()) {
+                return;
+            }
+            cancelled.set(true);
+            Future<?> future = futureRef.get();
+            if (future != null) {
+                future.cancel(true);
+            }
+        }
+
+        private void markCompleted() {
+            completed.set(true);
+        }
+
+        private boolean isCancelled() {
+            return cancelled.get() || Thread.currentThread().isInterrupted();
+        }
+
+        private void throwIfCancelled() {
+            if (isCancelled()) {
+                throw new CancellationException("RAG stream cancelled");
+            }
         }
     }
 }

@@ -2,6 +2,7 @@ package com.zhiguang.be.rag.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.common.geo.GeoDistances;
 import com.zhiguang.be.content.mapper.KnowPostMapper;
 import com.zhiguang.be.content.model.KnowPostEntity;
 import com.zhiguang.be.content.model.KnowPostFeedRow;
@@ -18,7 +19,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestTemplate;
 
 import java.nio.charset.StandardCharsets;
@@ -33,13 +33,15 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+import static com.zhiguang.be.common.util.Texts.hasText;
+
 /**
  * RAG 索引服务。
  * 参考 zhiguang 的写法，优先使用 Spring AI 的 VectorStore 做向量写入和语义召回，
  * 同时保留当前工程里的 ES 指纹校验和本地兜底索引，避免基础设施未就绪时主链断掉。
  */
 @Service
-public class RagIndexService {
+public class RagIndexService implements RagIndexOperations {
 
     private static final String STATUS_PUBLISHED = "published";
     private static final String VISIBILITY_PUBLIC = "public";
@@ -102,6 +104,7 @@ public class RagIndexService {
     /**
      * 重建单篇内容索引。
      */
+    @Override
     public int reindexSinglePost(String postId) {
         KnowPostEntity entity = knowPostMapper.findById(postId);
         if (entity == null || !isIndexable(entity)) {
@@ -138,6 +141,7 @@ public class RagIndexService {
     /**
      * 批量重建公开内容的索引。
      */
+    @Override
     public int reindexPublicPosts() {
         int pageSize = Math.max(1, ragProperties.getIndex().getRebuildPageSize());
         int maxPages = Math.max(1, ragProperties.getIndex().getRebuildMaxPages());
@@ -707,23 +711,17 @@ public class RagIndexService {
             return 0D;
         }
         double radius = Math.max(1D, ragProperties.getQuery().getNearbyBoostRadiusMeters());
-        double distanceMeters = computeDistanceMeters(queryLat.doubleValue(), queryLng.doubleValue(), postLat.doubleValue(), postLng.doubleValue());
+        double distanceMeters = GeoDistances.haversineMeters(
+                queryLat.doubleValue(),
+                queryLng.doubleValue(),
+                postLat.doubleValue(),
+                postLng.doubleValue()
+        );
         if (distanceMeters > radius) {
             return 0D;
         }
         double ratio = 1D - (distanceMeters / radius);
         return ratio * 0.2D;
-    }
-
-    private double computeDistanceMeters(double lat1, double lng1, double lat2, double lng2) {
-        double earthRadius = 6371000D;
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLng = Math.toRadians(lng2 - lng1);
-        double a = Math.sin(dLat / 2D) * Math.sin(dLat / 2D)
-                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-                * Math.sin(dLng / 2D) * Math.sin(dLng / 2D);
-        double c = 2D * Math.atan2(Math.sqrt(a), Math.sqrt(1D - a));
-        return earthRadius * c;
     }
 
     private boolean containsCjk(String token) {
@@ -742,10 +740,6 @@ public class RagIndexService {
 
     private String normalizeText(String value) {
         return normalizeContent(value).toLowerCase(Locale.ROOT);
-    }
-
-    private boolean hasText(String value) {
-        return value != null && !value.isBlank();
     }
 
     private String escapeJson(String value) {

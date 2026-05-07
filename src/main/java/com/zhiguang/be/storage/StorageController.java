@@ -22,9 +22,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/storage")
 public class StorageController {
 
-    private final StorageService storageService;
+    private final StorageOperations storageService;
 
-    public StorageController(StorageService storageService) {
+    public StorageController(StorageOperations storageService) {
         this.storageService = storageService;
     }
 

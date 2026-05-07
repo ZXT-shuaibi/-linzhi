@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
+import com.zhiguang.be.common.tx.Transactions;
+import com.zhiguang.be.common.util.Numbers;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
 import com.zhiguang.be.social.CounterEventPayload;
 import com.zhiguang.be.social.SocialCounterSchema;
@@ -31,8 +33,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -392,7 +392,7 @@ public class InteractionServiceImpl implements InteractionService {
                 serialize(CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId, delta))
         );
 
-        runAfterCommit(() -> {
+        Transactions.runAfterCommit(() -> {
             try {
                 syncBitmap(targetType, targetId, currentUserId, action, active);
                 if (counterEventProducer.isEnabled()) {
@@ -559,8 +559,8 @@ public class InteractionServiceImpl implements InteractionService {
             return null;
         }
         return new PostTargetSnapshot(
-                toLong(postId),
-                toLong(creatorId),
+                Numbers.toLong(postId),
+                Numbers.toLong(creatorId),
                 toStringValue(row.get("status")),
                 toStringValue(row.get("visible"))
         );
@@ -622,9 +622,9 @@ public class InteractionServiceImpl implements InteractionService {
             List<Map<String, Object>> rows = socialMapper.aggregateActiveInteractionCountsBatch(targetType, fallbackTargetIds);
             if (rows != null) {
                 for (Map<String, Object> row : rows) {
-                    long targetId = toLong(row.get("targetId"));
+                    long targetId = Numbers.toLong(row.get("targetId"));
                     String actionType = toStringValue(row.get("actionType"));
-                    long total = toLong(row.get("total"));
+                    long total = Numbers.toLong(row.get("total"));
                     long[] stats = result.get(targetId);
                     if (stats == null) {
                         stats = new long[]{0L, 0L};
@@ -724,7 +724,7 @@ public class InteractionServiceImpl implements InteractionService {
         List<Map<String, Object>> rows = socialMapper.listActiveInteractionsByUserAndTargets(currentUserId, targetType, targetIds);
         if (rows != null) {
             for (Map<String, Object> row : rows) {
-                long targetId = toLong(row.get("targetId"));
+                long targetId = Numbers.toLong(row.get("targetId"));
                 String actionType = toStringValue(row.get("actionType"));
                 boolean[] states = result.get(targetId);
                 if (states == null) {
@@ -1426,37 +1426,6 @@ public class InteractionServiceImpl implements InteractionService {
         } catch (JsonProcessingException ex) {
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "事件序列化失败");
         }
-    }
-
-    /**
-     * 在事务提交后执行额外逻辑。
-     *
-     * @param runnable 提交后执行的任务
-     */
-    private void runAfterCommit(Runnable runnable) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            runnable.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                runnable.run();
-            }
-        });
-    }
-
-    /**
-     * 将任意对象转成 long。
-     *
-     * @param value 原始对象
-     * @return long 数值
-     */
-    private long toLong(Object value) {
-        if (value instanceof Number) {
-            return ((Number) value).longValue();
-        }
-        return Long.parseLong(String.valueOf(value));
     }
 
     /**

@@ -1,8 +1,8 @@
 package com.zhiguang.be.auth.audit;
 
+import com.zhiguang.be.common.util.Numbers;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
-import org.springframework.util.StringUtils;
 
 /**
  * 基于 JDBC 的登录日志持久化实现。
@@ -35,7 +35,7 @@ public class JdbcLoginLogMapper implements LoginLogMapper {
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 entry.id(),
-                toLong(entry.userId()),
+                Numbers.toLongOrNull(entry.userId()),
                 entry.identifier(),
                 entry.channel(),
                 entry.ip(),
@@ -46,16 +46,4 @@ public class JdbcLoginLogMapper implements LoginLogMapper {
         );
     }
 
-    /**
-     * 将字符串形式的用户 ID 转换为数据库可写入的 Long。
-     *
-     * @param userId 用户 ID 字符串
-     * @return 可写入数据库的 Long，空值时返回 null
-     */
-    private Long toLong(String userId) {
-        if (!StringUtils.hasText(userId)) {
-            return null;
-        }
-        return Long.parseLong(userId);
-    }
 }

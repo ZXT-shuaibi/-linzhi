@@ -7,6 +7,7 @@ import com.zhiguang.be.cache.hotkey.HotKeyDetector;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.common.geo.GeoDistances;
 import com.zhiguang.be.content.dto.PostAuthor;
 import com.zhiguang.be.feed.FeedData;
 import com.zhiguang.be.feed.FeedItem;
@@ -47,7 +48,6 @@ public class FeedServiceImpl implements FeedService {
     private static final String FRAGMENT_CACHE_KEY_PREFIX = "feed:fragment:post:";
     private static final int DEFAULT_CANDIDATE_WINDOW = 100;
     private static final int MAX_CANDIDATE_WINDOW = 500;
-    private static final double EARTH_RADIUS_METERS = 6_371_000D;
 
     private final FeedMapper feedMapper;
     private final CacheService cacheService;
@@ -135,7 +135,7 @@ public class FeedServiceImpl implements FeedService {
                 writeLocalCache(cacheKey, freshData);
                 return enrichFeedData(freshData, viewerId, "DB");
             } finally {
-                singleFlightLocks.remove(cacheKey);
+                singleFlightLocks.remove(cacheKey, lock);
             }
         }
     }
@@ -408,21 +408,8 @@ public class FeedServiceImpl implements FeedService {
      * @return 距离，单位米；内容没有位置时返回 null
      */
     private Double calculateDistanceMeters(double viewerLat, double viewerLng, Double postLat, Double postLng) {
-        if (postLat == null || postLng == null) {
-            return null;
-        }
-
-        double latRad1 = Math.toRadians(viewerLat);
-        double latRad2 = Math.toRadians(postLat);
-        double deltaLat = Math.toRadians(postLat - viewerLat);
-        double deltaLng = Math.toRadians(postLng - viewerLng);
-
-        double sinLat = Math.sin(deltaLat / 2D);
-        double sinLng = Math.sin(deltaLng / 2D);
-        double a = sinLat * sinLat
-                + Math.cos(latRad1) * Math.cos(latRad2) * sinLng * sinLng;
-        double c = 2D * Math.atan2(Math.sqrt(a), Math.sqrt(1D - a));
-        return roundDistance(EARTH_RADIUS_METERS * c);
+        Double distance = GeoDistances.nullableHaversineMeters(viewerLat, viewerLng, postLat, postLng);
+        return distance == null ? null : roundDistance(distance);
     }
 
     /**

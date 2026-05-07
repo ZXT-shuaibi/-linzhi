@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
+import com.zhiguang.be.common.tx.Transactions;
+import com.zhiguang.be.common.util.Numbers;
 import com.zhiguang.be.content.dto.ConfirmContentRequest;
 import com.zhiguang.be.content.dto.DraftData;
 import com.zhiguang.be.content.dto.PostAuthor;
@@ -46,6 +48,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
+import static com.zhiguang.be.common.util.Texts.hasText;
 
 @Service
 public class ContentServiceImpl implements ContentService {
@@ -292,10 +296,12 @@ public class ContentServiceImpl implements ContentService {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章发布失败，请刷新后重试");
         }
 
-        incrementPublishedPostCounter(creatorId, 1);
         enqueuePostSyncEvent(postId, EVENT_POST_PUBLISHED, now);
-        syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
-        syncSearchIndex(postId);
+        Transactions.runAfterCommit(() -> {
+            incrementPublishedPostCounter(creatorId, 1);
+            syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
+            syncSearchIndex(postId);
+        });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
     }
@@ -313,8 +319,10 @@ public class ContentServiceImpl implements ContentService {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章置顶状态更新失败，请刷新后重试");
         }
         enqueuePostSyncEvent(postId, EVENT_POST_TOP_CHANGED, now);
-        syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), entity.visible(), entity.publishTime());
-        syncSearchIndex(postId);
+        Transactions.runAfterCommit(() -> {
+            syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), entity.visible(), entity.publishTime());
+            syncSearchIndex(postId);
+        });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
     }
@@ -334,8 +342,10 @@ public class ContentServiceImpl implements ContentService {
         }
 
         enqueuePostSyncEvent(postId, EVENT_POST_VISIBILITY_CHANGED, now);
-        syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), normalizedVisibility, entity.publishTime());
-        syncSearchIndex(postId);
+        Transactions.runAfterCommit(() -> {
+            syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), normalizedVisibility, entity.publishTime());
+            syncSearchIndex(postId);
+        });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
     }
@@ -356,12 +366,15 @@ public class ContentServiceImpl implements ContentService {
         }
 
         KnowPostEntity deletedEntity = knowPostMapper.findById(String.valueOf(postId));
-        if (wasPublishedBeforeDelete(entity, deletedEntity)) {
-            incrementPublishedPostCounter(creatorId, -1);
-        }
+        boolean shouldDecrementPublishedCounter = wasPublishedBeforeDelete(entity, deletedEntity);
         enqueuePostSyncEvent(postId, EVENT_POST_DELETED, now);
-        removeFromDiscover(postId);
-        removeFromSearchIndex(postId);
+        Transactions.runAfterCommit(() -> {
+            if (shouldDecrementPublishedCounter) {
+                incrementPublishedPostCounter(creatorId, -1);
+            }
+            removeFromDiscover(postId);
+            removeFromSearchIndex(postId);
+        });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
     }
 
@@ -374,7 +387,7 @@ public class ContentServiceImpl implements ContentService {
 
         boolean isOwner = viewerId != null && Objects.equals(row.creatorId(), String.valueOf(viewerId));
         long viewerUserId = viewerId == null ? 0L : viewerId;
-        long creatorUserId = toLong(row.creatorId());
+        long creatorUserId = Numbers.toLongOrZero(row.creatorId());
         boolean isPublicPublished = STATUS_PUBLISHED.equals(row.status()) && DEFAULT_VISIBILITY.equals(row.visible());
         boolean isFollowersVisible = STATUS_PUBLISHED.equals(row.status())
                 && FOLLOWERS_VISIBILITY.equals(row.visible())
@@ -497,7 +510,7 @@ public class ContentServiceImpl implements ContentService {
         if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
             return;
         }
-        Long postId = toLongOrNull(event.aggregateId());
+        Long postId = Numbers.toLongOrNull(event.aggregateId());
         if (postId == null) {
             return;
         }
@@ -647,7 +660,7 @@ public class ContentServiceImpl implements ContentService {
         if (!STATUS_PUBLISHED.equals(row.status())) {
             return null;
         }
-        long postId = toLong(row.postId());
+        long postId = Numbers.toLongOrZero(row.postId());
         if (postId <= 0L) {
             return null;
         }
@@ -662,7 +675,7 @@ public class ContentServiceImpl implements ContentService {
         }
         List<Long> targetIds = new ArrayList<>(rows.size());
         for (KnowPostFeedRow row : rows) {
-            long postId = toLong(row.postId());
+            long postId = Numbers.toLongOrZero(row.postId());
             if (postId > 0L) {
                 targetIds.add(postId);
             }
@@ -674,7 +687,7 @@ public class ContentServiceImpl implements ContentService {
     }
 
     private InteractionSummary loadDiscoverInteractionSummary(String postIdStr) {
-        long targetId = toLong(postIdStr);
+        long targetId = Numbers.toLongOrZero(postIdStr);
         if (targetId <= 0L) {
             return null;
         }
@@ -682,7 +695,7 @@ public class ContentServiceImpl implements ContentService {
     }
 
     private PostAuthor buildAuthor(String creatorId, String nickname, String avatar, long viewerUserId) {
-        long creatorUserId = toLong(creatorId);
+        long creatorUserId = Numbers.toLongOrZero(creatorId);
         UserSocialCounterData socialCounters = creatorUserId > 0L
                 ? userSocialCounterService.getUserSocialCounter(creatorUserId)
                 : null;
@@ -727,28 +740,6 @@ public class ContentServiceImpl implements ContentService {
         return Math.min(Math.max(size, 1), 50);
     }
 
-    private Long toLongOrNull(String raw) {
-        if (!hasText(raw)) {
-            return null;
-        }
-        try {
-            return Long.valueOf(raw.trim());
-        } catch (Exception ex) {
-            return null;
-        }
-    }
-
-    private long toLong(String raw) {
-        if (!hasText(raw)) {
-            return 0L;
-        }
-        try {
-            return Long.parseLong(raw.trim());
-        } catch (Exception ex) {
-            return 0L;
-        }
-    }
-
     private int safeToInt(long value) {
         if (value <= 0L) return 0;
         return value >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
@@ -775,10 +766,6 @@ public class ContentServiceImpl implements ContentService {
         } catch (JsonProcessingException ex) {
             return List.of();
         }
-    }
-
-    private boolean hasText(String value) {
-        return value != null && !value.isBlank();
     }
 
     private String normalizeNullableText(String value) {

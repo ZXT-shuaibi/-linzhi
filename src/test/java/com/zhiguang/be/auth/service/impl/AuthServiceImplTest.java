@@ -237,6 +237,23 @@ class AuthServiceImplTest {
     }
 
     /**
+     * refresh 绛惧彂鏂颁护鐗屾椂搴斾娇鐢ㄦ暟鎹簱鏈€鏂扮殑瑙掕壊锛岄伩鍏嶉檷鏉冨悗鏃?role 琚户缁部鐢ㄣ€?
+     */
+    @Test
+    void refreshTokenShouldUseLatestRoleFromDatabase() {
+        TestFixture fixture = new TestFixture();
+        RegisterResult result = fixture.service.register(new RegisterRequest("13800138108", "Passw0rd!", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
+        fixture.updateRole(result.userId(), "ADMIN");
+        AuthSessionData adminSession = fixture.service.login(new LoginRequest("13800138108", "Passw0rd!", "h5", null), CLIENT_INFO);
+
+        fixture.updateRole(result.userId(), "USER");
+        AuthTokens refreshed = fixture.service.refreshToken(adminSession.tokens().refreshToken());
+
+        RefreshTokenClaims newClaims = fixture.jwtService.verifyRefreshToken(refreshed.refreshToken());
+        assertEquals("USER", newClaims.role());
+    }
+
+    /**
      * refresh 命中黑名单后会撤销全部 refresh token，并拉起 access token 失效标记。
      */
     @Test
@@ -333,6 +350,7 @@ class AuthServiceImplTest {
         assertEquals(result.userId(), response.userId());
         assertEquals("13800138105", response.phone());
         assertEquals("tester", response.nickname());
+        assertEquals("USER", response.role());
     }
 
     /**
@@ -364,7 +382,7 @@ class AuthServiceImplTest {
         );
         private final AuthJwtProperties authJwtProperties = new AuthJwtProperties();
         private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder(4);
-        private final JwtService jwtService = new StubJwtService();
+        private final StubJwtService jwtService = new StubJwtService();
         private final ConfigurableLoginFailureTracker failureTracker = new ConfigurableLoginFailureTracker();
         private final VerificationService verificationService = mock(VerificationService.class);
         private final AuditLogger auditLogger = new NoOpAuditLogger();
@@ -391,6 +409,17 @@ class AuthServiceImplTest {
             doNothing().when(verificationService).verifyOrThrow(any(), anyString(), anyString());
             when(verificationService.sendCode(eq(VerificationScene.REGISTER), eq("13800138008")))
                     .thenReturn(new SendCodeResponse("13800138008", VerificationScene.REGISTER, "654321", 600, 600));
+        }
+
+        private void updateRole(String userId, String role) {
+            AuthUserEntity account = userMapper.findByUserId(userId).orElseThrow();
+            userMapper.update(new AuthUserEntity(
+                    account.userId(),
+                    account.phone(),
+                    account.nickname(),
+                    account.passwordHash(),
+                    role
+            ));
         }
     }
 

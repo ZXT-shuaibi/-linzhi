@@ -1,6 +1,8 @@
 package com.zhiguang.be.auth.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.auth.mapper.AuthUserMapper;
+import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.security.ProtectedApiBlacklistFilter;
 import com.zhiguang.be.common.api.ErrorResponse;
 import com.zhiguang.be.common.exception.ErrorCode;
@@ -17,9 +19,13 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.security.web.SecurityFilterChain;
 
 import java.util.Collections;
@@ -32,6 +38,9 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfiguration {
+
+    static final String RAG_PUBLIC_REINDEX_PATH = "/api/v1/rag/reindex/public";
+    static final String RAG_POST_REINDEX_PATH = "/api/v1/rag/posts/*/reindex";
 
     /**
      * 构建应用的安全过滤链。
@@ -50,8 +59,11 @@ public class SecurityConfiguration {
             @Qualifier("accessJwtDecoder") JwtDecoder accessJwtDecoder,
             RequestIdFilter requestIdFilter,
             ProtectedApiBlacklistFilter protectedApiBlacklistFilter,
+            AuthUserMapper authUserMapper,
             ObjectMapper objectMapper
     ) throws Exception {
+        AuthorizationManager<RequestAuthorizationContext> adminAccess = latestRoleAuthorizationManager(authUserMapper, "ADMIN");
+
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -69,6 +81,7 @@ public class SecurityConfiguration {
                         ).permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/posts/mine").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/posts/feed").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/*/comments").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/discover/nearby").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/discover/nearby").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/posts/*").permitAll()
@@ -85,11 +98,10 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/summary-batch").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/follows/status").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/social/counters/users/*").permitAll()
-                        .requestMatchers("/api/v1/platform/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/v1/rag/reindex").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.GET, "/api/v1/rag/index/stats").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/v1/discover/location").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.DELETE, "/api/v1/discover/location").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/platform/**").access(adminAccess)
+                        .requestMatchers(HttpMethod.POST, RAG_PUBLIC_REINDEX_PATH, RAG_POST_REINDEX_PATH).access(adminAccess)
+                        .requestMatchers(HttpMethod.POST, "/api/v1/discover/location").access(adminAccess)
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/discover/location").access(adminAccess)
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2
@@ -127,6 +139,23 @@ public class SecurityConfiguration {
             return List.of(new SimpleGrantedAuthority("ROLE_" + role));
         });
         return converter;
+    }
+
+    private AuthorizationManager<RequestAuthorizationContext> latestRoleAuthorizationManager(
+            AuthUserMapper authUserMapper,
+            String requiredRole
+    ) {
+        return (authenticationSupplier, context) -> {
+            Authentication authentication = authenticationSupplier.get();
+            if (authentication == null || !authentication.isAuthenticated()) {
+                return new AuthorizationDecision(false);
+            }
+            boolean granted = authUserMapper.findByUserId(authentication.getName())
+                    .map(AuthUserEntity::role)
+                    .map(role -> requiredRole.equalsIgnoreCase(role))
+                    .orElse(false);
+            return new AuthorizationDecision(granted);
+        };
     }
 
     /**

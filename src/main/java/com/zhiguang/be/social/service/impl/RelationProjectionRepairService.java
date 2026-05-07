@@ -1,5 +1,6 @@
 package com.zhiguang.be.social.service.impl;
 
+import com.zhiguang.be.common.util.Numbers;
 import com.zhiguang.be.social.FollowEventPayload;
 import com.zhiguang.be.social.mapper.SocialMapper;
 import com.zhiguang.be.social.service.UserSocialCounterService;
@@ -94,9 +95,9 @@ public class RelationProjectionRepairService {
             }
 
             for (Map<String, Object> row : rows) {
-                long relationId = toLong(row.get("relationId"));
-                long followerId = toLong(row.get("followerId"));
-                long followeeId = toLong(row.get("followeeId"));
+                long relationId = Numbers.toLong(row.get("relationId"));
+                long followerId = Numbers.toLong(row.get("followerId"));
+                long followeeId = Numbers.toLong(row.get("followeeId"));
                 cursor = Math.max(cursor, relationId);
 
                 relationEventProcessor.process(new FollowEventPayload(
@@ -131,9 +132,9 @@ public class RelationProjectionRepairService {
             }
 
             for (Map<String, Object> row : rows) {
-                long relationId = toLong(row.get("relationId"));
-                long followerId = toLong(row.get("followerId"));
-                long followeeId = toLong(row.get("followeeId"));
+                long relationId = Numbers.toLong(row.get("relationId"));
+                long followerId = Numbers.toLong(row.get("followerId"));
+                long followeeId = Numbers.toLong(row.get("followeeId"));
                 cursor = Math.max(cursor, relationId);
 
                 relationEventProcessor.process(new FollowEventPayload(
@@ -173,10 +174,4 @@ public class RelationProjectionRepairService {
      * @param value 原始值
      * @return long 数值
      */
-    private long toLong(Object value) {
-        if (value instanceof Number) {
-            return ((Number) value).longValue();
-        }
-        return Long.parseLong(String.valueOf(value));
-    }
 }

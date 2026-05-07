@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
+import com.zhiguang.be.common.tx.Transactions;
+import com.zhiguang.be.common.util.Numbers;
 import com.zhiguang.be.social.FollowActionData;
 import com.zhiguang.be.social.FollowEventPayload;
 import com.zhiguang.be.social.FollowListData;
@@ -24,8 +26,6 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -145,7 +145,7 @@ public class FollowServiceImpl implements FollowService {
                 serialize(payload)
         );
 
-        runAfterCommit(() -> projectRelationEvent(payload));
+        Transactions.runAfterCommit(() -> projectRelationEvent(payload));
 
         return buildFollowActionData(currentUserId, followeeId, true);
     }
@@ -160,6 +160,7 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public FollowActionData unfollow(long currentUserId, long followeeId) {
+        enforceFollowRateLimit(currentUserId);
         validateFollowTarget(currentUserId, followeeId);
 
         Long relationId = socialMapper.findFollowingRelationId(currentUserId, followeeId);
@@ -181,7 +182,7 @@ public class FollowServiceImpl implements FollowService {
                     serialize(payload)
             );
 
-            runAfterCommit(() -> projectRelationEvent(payload));
+            Transactions.runAfterCommit(() -> projectRelationEvent(payload));
         }
 
         return buildFollowActionData(currentUserId, followeeId, false);
@@ -336,7 +337,7 @@ public class FollowServiceImpl implements FollowService {
         Map<Long, Map<String, Object>> userMap = new LinkedHashMap<Long, Map<String, Object>>();
         if (userRows != null) {
             for (Map<String, Object> row : userRows) {
-                userMap.put(toLong(row.get("userId")), row);
+                userMap.put(Numbers.toLong(row.get("userId")), row);
             }
         }
 
@@ -465,7 +466,7 @@ public class FollowServiceImpl implements FollowService {
                     String.valueOf(followRateLimitRefillPerSecond)
             );
             if (allowed == null || allowed == 0L) {
-                throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "关注操作过于频繁，请稍后再试");
+                throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "关注/取关操作过于频繁，请稍后再试");
             }
         } catch (BusinessException ex) {
             throw ex;
@@ -543,37 +544,6 @@ public class FollowServiceImpl implements FollowService {
         } catch (JsonProcessingException ex) {
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "事件序列化失败");
         }
-    }
-
-    /**
-     * 在事务提交后执行额外逻辑。
-     *
-     * @param runnable 提交后执行的任务
-     */
-    private void runAfterCommit(Runnable runnable) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            runnable.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                runnable.run();
-            }
-        });
-    }
-
-    /**
-     * 将任意对象转成 long。
-     *
-     * @param value 原始对象
-     * @return long 数值
-     */
-    private long toLong(Object value) {
-        if (value instanceof Number) {
-            return ((Number) value).longValue();
-        }
-        return Long.parseLong(String.valueOf(value));
     }
 
     /**

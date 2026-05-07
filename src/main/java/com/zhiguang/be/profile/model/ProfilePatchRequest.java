@@ -30,6 +30,8 @@ public record ProfilePatchRequest(
         @Size(max = 128, message = "学校名称长度不能超过 128")
         String school,
 
-        List<@Size(max = 32, message = "标签长度不能超过 32") String> tags
+        List<@Size(max = 32, message = "标签长度不能超过 32") String> tags,
+
+        List<String> clearFields
 ) {
 }
