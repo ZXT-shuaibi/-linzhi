@@ -144,7 +144,7 @@ public class AuthServiceImpl implements AuthService {
 
         String userId = String.valueOf(snowflakeIdGenerator.nextId());
         String encodedPassword = passwordEncoder.encode(request.password());
-        AuthUserEntity account = new AuthUserEntity(userId, phone, request.nickname(), encodedPassword);
+        AuthUserEntity account = new AuthUserEntity(userId, phone, request.nickname(), encodedPassword, "USER");
 
         if (!authUserMapper.saveIfAbsent(account)) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "手机号已注册");
@@ -215,7 +215,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         resetFailures(identifier, account);
-        AuthTokens tokens = issueAndStoreTokens(account.userId());
+        AuthTokens tokens = issueAndStoreTokens(account.userId(), account.role());
         auditLogger.log(AuditEvent.of("LOGIN_SUCCESS", identifier, true, "用户登录成功"));
         loginLogService.record(account.userId(), identifier, channel, safeIp(clientInfo), safeUserAgent(clientInfo), "SUCCESS", "登录成功");
         return new AuthSessionData(account.userId(), tokens);
@@ -240,7 +240,7 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
-        AuthTokens tokens = jwtService.issueTokens(claims.userId());
+        AuthTokens tokens = jwtService.issueTokens(claims.userId(), claims.role());
         RefreshTokenClaims newClaims = jwtService.verifyRefreshToken(tokens.refreshToken());
         if (!refreshTokenStore.rotate(claims.userId(), claims.jti(), newClaims.jti(), newClaims.expiresAt())) {
             auditLogger.log(AuditEvent.of("REFRESH_FAILED", account.phone(), false, "刷新令牌已失效"));
@@ -609,8 +609,8 @@ public class AuthServiceImpl implements AuthService {
      * @param userId 用户 ID
      * @return 双令牌结果
      */
-    private AuthTokens issueAndStoreTokens(String userId) {
-        AuthTokens tokens = jwtService.issueTokens(userId);
+    private AuthTokens issueAndStoreTokens(String userId, String role) {
+        AuthTokens tokens = jwtService.issueTokens(userId, role);
         RefreshTokenClaims claims = jwtService.verifyRefreshToken(tokens.refreshToken());
         refreshTokenStore.save(claims.userId(), claims.jti(), claims.expiresAt());
         return tokens;

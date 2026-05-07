@@ -16,10 +16,13 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -82,9 +85,17 @@ public class SecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/summary-batch").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/follows/status").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/social/counters/users/*").permitAll()
+                        .requestMatchers("/api/v1/platform/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/rag/reindex").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/rag/index/stats").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/discover/location").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/discover/location").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(accessJwtDecoder)))
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .jwt(jwt -> jwt
+                                .decoder(accessJwtDecoder)
+                                .jwtAuthenticationConverter(jwtAuthenticationConverter())))
                 .addFilterBefore(requestIdFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(protectedApiBlacklistFilter, BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
@@ -100,6 +111,22 @@ public class SecurityConfiguration {
                 .anonymous(Customizer.withDefaults());
 
         return http.build();
+    }
+
+    /**
+     * 将 JWT 中的 role claim 映射为 Spring Security 的 ROLE_ 前缀授权。
+     * USER → ROLE_USER, ADMIN → ROLE_ADMIN。
+     */
+    private JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(jwt -> {
+            String role = jwt.getClaimAsString("role");
+            if (role == null) {
+                return Collections.emptyList();
+            }
+            return List.of(new SimpleGrantedAuthority("ROLE_" + role));
+        });
+        return converter;
     }
 
     /**

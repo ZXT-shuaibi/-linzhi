@@ -341,8 +341,8 @@ class AuthServiceImplTest {
     @Test
     void saveIfAbsentShouldRejectDuplicatePhone() {
         InMemoryAuthUserMapper mapper = new InMemoryAuthUserMapper();
-        AuthUserEntity first = new AuthUserEntity("u1", "13800138005", "n1", "hash1");
-        AuthUserEntity duplicatePhone = new AuthUserEntity("u2", "13800138005", "n2", "hash2");
+        AuthUserEntity first = new AuthUserEntity("u1", "13800138005", "n1", "hash1", "USER");
+        AuthUserEntity duplicatePhone = new AuthUserEntity("u2", "13800138005", "n2", "hash2", "USER");
 
         assertTrue(mapper.saveIfAbsent(first));
         assertFalse(mapper.saveIfAbsent(duplicatePhone));
@@ -466,14 +466,14 @@ class AuthServiceImplTest {
         private final Map<String, RefreshTokenClaims> refreshClaimsByToken = new ConcurrentHashMap<>();
 
         @Override
-        public AuthTokens issueTokens(String userId) {
+        public AuthTokens issueTokens(String userId, String role) {
             Instant now = Instant.now();
             Instant accessExpiresAt = now.plusSeconds(900);
             Instant refreshExpiresAt = now.plusSeconds(7 * 24 * 3600L);
             String accessToken = "access-" + UUID.randomUUID();
             String jti = UUID.randomUUID().toString();
             String refreshToken = "refresh-" + jti;
-            refreshClaimsByToken.put(refreshToken, new RefreshTokenClaims(userId, jti, refreshExpiresAt));
+            refreshClaimsByToken.put(refreshToken, new RefreshTokenClaims(userId, role, jti, refreshExpiresAt));
             return new AuthTokens(accessToken, accessExpiresAt, refreshToken, refreshExpiresAt, "Bearer");
         }
 

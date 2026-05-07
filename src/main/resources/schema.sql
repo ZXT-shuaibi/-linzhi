@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS users (
     tags_json JSON,
     -- 账户状态，如 active/disabled/banned。
     status VARCHAR(16) NOT NULL DEFAULT 'active',
+    -- 角色，USER 普通用户 / ADMIN 管理员。
+    role VARCHAR(16) NOT NULL DEFAULT 'USER',
     -- 创建时间。
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- 最后更新时间。

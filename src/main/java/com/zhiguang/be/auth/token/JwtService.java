@@ -12,9 +12,10 @@ public interface JwtService {
      * 为指定用户签发一组令牌。
      *
      * @param userId 用户 ID
+     * @param role 角色
      * @return 访问令牌与刷新令牌
      */
-    AuthTokens issueTokens(String userId);
+    AuthTokens issueTokens(String userId, String role);
 
     /**
      * 校验并解析刷新令牌。
