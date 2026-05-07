@@ -135,8 +135,8 @@ public class ProfileServiceImpl implements ProfileService {
     @Transactional(readOnly = true)
     public PostPageData getPublishedPosts(long viewerUserId, long targetUserId, int page, int size) {
         requireUser(targetUserId);
-        String viewerId = viewerUserId > 0L ? String.valueOf(viewerUserId) : null;
-        return contentService.getUserPublished(String.valueOf(targetUserId), viewerId, page, size);
+        Long viewerId = viewerUserId > 0L ? viewerUserId : null;
+        return contentService.getUserPublished(targetUserId, viewerId, page, size);
     }
 
     private ProfileData buildProfileData(long viewerUserId, long targetUserId) {

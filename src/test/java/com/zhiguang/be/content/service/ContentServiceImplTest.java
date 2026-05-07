@@ -92,7 +92,7 @@ class ContentServiceImplTest {
                 .thenReturn(post("1001", "7", "deleted", Instant.now()));
         when(knowPostMapper.softDelete(eq("1001"), eq("7"), any())).thenReturn(1);
 
-        service.delete("7", "1001");
+        service.delete(7L, 1001L);
 
         verify(userSocialCounterService).incrementPosts(7L, -1);
     }
@@ -110,8 +110,8 @@ class ContentServiceImplTest {
         when(knowPostMapper.findById("1001")).thenReturn(confirmed);
 
         service.confirmContent(
-                "7",
-                "1001",
+                7L,
+                1001L,
                 new ConfirmContentRequest("posts/1001/content/content.md", "\"etag-1\"", sha('a'), 12L)
         );
 
@@ -142,8 +142,8 @@ class ContentServiceImplTest {
         assertThrows(
                 BusinessException.class,
                 () -> service.confirmContent(
-                        "7",
-                        "1001",
+                        7L,
+                        1001L,
                         new ConfirmContentRequest("posts/1001/content/new.md", "\"new\"", sha('b'), 13L)
                 )
         );
@@ -184,7 +184,7 @@ class ContentServiceImplTest {
                 any()
         )).thenReturn(1);
 
-        service.confirmContent("7", "1001", request);
+        service.confirmContent(7L, 1001L, request);
 
         verify(storageService).validateUploadedObject("posts/1001/content/content.md", "\"etag-1\"", 128L);
     }
@@ -195,7 +195,7 @@ class ContentServiceImplTest {
         when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7", "published", publishedAt));
         when(knowPostMapper.findDetailById("1001")).thenReturn(detail("1001", "7", false, publishedAt));
 
-        service.publish("7", "1001");
+        service.publish(7L, 1001L);
 
         verify(knowPostMapper, never()).publish(anyString(), anyString(), anyString(), anyString(), any(), any());
         verify(userSocialCounterService, never()).incrementPosts(anyLong(), anyInt());
@@ -211,7 +211,7 @@ class ContentServiceImplTest {
         when(knowPostMapper.findDetailById("1001")).thenReturn(detail("1001", "7", true, publishedAt));
         when(snowflakeIdGenerator.nextId()).thenReturn(9001L);
 
-        service.updateTop("7", "1001", true);
+        service.updateTop(7L, 1001L, true);
 
         ArgumentCaptor<OutboxEventEntity> outboxCaptor = ArgumentCaptor.forClass(OutboxEventEntity.class);
         verify(knowPostMapper).insertOutbox(outboxCaptor.capture());

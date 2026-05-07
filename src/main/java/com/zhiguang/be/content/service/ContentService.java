@@ -11,29 +11,25 @@ import com.zhiguang.be.content.dto.UpdatePostMetadataRequest;
  */
 public interface ContentService {
 
-    // -- 写操作 --
+    DraftData createDraft(long userId);
 
-    DraftData createDraft(String userId);
+    void confirmContent(long userId, long postId, ConfirmContentRequest request);
 
-    void confirmContent(String userId, String postId, ConfirmContentRequest request);
+    PostDetail updateMetadata(long userId, long postId, UpdatePostMetadataRequest request);
 
-    PostDetail updateMetadata(String userId, String postId, UpdatePostMetadataRequest request);
+    PostDetail publish(long userId, long postId);
 
-    PostDetail publish(String userId, String postId);
+    PostDetail updateTop(long userId, long postId, boolean isTop);
 
-    PostDetail updateTop(String userId, String postId, boolean isTop);
+    PostDetail updateVisibility(long userId, long postId, String visibility);
 
-    PostDetail updateVisibility(String userId, String postId, String visibility);
+    void delete(long userId, long postId);
 
-    void delete(String userId, String postId);
+    PostPageData getPublicFeed(Long viewerId, int page, int size);
 
-    // -- 读操作 --
+    PostDetail getDetail(long postId, Long viewerId);
 
-    PostPageData getPublicFeed(String viewerId, int page, int size);
+    PostPageData getMyPublished(long creatorId, int page, int size);
 
-    PostDetail getDetail(String postId, String viewerId);
-
-    PostPageData getMyPublished(String creatorId, int page, int size);
-
-    PostPageData getUserPublished(String creatorId, String viewerId, int page, int size);
+    PostPageData getUserPublished(long creatorId, Long viewerId, int page, int size);
 }

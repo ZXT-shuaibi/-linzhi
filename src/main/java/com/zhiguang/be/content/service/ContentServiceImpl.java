@@ -47,11 +47,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * 内容模块核心服务。
- * 参考 zhiguang 的 knowpost 主链路实现，保留 linli 当前这版的最小闭环：
- * 草稿 -> 预签名 -> 确认正文 -> 更新元数据 -> 发布 -> 同步 Discover -> 详情/feed/mine。
- */
 @Service
 public class ContentServiceImpl implements ContentService {
 
@@ -94,9 +89,6 @@ public class ContentServiceImpl implements ContentService {
     @Value("${content.outbox-max-retry-attempts:5}")
     private int outboxMaxRetryAttempts;
 
-    /**
-     * 注入内容模块依赖。
-     */
     public ContentServiceImpl(
             KnowPostMapper knowPostMapper,
             LbsDiscoverService lbsDiscoverService,
@@ -121,50 +113,23 @@ public class ContentServiceImpl implements ContentService {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * 创建内容草稿。
-     * 参考 zhiguang，草稿阶段直接固定为 image_text。
-     */
     @Transactional
     @Override
-    public DraftData createDraft(String creatorId) {
+    public DraftData createDraft(long creatorId) {
         Instant now = Instant.now();
-        String postId = String.valueOf(snowflakeIdGenerator.nextId());
+        long postId = snowflakeIdGenerator.nextId();
         knowPostMapper.insert(new KnowPostEntity(
-                postId,
-                creatorId,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                Boolean.FALSE,
-                DEFAULT_TYPE,
-                DEFAULT_VISIBILITY,
-                null,
-                null,
-                STATUS_DRAFT,
-                now,
-                now,
-                null
+                String.valueOf(postId),
+                String.valueOf(creatorId),
+                null, null, null, null, null, null, null, null, null, null, null, null, null,
+                Boolean.FALSE, DEFAULT_TYPE, DEFAULT_VISIBILITY, null, null,
+                STATUS_DRAFT, now, now, null
         ));
-        return new DraftData(postId, STATUS_DRAFT, now);
+        return new DraftData(String.valueOf(postId), STATUS_DRAFT, now);
     }
 
-    /**
-     * 查询公开内容流。
-     * 当前阶段先对齐 zhiguang 的返回结构，互动字段暂以默认值占位。
-     */
     @Override
-    public PostPageData getPublicFeed(String viewerId, int page, int size) {
+    public PostPageData getPublicFeed(Long viewerId, int page, int size) {
         int safeSize = normalizePageSize(size);
         int safePage = normalizePage(page);
         int offset = (safePage - 1) * safeSize;
@@ -172,46 +137,39 @@ public class ContentServiceImpl implements ContentService {
         return toPageData(rows, safePage, safeSize, viewerId);
     }
 
-    /**
-     * 查询当前用户已发布内容。
-     */
     @Override
-    public PostPageData getMyPublished(String creatorId, int page, int size) {
+    public PostPageData getMyPublished(long creatorId, int page, int size) {
         int safeSize = normalizePageSize(size);
         int safePage = normalizePage(page);
         int offset = (safePage - 1) * safeSize;
-        List<KnowPostFeedRow> rows = knowPostMapper.listMyPublished(creatorId, safeSize + 1, offset);
+        List<KnowPostFeedRow> rows = knowPostMapper.listMyPublished(
+                String.valueOf(creatorId), safeSize + 1, offset);
         return toPageData(rows, safePage, safeSize, creatorId);
     }
 
-    /**
-     * 查询指定用户主页可见的已发布内容。
-     * 个人主页场景下：本人可见自己的全部已发布内容；关注者可见 followers 内容；其他人仅可见 public。
-     */
     @Override
-    public PostPageData getUserPublished(String creatorId, String viewerId, int page, int size) {
-        if (hasText(viewerId) && creatorId.equals(viewerId)) {
+    public PostPageData getUserPublished(long creatorId, Long viewerId, int page, int size) {
+        if (viewerId != null && creatorId == viewerId) {
             return getMyPublished(creatorId, page, size);
         }
 
         int safeSize = normalizePageSize(size);
         int safePage = normalizePage(page);
         int offset = (safePage - 1) * safeSize;
-        boolean includeFollowers = hasText(viewerId)
-                && followService.isFollowing(Long.parseLong(viewerId), Long.parseLong(creatorId));
-        List<KnowPostFeedRow> rows = knowPostMapper.listUserPublished(creatorId, includeFollowers, safeSize + 1, offset);
+        boolean includeFollowers = viewerId != null
+                && followService.isFollowing(viewerId, creatorId);
+        List<KnowPostFeedRow> rows = knowPostMapper.listUserPublished(
+                String.valueOf(creatorId), includeFollowers, safeSize + 1, offset);
         return toPageData(rows, safePage, safeSize, viewerId);
     }
 
-    /**
-     * 确认正文上传成功，将草稿转为已发布内容。
-     */
     @Transactional
     @Override
-    public void confirmContent(String creatorId, String postId, ConfirmContentRequest request) {
+    public void confirmContent(long creatorId, long postId, ConfirmContentRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertMutable(entity);
-        if (!request.objectKey().startsWith("posts/" + postId + "/content/")) {
+        String postIdStr = String.valueOf(postId);
+        if (!request.objectKey().startsWith("posts/" + postIdStr + "/content/")) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "objectKey 与当前文章不匹配");
         }
 
@@ -226,18 +184,14 @@ public class ContentServiceImpl implements ContentService {
 
         String nextStatus = hasText(entity.title()) ? STATUS_METADATA_COMPLETED : STATUS_CONTENT_CONFIRMED;
         int updated = knowPostMapper.updateContent(
-                postId,
-                creatorId,
+                postIdStr, String.valueOf(creatorId),
                 nextStatus,
                 storageService.toPublicUrl(request.objectKey()),
-                request.objectKey(),
-                request.etag(),
-                request.size(),
-                request.sha256(),
+                request.objectKey(), request.etag(), request.size(), request.sha256(),
                 Instant.now()
         );
         if (updated == 0) {
-            KnowPostEntity latest = knowPostMapper.findById(postId);
+            KnowPostEntity latest = knowPostMapper.findById(postIdStr);
             if (isSameConfirmedContent(latest, request)) {
                 return;
             }
@@ -245,12 +199,9 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
-    /**
-     * 更新文章元数据。
-     */
     @Transactional
     @Override
-    public PostDetail updateMetadata(String creatorId, String postId, UpdatePostMetadataRequest request) {
+    public PostDetail updateMetadata(long creatorId, long postId, UpdatePostMetadataRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertMutable(entity);
 
@@ -273,7 +224,8 @@ public class ContentServiceImpl implements ContentService {
         if (request.imageUrls() != null) {
             List<String> normalizedImageUrls = new ArrayList<>();
             for (String rawImageUrl : request.imageUrls()) {
-                String normalizedImageUrl = storageService.normalizeOwnedPostImageUrl(postId, rawImageUrl);
+                String normalizedImageUrl = storageService.normalizeOwnedPostImageUrl(
+                        String.valueOf(postId), rawImageUrl);
                 if (normalizedImageUrl != null && !normalizedImageUrls.contains(normalizedImageUrl)) {
                     normalizedImageUrls.add(normalizedImageUrl);
                 }
@@ -302,19 +254,9 @@ public class ContentServiceImpl implements ContentService {
                 : (hasText(entity.contentUrl()) ? STATUS_CONTENT_CONFIRMED : STATUS_DRAFT);
 
         int updated = knowPostMapper.updateMetadata(
-                postId,
-                creatorId,
-                nextStatus,
-                title,
-                summary,
-                tagsJson,
-                imgUrlsJson,
-                isTop,
-                visibility,
-                latitude,
-                longitude,
-                geoHash,
-                address,
+                String.valueOf(postId), String.valueOf(creatorId),
+                nextStatus, title, summary, tagsJson, imgUrlsJson,
+                isTop, visibility, latitude, longitude, geoHash, address,
                 Instant.now()
         );
         if (updated == 0) {
@@ -323,12 +265,9 @@ public class ContentServiceImpl implements ContentService {
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 发布文章。
-     */
     @Transactional
     @Override
-    public PostDetail publish(String creatorId, String postId) {
+    public PostDetail publish(long creatorId, long postId) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         if (STATUS_PUBLISHED.equals(entity.status())) {
             return getDetail(postId, creatorId);
@@ -345,7 +284,10 @@ public class ContentServiceImpl implements ContentService {
         Instant publishTime = now;
         String visibility = hasText(entity.visible()) ? entity.visible() : DEFAULT_VISIBILITY;
 
-        int updated = knowPostMapper.publish(postId, creatorId, visibility, STATUS_PUBLISHED, publishTime, now);
+        int updated = knowPostMapper.publish(
+                String.valueOf(postId), String.valueOf(creatorId),
+                visibility, STATUS_PUBLISHED, publishTime, now
+        );
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章发布失败，请刷新后重试");
         }
@@ -354,43 +296,39 @@ public class ContentServiceImpl implements ContentService {
         enqueuePostSyncEvent(postId, EVENT_POST_PUBLISHED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
         syncSearchIndex(postId);
-        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
+        feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 更新文章置顶状态。
-     */
     @Transactional
     @Override
-    public PostDetail updateTop(String creatorId, String postId, boolean isTop) {
+    public PostDetail updateTop(long creatorId, long postId, boolean isTop) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertPublished(entity);
 
         Instant now = Instant.now();
-        int updated = knowPostMapper.updateTop(postId, creatorId, isTop, now);
+        int updated = knowPostMapper.updateTop(
+                String.valueOf(postId), String.valueOf(creatorId), isTop, now);
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章置顶状态更新失败，请刷新后重试");
         }
         enqueuePostSyncEvent(postId, EVENT_POST_TOP_CHANGED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), entity.visible(), entity.publishTime());
         syncSearchIndex(postId);
-        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
+        feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 更新文章可见性。
-     */
     @Transactional
     @Override
-    public PostDetail updateVisibility(String creatorId, String postId, String visibility) {
+    public PostDetail updateVisibility(long creatorId, long postId, String visibility) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertPublished(entity);
 
         String normalizedVisibility = visibility.trim();
         Instant now = Instant.now();
-        int updated = knowPostMapper.updateVisibility(postId, creatorId, normalizedVisibility, now);
+        int updated = knowPostMapper.updateVisibility(
+                String.valueOf(postId), String.valueOf(creatorId), normalizedVisibility, now);
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章可见性更新失败，请刷新后重试");
         }
@@ -398,51 +336,45 @@ public class ContentServiceImpl implements ContentService {
         enqueuePostSyncEvent(postId, EVENT_POST_VISIBILITY_CHANGED, now);
         syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), normalizedVisibility, entity.publishTime());
         syncSearchIndex(postId);
-        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
+        feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
     }
 
-    /**
-     * 删除文章。
-     */
     @Transactional
     @Override
-    public void delete(String creatorId, String postId) {
+    public void delete(long creatorId, long postId) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         if (STATUS_DELETED.equals(entity.status())) {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
         }
 
         Instant now = Instant.now();
-        int updated = knowPostMapper.softDelete(postId, creatorId, now);
+        int updated = knowPostMapper.softDelete(
+                String.valueOf(postId), String.valueOf(creatorId), now);
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章删除失败，请刷新后重试");
         }
 
-        KnowPostEntity deletedEntity = knowPostMapper.findById(postId);
+        KnowPostEntity deletedEntity = knowPostMapper.findById(String.valueOf(postId));
         if (wasPublishedBeforeDelete(entity, deletedEntity)) {
             incrementPublishedPostCounter(creatorId, -1);
         }
         enqueuePostSyncEvent(postId, EVENT_POST_DELETED, now);
         removeFromDiscover(postId);
         removeFromSearchIndex(postId);
-        feedCacheInvalidationService.invalidatePostAfterCommit(postId);
+        feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
     }
 
-    /**
-     * 查询文章详情。
-     * 当前阶段对齐 zhiguang 的公开访问策略，并额外让 followers 可见性真正生效。
-     */
     @Override
-    public PostDetail getDetail(String postId, String viewerId) {
-        KnowPostDetailRow row = knowPostMapper.findDetailById(postId);
+    public PostDetail getDetail(long postId, Long viewerId) {
+        KnowPostDetailRow row = knowPostMapper.findDetailById(String.valueOf(postId));
         if (row == null || STATUS_DELETED.equals(row.status())) {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
         }
 
-        boolean isOwner = Objects.equals(row.creatorId(), viewerId);
-        long viewerUserId = parseOptionalUserId(viewerId);
-        long creatorUserId = parseOptionalUserId(row.creatorId());
+        boolean isOwner = viewerId != null && Objects.equals(row.creatorId(), String.valueOf(viewerId));
+        long viewerUserId = viewerId == null ? 0L : viewerId;
+        long creatorUserId = toLong(row.creatorId());
         boolean isPublicPublished = STATUS_PUBLISHED.equals(row.status()) && DEFAULT_VISIBILITY.equals(row.visible());
         boolean isFollowersVisible = STATUS_PUBLISHED.equals(row.status())
                 && FOLLOWERS_VISIBILITY.equals(row.visible())
@@ -479,9 +411,6 @@ public class ContentServiceImpl implements ContentService {
         );
     }
 
-    /**
-     * 定时补偿 discover 同步事件。
-     */
     @Scheduled(fixedDelayString = "${content.outbox-reconcile-delay-ms:10000}")
     public void reconcileDiscoverOutbox() {
         int maxRetryAttempts = normalizedOutboxMaxRetryAttempts();
@@ -498,9 +427,6 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
-    /**
-     * 定时清理长时间未发布的草稿。
-     */
     @Scheduled(fixedDelayString = "${content.draft-cleanup-delay-ms:3600000}")
     public void cleanupExpiredDrafts() {
         if (draftTtlDays <= 0) {
@@ -515,23 +441,19 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
-    /**
-     * 查询并校验文章归属。
-     */
-    private KnowPostEntity loadOwnedPost(String postId, String creatorId) {
-        KnowPostEntity entity = knowPostMapper.findById(postId);
+    private KnowPostEntity loadOwnedPost(long postId, long creatorId) {
+        String postIdStr = String.valueOf(postId);
+        String creatorIdStr = String.valueOf(creatorId);
+        KnowPostEntity entity = knowPostMapper.findById(postIdStr);
         if (entity == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
         }
-        if (!Objects.equals(entity.creatorId(), creatorId)) {
+        if (!Objects.equals(entity.creatorId(), creatorIdStr)) {
             throw new BusinessException(ErrorCode.FORBIDDEN, HttpStatus.FORBIDDEN, "无权操作该文章");
         }
         return entity;
     }
 
-    /**
-     * 校验文章是否仍可编辑。
-     */
     private void assertMutable(KnowPostEntity entity) {
         if (STATUS_PUBLISHED.equals(entity.status())) {
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "文章已发布，当前阶段不支持再次编辑");
@@ -541,9 +463,6 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
-    /**
-     * 校验文章是否已发布。
-     */
     private void assertPublished(KnowPostEntity entity) {
         if (STATUS_DELETED.equals(entity.status())) {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "文章不存在");
@@ -553,9 +472,6 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
-    /**
-     * 写入一条 post outbox 事件。
-     */
     private boolean isSameConfirmedContent(KnowPostEntity entity, ConfirmContentRequest request) {
         return entity != null
                 && Objects.equals(entity.contentObjectKey(), request.objectKey())
@@ -573,7 +489,7 @@ public class ContentServiceImpl implements ContentService {
         if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
             return;
         }
-        Long postId = parseOptionalPostId(event.aggregateId());
+        Long postId = toLongOrNull(event.aggregateId());
         if (postId == null) {
             return;
         }
@@ -596,136 +512,90 @@ public class ContentServiceImpl implements ContentService {
         return Math.max(outboxMaxRetryAttempts, 1);
     }
 
-    private void enqueuePostSyncEvent(String postId, String eventType, Instant occurredAt) {
+    private void enqueuePostSyncEvent(long postId, String eventType, Instant occurredAt) {
         String eventId = String.valueOf(snowflakeIdGenerator.nextId());
+        String postIdStr = String.valueOf(postId);
         knowPostMapper.insertOutbox(new OutboxEventEntity(
-                eventId,
-                "post",
-                postId,
-                eventType,
-                toJson(new PostSyncPayload(eventId, eventType, postId, occurredAt)),
-                "pending",
-                0,
-                occurredAt
+                eventId, "post", postIdStr, eventType,
+                toJson(new PostSyncPayload(eventId, eventType, postIdStr, occurredAt)),
+                "pending", 0, occurredAt
         ));
     }
 
-    /**
-     * 根据文章当前状态决定 discover 中是否应存在该内容。
-     */
-    private void reconcileDiscoverState(String postId) {
-        KnowPostEntity entity = knowPostMapper.findById(postId);
+    private void reconcileDiscoverState(String postIdStr) {
+        KnowPostEntity entity = knowPostMapper.findById(postIdStr);
         if (entity == null || STATUS_DELETED.equals(entity.status())) {
-            removeFromDiscoverStrict(postId);
+            removeFromDiscoverStrict(postIdStr);
             return;
         }
         if (!STATUS_PUBLISHED.equals(entity.status())
                 || !DEFAULT_VISIBILITY.equals(entity.visible())
                 || !hasLocation(entity.latitude(), entity.longitude())) {
-            removeFromDiscoverStrict(postId);
+            removeFromDiscoverStrict(postIdStr);
             return;
         }
-        syncDiscoverIndexStrict(
-                postId,
-                entity.title(),
-                entity.latitude(),
-                entity.longitude(),
-                entity.visible(),
-                entity.publishTime()
-        );
+        syncDiscoverIndexStrict(postIdStr, entity.title(), entity.latitude(), entity.longitude(),
+                entity.visible(), entity.publishTime());
     }
 
-    /**
-     * 同步 discover 索引，失败时不阻塞主流程。
-     */
-    private void syncDiscoverIndex(
-            String postId,
-            String title,
-            Double latitude,
-            Double longitude,
-            String visibility,
-            Instant publishTime
-    ) {
+    private void syncDiscoverIndex(long postId, String title, Double latitude,
+                                   Double longitude, String visibility, Instant publishTime) {
         try {
-            syncDiscoverIndexStrict(postId, title, latitude, longitude, visibility, publishTime);
+            syncDiscoverIndexStrict(String.valueOf(postId), title, latitude, longitude, visibility, publishTime);
         } catch (Exception ex) {
             log.warn("Failed to sync post {} to discover index: {}", postId, ex.getMessage());
         }
     }
 
-    /**
-     * 从 discover 中移除文章，失败时不阻塞主流程。
-     */
-    private void removeFromDiscover(String postId) {
+    private void removeFromDiscover(long postId) {
         try {
-            removeFromDiscoverStrict(postId);
+            removeFromDiscoverStrict(String.valueOf(postId));
         } catch (Exception ex) {
             log.warn("Failed to remove post {} from discover index: {}", postId, ex.getMessage());
         }
     }
 
-    /**
-     * 同步搜索索引，失败时不阻断内容主流程。
-     */
-    private void syncSearchIndex(String postId) {
+    private void syncSearchIndex(long postId) {
         if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
             return;
         }
         try {
-            searchIndexService.syncPost(parseOptionalPostId(postId));
+            searchIndexService.syncPost(postId);
         } catch (Exception ex) {
             log.warn("Failed to sync post {} to search index: {}", postId, ex.getMessage());
         }
     }
 
-    /**
-     * 从搜索索引中移除内容，失败时不阻断主流程。
-     */
-    private void removeFromSearchIndex(String postId) {
+    private void removeFromSearchIndex(long postId) {
         if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
             return;
         }
         try {
-            searchIndexService.deletePost(parseOptionalPostId(postId));
+            searchIndexService.deletePost(postId);
         } catch (Exception ex) {
             log.warn("Failed to remove post {} from search index: {}", postId, ex.getMessage());
         }
     }
 
-    /**
-     * 严格同步 discover 索引。
-     */
-    private void syncDiscoverIndexStrict(
-            String postId,
-            String title,
-            Double latitude,
-            Double longitude,
-            String visibility,
-            Instant publishTime
-    ) {
+    private void syncDiscoverIndexStrict(String postIdStr, String title, Double latitude,
+                                         Double longitude, String visibility, Instant publishTime) {
         if (!hasLocation(latitude, longitude) || !DEFAULT_VISIBILITY.equals(visibility)) {
-            removeFromDiscoverStrict(postId);
+            removeFromDiscoverStrict(postIdStr);
             return;
         }
-        KnowPostDetailRow detailRow = knowPostMapper.findDetailById(postId);
+        KnowPostDetailRow detailRow = knowPostMapper.findDetailById(postIdStr);
         if (detailRow == null || !STATUS_PUBLISHED.equals(detailRow.status())) {
-            removeFromDiscoverStrict(postId);
+            removeFromDiscoverStrict(postIdStr);
             return;
         }
         List<String> imageUrls = parseStringList(detailRow.imgUrlsJson());
-        InteractionSummary discoverSummary = loadDiscoverInteractionSummary(postId);
+        InteractionSummary discoverSummary = loadDiscoverInteractionSummary(postIdStr);
         lbsDiscoverService.addLocation(
-                postId,
-                DISCOVER_TYPE,
-                latitude,
-                longitude,
-                detailRow.title(),
-                detailRow.description(),
+                postIdStr, DISCOVER_TYPE, latitude, longitude,
+                detailRow.title(), detailRow.description(),
                 imageUrls.isEmpty() ? null : imageUrls.get(0),
                 detailRow.address(),
-                detailRow.creatorId(),
-                detailRow.authorNickname(),
-                detailRow.authorAvatar(),
+                detailRow.creatorId(), detailRow.authorNickname(), detailRow.authorAvatar(),
                 detailRow.tagsJson(),
                 publishTime == null ? null : publishTime.toEpochMilli(),
                 discoverSummary == null ? 0 : safeToInt(discoverSummary.getLikeCount()),
@@ -733,21 +603,14 @@ public class ContentServiceImpl implements ContentService {
         );
     }
 
-    /**
-     * 严格从 discover 中移除文章。
-     */
-    private void removeFromDiscoverStrict(String postId) {
-        lbsDiscoverService.removeLocation(postId, DISCOVER_TYPE);
+    private void removeFromDiscoverStrict(String postIdStr) {
+        lbsDiscoverService.removeLocation(postIdStr, DISCOVER_TYPE);
     }
 
-    /**
-     * 将 feed 行对象转换成分页卡片。
-     * 当前阶段先把互动字段补齐到更像 zhiguang 的结构，后续再接真实互动模块。
-     */
-    private PostPageData toPageData(List<KnowPostFeedRow> rows, int page, int size, String viewerId) {
+    private PostPageData toPageData(List<KnowPostFeedRow> rows, int page, int size, Long viewerId) {
         boolean hasMore = rows.size() > size;
         List<KnowPostFeedRow> pageRows = hasMore ? rows.subList(0, size) : rows;
-        long viewerUserId = parseOptionalUserId(viewerId);
+        long viewerUserId = viewerId == null ? 0L : viewerId;
         Map<String, InteractionSummary> summaryMap = loadPageInteractionSummaries(pageRows, viewerUserId);
         Map<String, PostAuthor> authorMap = loadAuthors(pageRows, viewerUserId);
         List<PostCard> items = new ArrayList<>(pageRows.size());
@@ -759,53 +622,39 @@ public class ContentServiceImpl implements ContentService {
                 author = buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId);
             }
             items.add(new PostCard(
-                    row.postId(),
-                    row.title(),
-                    row.description(),
+                    row.postId(), row.title(), row.description(),
                     imageUrls.isEmpty() ? null : imageUrls.get(0),
-                    parseStringList(row.tagsJson()),
-                    author,
+                    parseStringList(row.tagsJson()), author,
                     summary == null ? 0L : summary.getLikeCount(),
                     summary == null ? 0L : summary.getFavoriteCount(),
                     viewerUserId > 0L && summary != null ? summary.isViewerLiked() : null,
                     viewerUserId > 0L && summary != null ? summary.isViewerFavorited() : null,
-                    row.visibility(),
-                    row.isTop(),
-                    row.publishTime()
+                    row.visibility(), row.isTop(), row.publishTime()
             ));
         }
         return new PostPageData(items, page, size, hasMore);
     }
 
-    /**
-     * 为详情页加载互动汇总。
-     * 只有已发布内容才接入社交互动，避免草稿态误走互动校验。
-     */
     private InteractionSummary loadDetailInteractionSummary(KnowPostDetailRow row, long viewerUserId) {
         if (!STATUS_PUBLISHED.equals(row.status())) {
             return null;
         }
-
-        long postId = parseOptionalUserId(row.postId());
+        long postId = toLong(row.postId());
         if (postId <= 0L) {
             return null;
         }
         return interactionService.summary(viewerUserId, "post", postId);
     }
 
-    /**
-     * 批量加载列表页互动汇总。
-     * 内容卡片只补互动状态，不把用户态写回公共缓存。
-     */
-    private Map<String, InteractionSummary> loadPageInteractionSummaries(List<KnowPostFeedRow> rows, long viewerUserId) {
-        Map<String, InteractionSummary> summaryMap = new LinkedHashMap<String, InteractionSummary>();
+    private Map<String, InteractionSummary> loadPageInteractionSummaries(
+            List<KnowPostFeedRow> rows, long viewerUserId) {
+        Map<String, InteractionSummary> summaryMap = new LinkedHashMap<>();
         if (rows == null || rows.isEmpty()) {
             return summaryMap;
         }
-
-        List<Long> targetIds = new ArrayList<Long>(rows.size());
+        List<Long> targetIds = new ArrayList<>(rows.size());
         for (KnowPostFeedRow row : rows) {
-            long postId = parseOptionalUserId(row.postId());
+            long postId = toLong(row.postId());
             if (postId > 0L) {
                 targetIds.add(postId);
             }
@@ -816,32 +665,16 @@ public class ContentServiceImpl implements ContentService {
         return interactionService.summaryBatch(viewerUserId, "post", targetIds);
     }
 
-    /**
-     * 为 discover 同步加载互动汇总。
-     * discover 当前只收公开已发布内容，因此这里统一使用匿名视角读取聚合计数。
-     *
-     * @param postId 内容 ID
-     * @return discover 需要的互动汇总
-     */
-    private InteractionSummary loadDiscoverInteractionSummary(String postId) {
-        long targetId = parseOptionalUserId(postId);
+    private InteractionSummary loadDiscoverInteractionSummary(String postIdStr) {
+        long targetId = toLong(postIdStr);
         if (targetId <= 0L) {
             return null;
         }
         return interactionService.summary(0L, "post", targetId);
     }
 
-    /**
-     * 构建详情页作者信息。
-     *
-     * @param creatorId 作者 ID
-     * @param nickname 作者昵称
-     * @param avatar 作者头像
-     * @param viewerUserId 当前查看者 ID
-     * @return 作者信息
-     */
     private PostAuthor buildAuthor(String creatorId, String nickname, String avatar, long viewerUserId) {
-        long creatorUserId = parseOptionalUserId(creatorId);
+        long creatorUserId = toLong(creatorId);
         UserSocialCounterData socialCounters = creatorUserId > 0L
                 ? userSocialCounterService.getUserSocialCounter(creatorUserId)
                 : null;
@@ -849,129 +682,74 @@ public class ContentServiceImpl implements ContentService {
         return new PostAuthor(creatorId, nickname, avatar, socialCounters, relationStatus);
     }
 
-    /**
-     * 批量装配列表中的作者信息，避免同一作者重复查询。
-     *
-     * @param rows 当前页面的内容行
-     * @param viewerUserId 当前查看者 ID
-     * @return 以作者 ID 为键的作者信息映射
-     */
     private Map<String, PostAuthor> loadAuthors(List<KnowPostFeedRow> rows, long viewerUserId) {
-        Map<String, PostAuthor> authorMap = new LinkedHashMap<String, PostAuthor>();
+        Map<String, PostAuthor> authorMap = new LinkedHashMap<>();
         if (rows == null || rows.isEmpty()) {
             return authorMap;
         }
-
         for (KnowPostFeedRow row : rows) {
             if (row == null || !hasText(row.creatorId()) || authorMap.containsKey(row.creatorId())) {
                 continue;
             }
-            authorMap.put(
-                    row.creatorId(),
-                    buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId)
-            );
+            authorMap.put(row.creatorId(),
+                    buildAuthor(row.creatorId(), row.authorNickname(), row.authorAvatar(), viewerUserId));
         }
         return authorMap;
     }
 
-    /**
-     * 解析当前查看者与作者之间的关系态。
-     *
-     * @param viewerUserId 当前查看者 ID
-     * @param creatorUserId 作者用户 ID
-     * @return 关系态结果
-     */
     private RelationStatusData resolveRelationStatus(long viewerUserId, long creatorUserId) {
-        if (creatorUserId <= 0L) {
-            return new RelationStatusData(false, false, false);
-        }
-        if (viewerUserId <= 0L) {
+        if (creatorUserId <= 0L || viewerUserId <= 0L) {
             return new RelationStatusData(false, false, false);
         }
         return followService.relationStatus(viewerUserId, creatorUserId);
     }
 
-    /**
-     * 同步作者已发布内容数。
-     * 这里对齐 zhiguang 的做法，发布和删除时直接维护用户维 posts 槽位。
-     *
-     * @param creatorId 作者用户 ID
-     * @param delta 计数变化量
-     */
-    private void incrementPublishedPostCounter(String creatorId, int delta) {
-        long creatorUserId = parseOptionalUserId(creatorId);
-        if (creatorUserId <= 0L || delta == 0) {
+    private void incrementPublishedPostCounter(long creatorId, int delta) {
+        if (creatorId <= 0L || delta == 0) {
             return;
         }
-        userSocialCounterService.incrementPosts(creatorUserId, delta);
+        userSocialCounterService.incrementPosts(creatorId, delta);
     }
 
-    /**
-     * 规范化页码。
-     */
     private int normalizePage(int page) {
         return Math.max(page, 1);
     }
 
-    /**
-     * 规范化分页大小。
-     */
     private int normalizePageSize(int size) {
         return Math.min(Math.max(size, 1), 50);
     }
 
-    /**
-     * 解析可选内容 ID。
-     */
-    private Long parseOptionalPostId(String rawPostId) {
-        if (!hasText(rawPostId)) {
+    private Long toLongOrNull(String raw) {
+        if (!hasText(raw)) {
             return null;
         }
         try {
-            return Long.valueOf(rawPostId.trim());
+            return Long.valueOf(raw.trim());
         } catch (Exception ex) {
             return null;
         }
     }
 
-    /**
-     * 解析可选用户 ID。
-     * 对匿名态或异常值统一回退为 0，避免影响公开读链路。
-     */
-    private long parseOptionalUserId(String rawUserId) {
-        if (!hasText(rawUserId)) {
+    private long toLong(String raw) {
+        if (!hasText(raw)) {
             return 0L;
         }
         try {
-            return Long.parseLong(rawUserId.trim());
+            return Long.parseLong(raw.trim());
         } catch (Exception ex) {
             return 0L;
         }
     }
 
-    /**
-     * 将 long 计数安全收缩为 int。
-     *
-     * @param value long 计数值
-     * @return 安全转换后的 int 值
-     */
     private int safeToInt(long value) {
-        if (value <= 0L) {
-            return 0;
-        }
+        if (value <= 0L) return 0;
         return value >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
     }
 
-    /**
-     * 判断是否携带经纬度。
-     */
     private boolean hasLocation(Double latitude, Double longitude) {
         return latitude != null && longitude != null;
     }
 
-    /**
-     * 序列化 JSON。
-     */
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -980,42 +758,27 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
-    /**
-     * 解析字符串数组 JSON。
-     */
     private List<String> parseStringList(String json) {
         if (!hasText(json)) {
             return List.of();
         }
         try {
-            return objectMapper.readValue(json, new TypeReference<List<String>>() {
-            });
+            return objectMapper.readValue(json, new TypeReference<List<String>>() {});
         } catch (JsonProcessingException ex) {
             return List.of();
         }
     }
 
-    /**
-     * 判断字符串是否有内容。
-     */
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
 
-    /**
-     * 规范化可空文本。
-     */
     private String normalizeNullableText(String value) {
-        if (value == null) {
-            return null;
-        }
+        if (value == null) return null;
         String normalized = value.trim();
         return normalized.isEmpty() ? null : normalized;
     }
 
-    /**
-     * 截断过长错误信息，避免写入 outbox 时超长。
-     */
     private String abbreviateError(String errorMessage) {
         if (errorMessage == null || errorMessage.isBlank()) {
             return "unknown";
