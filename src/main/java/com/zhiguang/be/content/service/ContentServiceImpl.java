@@ -126,6 +126,7 @@ public class ContentServiceImpl implements ContentService {
      * 参考 zhiguang，草稿阶段直接固定为 image_text。
      */
     @Transactional
+    @Override
     public DraftData createDraft(String creatorId) {
         Instant now = Instant.now();
         String postId = String.valueOf(snowflakeIdGenerator.nextId());
@@ -162,6 +163,7 @@ public class ContentServiceImpl implements ContentService {
      * 查询公开内容流。
      * 当前阶段先对齐 zhiguang 的返回结构，互动字段暂以默认值占位。
      */
+    @Override
     public PostPageData getPublicFeed(String viewerId, int page, int size) {
         int safeSize = normalizePageSize(size);
         int safePage = normalizePage(page);
@@ -202,14 +204,10 @@ public class ContentServiceImpl implements ContentService {
     }
 
     /**
-     * 创建预签名上传地址。
-     * 当前阶段只区分正文与图片，封面统一走图片目录。
-     */
-
-    /**
-     * 确认正文上传成功。
+     * 确认正文上传成功，将草稿转为已发布内容。
      */
     @Transactional
+    @Override
     public void confirmContent(String creatorId, String postId, ConfirmContentRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertMutable(entity);
@@ -251,6 +249,7 @@ public class ContentServiceImpl implements ContentService {
      * 更新文章元数据。
      */
     @Transactional
+    @Override
     public PostDetail updateMetadata(String creatorId, String postId, UpdatePostMetadataRequest request) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertMutable(entity);
@@ -328,6 +327,7 @@ public class ContentServiceImpl implements ContentService {
      * 发布文章。
      */
     @Transactional
+    @Override
     public PostDetail publish(String creatorId, String postId) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         if (STATUS_PUBLISHED.equals(entity.status())) {
@@ -362,6 +362,7 @@ public class ContentServiceImpl implements ContentService {
      * 更新文章置顶状态。
      */
     @Transactional
+    @Override
     public PostDetail updateTop(String creatorId, String postId, boolean isTop) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertPublished(entity);
@@ -382,6 +383,7 @@ public class ContentServiceImpl implements ContentService {
      * 更新文章可见性。
      */
     @Transactional
+    @Override
     public PostDetail updateVisibility(String creatorId, String postId, String visibility) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         assertPublished(entity);
@@ -404,6 +406,7 @@ public class ContentServiceImpl implements ContentService {
      * 删除文章。
      */
     @Transactional
+    @Override
     public void delete(String creatorId, String postId) {
         KnowPostEntity entity = loadOwnedPost(postId, creatorId);
         if (STATUS_DELETED.equals(entity.status())) {
@@ -430,6 +433,7 @@ public class ContentServiceImpl implements ContentService {
      * 查询文章详情。
      * 当前阶段对齐 zhiguang 的公开访问策略，并额外让 followers 可见性真正生效。
      */
+    @Override
     public PostDetail getDetail(String postId, String viewerId) {
         KnowPostDetailRow row = knowPostMapper.findDetailById(postId);
         if (row == null || STATUS_DELETED.equals(row.status())) {

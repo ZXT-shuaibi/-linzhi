@@ -152,10 +152,7 @@ public class StorageService {
     public StorageObjectMetadata validateUploadedObject(String objectKey, String expectedEtag, Long expectedSize) {
         String normalizedObjectKey = requireText(objectKey, "objectKey is required");
         if (!isOssProvider()) {
-            String publicBaseUrl = properties.getPublicBaseUrl();
-            if (!normalizedObjectKey.startsWith(publicBaseUrl)) {
-                throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid object key for mock provider");
-            }
+            validateMockObjectKey(normalizedObjectKey);
             if (expectedSize != null && expectedSize <= 0) {
                 throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid object size");
             }
@@ -299,6 +296,29 @@ public class StorageService {
             return "knowpost_image";
         }
         throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Unsupported objectKey");
+    }
+
+    private void validateMockObjectKey(String objectKey) {
+        if (objectKey.startsWith("avatars/")) {
+            return;
+        }
+        if (!objectKey.startsWith("posts/")) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Unsupported objectKey");
+        }
+        int postIdStart = "posts/".length();
+        int postIdEnd = objectKey.indexOf('/', postIdStart);
+        if (postIdEnd <= postIdStart) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid objectKey");
+        }
+        String postId = objectKey.substring(postIdStart, postIdEnd);
+        if (!postId.matches("^\\d+$")) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Invalid objectKey");
+        }
+        String contentPrefix = "posts/" + postId + "/content/";
+        String imagePrefix = "posts/" + postId + "/images/";
+        if (!objectKey.startsWith(contentPrefix) && !objectKey.startsWith(imagePrefix)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "Unsupported objectKey");
+        }
     }
 
     private String buildUploadUrl(String objectKey, String contentType, Instant expireAt) {

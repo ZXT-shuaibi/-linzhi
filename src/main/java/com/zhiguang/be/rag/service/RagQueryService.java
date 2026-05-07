@@ -5,6 +5,8 @@ import com.zhiguang.be.llm.service.RagAnswerService;
 import com.zhiguang.be.rag.config.RagProperties;
 import com.zhiguang.be.rag.model.RagQueryRequest;
 import com.zhiguang.be.rag.model.SseChunk;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -22,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 public class RagQueryService {
 
+    private static final Logger log = LoggerFactory.getLogger(RagQueryService.class);
     private final RagIndexService ragIndexService;
     private final RagAnswerService ragAnswerService;
     private final ObjectMapper objectMapper;
@@ -85,12 +88,13 @@ public class RagQueryService {
             send(emitter, "done", new SseChunk("done", seq.get(), "", references, "stop", null));
             emitter.complete();
         } catch (Exception ex) {
+            log.warn("RAG stream error", ex);
             try {
                 send(emitter, "error", new SseChunk("error", 1, "", List.of(), null, "RAG_INTERNAL_ERROR"));
+                emitter.complete();
             } catch (Exception ignored) {
-                // 这里不再继续向外抛异常，避免覆盖原始错误状态。
+                emitter.completeWithError(ex);
             }
-            emitter.completeWithError(ex);
         }
     }
 

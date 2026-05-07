@@ -133,12 +133,18 @@ public class DiscoverController {
         @RequestParam Double lat,
         @RequestParam Double lng,
         @RequestParam(required = false) String title,
+        @RequestParam(required = false) String summary,
+        @RequestParam(required = false) String coverUrl,
         @RequestParam(required = false) String address,
+        @RequestParam(required = false) String authorId,
+        @RequestParam(required = false) String authorName,
+        @RequestParam(required = false) String authorAvatar,
+        @RequestParam(required = false) String tagsJson,
         @RequestParam(required = false) Long publishTime,
         @RequestParam(required = false) Integer likeCount,
         @RequestParam(required = false) Integer favoriteCount
     ) {
-        lbsDiscoverService.addLocation(id, type, lat, lng, title, null, null, address, null, null, null, null, publishTime, likeCount, favoriteCount);
+        lbsDiscoverService.addLocation(id, type, lat, lng, title, summary, coverUrl, address, authorId, authorName, authorAvatar, tagsJson, publishTime, likeCount, favoriteCount);
         return ApiResponse.success(null);
     }
 

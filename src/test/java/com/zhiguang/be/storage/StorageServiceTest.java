@@ -180,6 +180,33 @@ class StorageServiceTest {
         assertEquals(ErrorCode.FORBIDDEN, exception.errorCode());
     }
 
+    @Test
+    void validateUploadedObjectShouldAcceptMockObjectKey() {
+        StorageObjectMetadata metadata = storageService.validateUploadedObject(
+                "posts/1001/content/content.md",
+                "\"etag-1\"",
+                128L
+        );
+
+        assertEquals("posts/1001/content/content.md", metadata.objectKey());
+        assertEquals("\"etag-1\"", metadata.etag());
+        assertEquals(128L, metadata.size());
+    }
+
+    @Test
+    void validateUploadedObjectShouldRejectPublicUrlInMockMode() {
+        BusinessException exception = assertThrows(
+                BusinessException.class,
+                () -> storageService.validateUploadedObject(
+                        "https://mock-oss.local/public/posts/1001/content/content.md",
+                        "\"etag-1\"",
+                        128L
+                )
+        );
+
+        assertEquals(ErrorCode.BAD_REQUEST, exception.errorCode());
+    }
+
     private KnowPostEntity post(String postId, String creatorId) {
         return new KnowPostEntity(
                 postId,

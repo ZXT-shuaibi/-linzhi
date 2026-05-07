@@ -8,7 +8,7 @@ import com.zhiguang.be.content.dto.DraftData;
 import com.zhiguang.be.content.dto.PostDetail;
 import com.zhiguang.be.content.dto.PostPageData;
 import com.zhiguang.be.content.dto.UpdatePostMetadataRequest;
-import com.zhiguang.be.content.service.ContentServiceImpl;
+import com.zhiguang.be.content.service.ContentService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
 import org.springframework.http.HttpStatus;
@@ -35,12 +35,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1")
 public class ContentController {
 
-    private final ContentServiceImpl contentService;
+    private final ContentService contentService;
 
     /**
      * 注入内容服务。
      */
-    public ContentController(ContentServiceImpl contentService) {
+    public ContentController(ContentService contentService) {
         this.contentService = contentService;
     }
 
