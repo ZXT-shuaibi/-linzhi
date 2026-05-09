@@ -1,6 +1,7 @@
 package com.zhiguang.be.search;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import jakarta.validation.constraints.Min;
@@ -43,7 +44,7 @@ public class SearchController {
             @RequestParam(value = "tag", required = false) String tag,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(searchService.searchPosts(q, page, size, searchAfter, currentViewerId(jwt), lat, lng, radius, tag));
+        return ApiResponse.success(searchService.searchPosts(q, page, size, searchAfter, JwtSubjects.optionalUserId(jwt), lat, lng, radius, tag));
     }
 
     /**

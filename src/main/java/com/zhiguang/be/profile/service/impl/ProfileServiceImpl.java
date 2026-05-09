@@ -1,10 +1,9 @@
 package com.zhiguang.be.profile.service.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.content.dto.PostPageData;
 import com.zhiguang.be.content.service.ContentService;
 import com.zhiguang.be.profile.mapper.ProfileMapper;
@@ -36,8 +35,6 @@ import java.util.Set;
 @Service
 public class ProfileServiceImpl implements ProfileService {
 
-    private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {
-    };
     private static final Set<String> CLEARABLE_PROFILE_FIELDS = Set.of("bio", "birthday", "school");
 
     private final ProfileMapper profileMapper;
@@ -273,26 +270,11 @@ public class ProfileServiceImpl implements ProfileService {
     }
 
     private List<String> parseTags(String tagsJson) {
-        if (tagsJson == null || tagsJson.isBlank()) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(tagsJson, STRING_LIST_TYPE);
-        } catch (JsonProcessingException ex) {
-            return List.of();
-        }
+        return Jsons.parseStringList(objectMapper, tagsJson);
     }
 
     private String toJson(List<String> tags) {
-        try {
-            return objectMapper.writeValueAsString(tags);
-        } catch (JsonProcessingException ex) {
-            throw new BusinessException(
-                    ErrorCode.INTERNAL_ERROR,
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Failed to serialize tags"
-            );
-        }
+        return Jsons.toJson(objectMapper, tags, "Failed to serialize tags");
     }
 
     private ProfileListData toProfileListData(long viewerUserId, FollowListData followListData) {

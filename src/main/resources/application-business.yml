@@ -7,4 +7,4 @@ threadpool:
   trade-order:
     rejection-policy: caller-runs
   rag-query:
-    rejection-policy: caller-runs
+    rejection-policy: abort

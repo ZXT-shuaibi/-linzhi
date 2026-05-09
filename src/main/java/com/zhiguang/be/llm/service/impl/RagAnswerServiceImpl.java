@@ -25,7 +25,7 @@ public class RagAnswerServiceImpl implements RagAnswerService {
     }
 
     @Override
-    public boolean streamAnswer(String question, List<Context> contexts, Consumer<String> consumer) {
-        return llmGateway.streamRagAnswer(question, contexts == null ? List.of() : contexts, consumer);
+    public boolean streamAnswer(String question, List<Context> contexts, Consumer<String> consumer, CancellationSignal cancellationSignal) {
+        return llmGateway.streamRagAnswer(question, contexts == null ? List.of() : contexts, consumer, cancellationSignal);
     }
 }

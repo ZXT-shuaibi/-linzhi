@@ -1,6 +1,7 @@
 package com.zhiguang.be.profile.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.content.dto.PostPageData;
@@ -47,7 +48,7 @@ public class ProfileController {
      */
     @GetMapping("/me")
     public ApiResponse<ProfileData> me(@AuthenticationPrincipal Jwt jwt) {
-        return ApiResponse.success(profileService.me(requireUserId(jwt)));
+        return ApiResponse.success(profileService.me(JwtSubjects.requireUserId(jwt)));
     }
 
     /**
@@ -58,7 +59,7 @@ public class ProfileController {
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody ProfilePatchRequest request
     ) {
-        return ApiResponse.success(profileService.updateProfile(requireUserId(jwt), request));
+        return ApiResponse.success(profileService.updateProfile(JwtSubjects.requireUserId(jwt), request));
     }
 
     /**
@@ -69,7 +70,7 @@ public class ProfileController {
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody ProfileAvatarRequest request
     ) {
-        return ApiResponse.success(profileService.updateAvatar(requireUserId(jwt), request));
+        return ApiResponse.success(profileService.updateAvatar(JwtSubjects.requireUserId(jwt), request));
     }
 
     /**
@@ -81,7 +82,7 @@ public class ProfileController {
             @PathVariable @Min(1) long userId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getProfile(optionalUserId(jwt), userId));
+        return ApiResponse.success(profileService.getProfile(JwtSubjects.optionalUserId(jwt), userId));
     }
 
     /**
@@ -94,7 +95,7 @@ public class ProfileController {
             @RequestParam(defaultValue = "20") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getPublishedPosts(optionalUserId(jwt), userId, page, size));
+        return ApiResponse.success(profileService.getPublishedPosts(JwtSubjects.optionalUserId(jwt), userId, page, size));
     }
 
     /**
@@ -107,7 +108,7 @@ public class ProfileController {
             @RequestParam(defaultValue = "10") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getFollowingProfiles(optionalUserId(jwt), userId, page, size));
+        return ApiResponse.success(profileService.getFollowingProfiles(JwtSubjects.optionalUserId(jwt), userId, page, size));
     }
 
     /**
@@ -120,7 +121,7 @@ public class ProfileController {
             @RequestParam(defaultValue = "10") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getFollowerProfiles(optionalUserId(jwt), userId, page, size));
+        return ApiResponse.success(profileService.getFollowerProfiles(JwtSubjects.optionalUserId(jwt), userId, page, size));
     }
 
     /**

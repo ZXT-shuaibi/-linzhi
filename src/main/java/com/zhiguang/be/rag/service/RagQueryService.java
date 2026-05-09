@@ -2,9 +2,12 @@ package com.zhiguang.be.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.llm.service.RagAnswerService;
+import com.zhiguang.be.common.exception.BusinessException;
+import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.rag.config.RagProperties;
 import com.zhiguang.be.rag.model.RagQueryRequest;
 import com.zhiguang.be.rag.model.SseChunk;
+import org.springframework.http.HttpStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -15,9 +18,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -61,8 +66,17 @@ public class RagQueryService implements RagQueryOperations {
         emitter.onTimeout(cancellation::cancel);
         emitter.onError(ignored -> cancellation.cancel());
 
-        Future<?> future = submitStreamTask(() -> doStream(request, emitter, cancellation));
-        cancellation.attach(future);
+        try {
+            Future<?> future = submitStreamTask(() -> doStream(request, emitter, cancellation));
+            cancellation.attach(future);
+        } catch (RejectedExecutionException ex) {
+            cancellation.cancel();
+            throw new BusinessException(
+                    ErrorCode.RATE_LIMITED,
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "RAG query is busy, please try again later"
+            );
+        }
         return emitter;
     }
 
@@ -88,7 +102,8 @@ public class RagQueryService implements RagQueryOperations {
             boolean streamed = ragAnswerService.streamAnswer(
                     request.question(),
                     contexts,
-                    piece -> sendOrCancel(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null), cancellation)
+                    piece -> sendOrCancel(emitter, "message", new SseChunk("message", seq.getAndIncrement(), piece, references, null, null), cancellation),
+                    cancellation
             );
 
             cancellation.throwIfCancelled();
@@ -207,10 +222,11 @@ public class RagQueryService implements RagQueryOperations {
         return CompletableFuture.runAsync(task, ragQueryExecutor);
     }
 
-    private static final class StreamCancellation {
+    private static final class StreamCancellation implements RagAnswerService.CancellationSignal {
         private final AtomicBoolean cancelled = new AtomicBoolean(false);
         private final AtomicBoolean completed = new AtomicBoolean(false);
         private final AtomicReference<Future<?>> futureRef = new AtomicReference<>();
+        private final List<Runnable> cancellationActions = new CopyOnWriteArrayList<>();
 
         private void attach(Future<?> future) {
             futureRef.set(future);
@@ -223,24 +239,59 @@ public class RagQueryService implements RagQueryOperations {
             if (completed.get()) {
                 return;
             }
-            cancelled.set(true);
+            boolean firstCancel = cancelled.compareAndSet(false, true);
             Future<?> future = futureRef.get();
             if (future != null) {
                 future.cancel(true);
+            }
+            if (firstCancel) {
+                runCancellationActions();
             }
         }
 
         private void markCompleted() {
             completed.set(true);
+            cancellationActions.clear();
         }
 
-        private boolean isCancelled() {
+        @Override
+        public boolean isCancelled() {
             return cancelled.get() || Thread.currentThread().isInterrupted();
+        }
+
+        @Override
+        public void onCancel(Runnable cancellationAction) {
+            if (cancellationAction == null || completed.get()) {
+                return;
+            }
+            if (isCancelled()) {
+                runCancellationAction(cancellationAction);
+                return;
+            }
+            cancellationActions.add(cancellationAction);
+            if (isCancelled() && cancellationActions.remove(cancellationAction)) {
+                runCancellationAction(cancellationAction);
+            }
         }
 
         private void throwIfCancelled() {
             if (isCancelled()) {
                 throw new CancellationException("RAG stream cancelled");
+            }
+        }
+
+        private void runCancellationActions() {
+            for (Runnable cancellationAction : cancellationActions) {
+                runCancellationAction(cancellationAction);
+            }
+            cancellationActions.clear();
+        }
+
+        private void runCancellationAction(Runnable cancellationAction) {
+            try {
+                cancellationAction.run();
+            } catch (Exception ignored) {
+                // Cancellation cleanup is best effort.
             }
         }
     }

@@ -2,8 +2,8 @@ package com.zhiguang.be.search;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.Refresh;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
 import jakarta.annotation.PostConstruct;
@@ -301,26 +301,7 @@ public class SearchIndexService {
     }
 
     private List<String> parseStringList(String json) {
-        if (json == null || json.isBlank()) {
-            return List.of();
-        }
-        try {
-            List<String> parsed = objectMapper.readValue(json, new TypeReference<List<String>>() {
-            });
-            List<String> normalized = new ArrayList<String>();
-            for (String item : parsed) {
-                if (item == null) {
-                    continue;
-                }
-                String trimmed = item.trim();
-                if (!trimmed.isEmpty() && !normalized.contains(trimmed)) {
-                    normalized.add(trimmed);
-                }
-            }
-            return normalized;
-        } catch (Exception ignored) {
-            return List.of();
-        }
+        return Jsons.parseNormalizedStringList(objectMapper, json);
     }
 
     private String firstListValue(List<String> values) {

@@ -1,6 +1,7 @@
 package com.zhiguang.be.llm.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.guard.RateLimiter;
 import com.zhiguang.be.llm.model.KnowPostDescriptionData;
 import com.zhiguang.be.llm.model.KnowPostDescriptionRequest;
 import com.zhiguang.be.llm.service.KnowPostDescriptionService;
@@ -32,6 +33,7 @@ public class LlmController {
      * 根据正文生成帖子描述。
      */
     @PostMapping("/posts/description")
+    @RateLimiter(keyPrefix = "llm:description", windowMillis = 60_000, limit = 20, message = "Description generation is too frequent")
     public ApiResponse<KnowPostDescriptionData> generateKnowPostDescription(
             @Valid @RequestBody KnowPostDescriptionRequest request
     ) {

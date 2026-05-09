@@ -1,6 +1,5 @@
 package com.zhiguang.be.social.service.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
@@ -123,7 +122,7 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public FollowActionData follow(long currentUserId, long followeeId) {
-        ensureAuthenticatedUser(currentUserId);
+        SocialServiceSupport.ensureAuthenticatedUser(currentUserId);
         enforceFollowRateLimit(currentUserId);
         validateFollowTarget(currentUserId, followeeId);
         if (socialMapper.existsActiveFollowing(currentUserId, followeeId) > 0) {
@@ -142,7 +141,7 @@ public class FollowServiceImpl implements FollowService {
                 "following",
                 relationId,
                 "FOLLOW_CREATED",
-                serialize(payload)
+                SocialServiceSupport.serialize(objectMapper, payload)
         );
 
         Transactions.runAfterCommit(() -> projectRelationEvent(payload));
@@ -179,7 +178,7 @@ public class FollowServiceImpl implements FollowService {
                     "following",
                     relationId,
                     "FOLLOW_REMOVED",
-                    serialize(payload)
+                    SocialServiceSupport.serialize(objectMapper, payload)
             );
 
             Transactions.runAfterCommit(() -> projectRelationEvent(payload));
@@ -349,8 +348,8 @@ public class FollowServiceImpl implements FollowService {
             }
             items.add(new FollowUserItem(
                     String.valueOf(id),
-                    toStringValue(userRow.get("nickname")),
-                    toStringValue(userRow.get("avatar")),
+                    SocialServiceSupport.toStringValue(userRow.get("nickname")),
+                    SocialServiceSupport.toStringValue(userRow.get("avatar")),
                     followedAtMap.getOrDefault(id, Instant.now())
             ));
         }
@@ -375,7 +374,7 @@ public class FollowServiceImpl implements FollowService {
 
         String key = followingMode ? SocialRedisKeys.followingKey(userId) : SocialRedisKeys.followerKey(userId);
         for (Map<String, Object> row : rows) {
-            String value = toStringValue(row.get("userId"));
+            String value = SocialServiceSupport.toStringValue(row.get("userId"));
             if (value == null) {
                 continue;
             }
@@ -405,9 +404,9 @@ public class FollowServiceImpl implements FollowService {
         List<FollowUserItem> items = new ArrayList<FollowUserItem>(rows.size());
         for (Map<String, Object> row : rows) {
             items.add(new FollowUserItem(
-                    toStringValue(row.get("userId")),
-                    toStringValue(row.get("nickname")),
-                    toStringValue(row.get("avatar")),
+                    SocialServiceSupport.toStringValue(row.get("userId")),
+                    SocialServiceSupport.toStringValue(row.get("nickname")),
+                    SocialServiceSupport.toStringValue(row.get("avatar")),
                     toInstant(row.get("followedAt"))
             ));
         }
@@ -421,7 +420,7 @@ public class FollowServiceImpl implements FollowService {
      * @param followeeId 目标用户 ID
      */
     private void validateFollowTarget(long currentUserId, long followeeId) {
-        ensureAuthenticatedUser(currentUserId);
+        SocialServiceSupport.ensureAuthenticatedUser(currentUserId);
         ensureUserExists(currentUserId, "当前用户不存在");
         if (currentUserId == followeeId) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "不能关注自己");
@@ -438,17 +437,6 @@ public class FollowServiceImpl implements FollowService {
     private void ensureUserExists(long userId, String message) {
         if (socialMapper.existsUser(userId) <= 0) {
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, message);
-        }
-    }
-
-    /**
-     * 校验当前操作用户是否已登录。
-     *
-     * @param currentUserId 当前操作用户 ID
-     */
-    private void ensureAuthenticatedUser(long currentUserId) {
-        if (currentUserId <= 0L) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
         }
     }
 
@@ -530,30 +518,6 @@ public class FollowServiceImpl implements FollowService {
             log.warn("本地关系投影失败，eventId={}, eventType={}",
                     payload.getEventId(), payload.getEventType(), ex);
         }
-    }
-
-    /**
-     * 序列化 outbox 事件载荷。
-     *
-     * @param payload 事件对象
-     * @return JSON 字符串
-     */
-    private String serialize(Object payload) {
-        try {
-            return objectMapper.writeValueAsString(payload);
-        } catch (JsonProcessingException ex) {
-            throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "事件序列化失败");
-        }
-    }
-
-    /**
-     * 将任意对象转成字符串。
-     *
-     * @param value 原始对象
-     * @return 字符串值
-     */
-    private String toStringValue(Object value) {
-        return value == null ? null : String.valueOf(value);
     }
 
     /**

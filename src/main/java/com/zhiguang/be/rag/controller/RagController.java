@@ -1,6 +1,7 @@
 package com.zhiguang.be.rag.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.guard.RateLimiter;
 import com.zhiguang.be.rag.model.RagQueryRequest;
 import com.zhiguang.be.rag.service.RagIndexOperations;
 import com.zhiguang.be.rag.service.RagQueryOperations;
@@ -39,6 +40,7 @@ public class RagController {
      * 发起流式问答。
      */
     @PostMapping(value = "/queries/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @RateLimiter(keyPrefix = "rag:stream", windowMillis = 60_000, limit = 20, message = "RAG query is too frequent")
     public SseEmitter stream(@Valid @RequestBody RagQueryRequest request) {
         return ragQueryService.stream(request);
     }

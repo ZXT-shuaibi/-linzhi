@@ -22,7 +22,10 @@ import org.springframework.data.geo.Metrics;
 import org.springframework.data.geo.Point;
 import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.connection.RedisGeoCommands.GeoRadiusCommandArgs;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -59,8 +62,15 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private static final String CACHE_LOCK_KEY_PREFIX = "lbs:lock:";
     private static final String CACHE_VERSION_KEY_PREFIX = "lbs:version:";
     private static final String CONTENT_KEY_PREFIX = "lbs:content:";
+    private static final String MIXED_TYPE = "mixed";
     private static final DefaultRedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
         "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        Long.class
+    );
+    private static final DefaultRedisScript<Long> INCREMENT_NON_NEGATIVE_HASH_FIELD_SCRIPT = new DefaultRedisScript<>(
+        "local nextValue = redis.call('HINCRBY', KEYS[1], ARGV[1], tonumber(ARGV[2])); "
+                + "if nextValue < 0 then redis.call('HSET', KEYS[1], ARGV[1], 0); return 0 end; "
+                + "return nextValue",
         Long.class
     );
 
@@ -169,6 +179,35 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      * @return 搜索结果
      */
     private NearbySearchResponse performSearch(NearbySearchRequest request, String type) {
+        List<String> searchTypes = resolveSearchTypes(type);
+        List<NearbyItem> sortedItems = new ArrayList<>();
+        int fetched = 0;
+        for (String searchType : searchTypes) {
+            SearchResultChunk chunk = performSearchByType(request, searchType);
+            sortedItems.addAll(chunk.items());
+            fetched += chunk.fetched();
+        }
+
+        if (sortedItems.isEmpty()) {
+            return emptyResponse(request);
+        }
+
+        sortedItems.sort(Comparator.comparingDouble(NearbyItem::score).reversed());
+
+        int total = sortedItems.size();
+        int fromIndex = calculateFromIndex(request.page(), request.size(), total);
+        int toIndex = calculateToIndex(fromIndex, request.size(), total);
+        List<NearbyItem> pageItems = sortedItems.subList(fromIndex, toIndex);
+
+        if (fetched >= calculateRedisCount(request) * searchTypes.size()) {
+            log.debug("LBS nearby search hit Redis fetch cap. type={}, requestedPage={}, requestedSize={}, fetched={}",
+                type, request.page(), request.size(), fetched);
+        }
+        log.debug("LBS nearby search completed. type={}, total={}, page={}, size={}", type, total, request.page(), request.size());
+        return new NearbySearchResponse(pageItems, total, request.page(), request.size());
+    }
+
+    private SearchResultChunk performSearchByType(NearbySearchRequest request, String type) {
         String geoKey = GEO_KEY_PREFIX + type;
         Point center = toRedisPoint(request.lat(), request.lng());
         Circle circle = new Circle(center, new Distance(request.radius() / 1000.0, Metrics.KILOMETERS));
@@ -182,7 +221,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             if (failOpenOnSearchError) {
                 log.warn("LBS nearby geo query failed and fail-open is enabled. type={}, lat={}, lng={}, radius={}",
                     type, request.lat(), request.lng(), request.radius(), ex);
-                return emptyResponse(request);
+                return SearchResultChunk.empty();
             }
             log.error("Failed to execute LBS nearby geo query. type={}, lat={}, lng={}, radius={}",
                 type, request.lat(), request.lng(), request.radius(), ex);
@@ -190,28 +229,16 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         }
 
         if (results == null || results.getContent().isEmpty()) {
-            return emptyResponse(request);
+            return SearchResultChunk.empty();
         }
 
         Map<String, LbsContentMetadata> metadataById = batchReadContentMetadata(type, results.getContent());
-        List<NearbyItem> sortedItems = new ArrayList<>();
+        List<NearbyItem> items = new ArrayList<>();
         for (GeoResult<RedisGeoCommands.GeoLocation<String>> result : results.getContent()) {
             Optional<NearbyItem> nearbyItem = toNearbyItem(type, result, metadataById, normalizedTag);
-            nearbyItem.ifPresent(sortedItems::add);
+            nearbyItem.ifPresent(items::add);
         }
-        sortedItems.sort(Comparator.comparingDouble(NearbyItem::score).reversed());
-
-        int total = sortedItems.size();
-        int fromIndex = calculateFromIndex(request.page(), request.size(), total);
-        int toIndex = calculateToIndex(fromIndex, request.size(), total);
-        List<NearbyItem> pageItems = sortedItems.subList(fromIndex, toIndex);
-
-        if (results.getContent().size() >= calculateRedisCount(request)) {
-            log.debug("LBS nearby search hit Redis fetch cap. type={}, requestedPage={}, requestedSize={}, fetched={}",
-                type, request.page(), request.size(), results.getContent().size());
-        }
-        log.debug("LBS nearby search completed. type={}, total={}, page={}, size={}", type, total, request.page(), request.size());
-        return new NearbySearchResponse(pageItems, total, request.page(), request.size());
+        return new SearchResultChunk(items, results.getContent().size());
     }
 
     /**
@@ -506,6 +533,7 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
             if (hasDelta(favoriteDelta)) {
                 updateCounterField(contentKey, "favoriteCount", favoriteDelta);
             }
+            bumpCacheVersion(normalizedType);
         } catch (Exception ex) {
             log.warn("Failed to refresh discover interaction stats. type={}, id={}", normalizedType, id, ex);
         }
@@ -587,9 +615,12 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
      * @param delta 增量
      */
     private void updateCounterField(String contentKey, String field, int delta) {
-        Integer current = asInteger(redisTemplate.opsForHash().get(contentKey, field));
-        int next = Math.max(0, (current == null ? 0 : current) + delta);
-        redisTemplate.opsForHash().put(contentKey, field, String.valueOf(next));
+        redisTemplate.execute(
+                INCREMENT_NON_NEGATIVE_HASH_FIELD_SCRIPT,
+                List.of(contentKey),
+                field,
+                String.valueOf(delta)
+        );
     }
 
     /**
@@ -611,6 +642,9 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
     private void bumpCacheVersion(String type) {
         try {
             redisTemplate.opsForValue().increment(CACHE_VERSION_KEY_PREFIX + type);
+            if (!MIXED_TYPE.equals(type)) {
+                redisTemplate.opsForValue().increment(CACHE_VERSION_KEY_PREFIX + MIXED_TYPE);
+            }
         } catch (Exception ex) {
             log.warn("Failed to bump LBS cache version. type={}", type, ex);
         }
@@ -668,10 +702,68 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
         }
 
         String normalized = sanitizeSegment(type);
-        if ("post".equals(normalized) || "mixed".equals(normalized)) {
+        if (MIXED_TYPE.equals(normalized)) {
+            return MIXED_TYPE;
+        }
+        if ("post".equals(normalized)) {
             return discoverProperties.getDefaultType();
         }
         return StringUtils.hasText(normalized) ? normalized : discoverProperties.getDefaultType();
+    }
+
+    private List<String> resolveSearchTypes(String type) {
+        if (!MIXED_TYPE.equals(type)) {
+            return List.of(type);
+        }
+
+        List<String> types = scanGeoTypes();
+        String defaultType = discoverProperties.getDefaultType();
+        if (!types.contains(defaultType)) {
+            types.add(defaultType);
+        }
+        return types;
+    }
+
+    private List<String> scanGeoTypes() {
+        try {
+            List<String> keys = redisTemplate.execute((RedisCallback<List<String>>) connection -> {
+                List<String> result = new ArrayList<>();
+                ScanOptions options = ScanOptions.scanOptions()
+                    .match(GEO_KEY_PREFIX + "*")
+                    .count(100)
+                    .build();
+                Cursor<byte[]> cursor = connection.scan(options);
+                try {
+                    while (cursor.hasNext()) {
+                        result.add(new String(cursor.next(), StandardCharsets.UTF_8));
+                    }
+                } finally {
+                    try {
+                        cursor.close();
+                    } catch (Exception ignored) {
+                        // Best-effort cursor cleanup.
+                    }
+                }
+                return result;
+            });
+            if (keys == null || keys.isEmpty()) {
+                return new ArrayList<>();
+            }
+            List<String> types = new ArrayList<>();
+            for (String key : keys) {
+                if (!StringUtils.hasText(key) || !key.startsWith(GEO_KEY_PREFIX)) {
+                    continue;
+                }
+                String type = key.substring(GEO_KEY_PREFIX.length());
+                if (StringUtils.hasText(type) && !types.contains(type)) {
+                    types.add(type);
+                }
+            }
+            return types;
+        } catch (Exception ex) {
+            log.warn("scan LBS geo types failed", ex);
+            return new ArrayList<>();
+        }
     }
 
     /**
@@ -1270,6 +1362,13 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
          */
         private Double lng() {
             return lng;
+        }
+    }
+
+    private record SearchResultChunk(List<NearbyItem> items, int fetched) {
+
+        private static SearchResultChunk empty() {
+            return new SearchResultChunk(Collections.emptyList(), 0);
         }
     }
 }

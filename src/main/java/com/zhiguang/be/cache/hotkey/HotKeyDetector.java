@@ -26,6 +26,7 @@ public class HotKeyDetector {
     private final ConcurrentHashMap<String, AtomicIntegerArray> counters =
             new ConcurrentHashMap<String, AtomicIntegerArray>();
     private final AtomicInteger currentSegmentIndex = new AtomicInteger(0);
+    private final Object segmentLock = new Object();
     private final int segments;
 
     public HotKeyDetector(CacheProperties cacheProperties) {
@@ -46,13 +47,15 @@ public class HotKeyDetector {
             return;
         }
 
-        int maxTrackedKeys = Math.max(cacheProperties.getHotkey().getMaxTrackedKeys(), 1);
-        if (!counters.containsKey(key) && counters.size() >= maxTrackedKeys) {
-            return;
-        }
+        synchronized (segmentLock) {
+            int maxTrackedKeys = Math.max(cacheProperties.getHotkey().getMaxTrackedKeys(), 1);
+            if (!counters.containsKey(key) && counters.size() >= maxTrackedKeys) {
+                return;
+            }
 
-        AtomicIntegerArray counter = counters.computeIfAbsent(key, ignored -> new AtomicIntegerArray(segments));
-        counter.incrementAndGet(currentSegmentIndex.get());
+            AtomicIntegerArray counter = counters.computeIfAbsent(key, ignored -> new AtomicIntegerArray(segments));
+            counter.incrementAndGet(currentSegmentIndex.get());
+        }
     }
 
     /**
@@ -124,14 +127,16 @@ public class HotKeyDetector {
             return;
         }
 
-        int nextSegmentIndex = (currentSegmentIndex.get() + 1) % segments;
-        currentSegmentIndex.set(nextSegmentIndex);
-        for (Map.Entry<String, AtomicIntegerArray> entry : counters.entrySet()) {
-            AtomicIntegerArray counter = entry.getValue();
-            counter.set(nextSegmentIndex, 0);
-            if (isCold(counter)) {
-                counters.remove(entry.getKey(), counter);
+        synchronized (segmentLock) {
+            int nextSegmentIndex = (currentSegmentIndex.get() + 1) % segments;
+            for (Map.Entry<String, AtomicIntegerArray> entry : counters.entrySet()) {
+                AtomicIntegerArray counter = entry.getValue();
+                counter.set(nextSegmentIndex, 0);
+                if (isCold(counter)) {
+                    counters.remove(entry.getKey(), counter);
+                }
             }
+            currentSegmentIndex.set(nextSegmentIndex);
         }
     }
 

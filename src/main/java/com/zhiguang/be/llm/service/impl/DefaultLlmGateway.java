@@ -29,6 +29,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 
 /**
@@ -157,10 +159,13 @@ public class DefaultLlmGateway implements LlmGateway {
     }
 
     @Override
-    public boolean streamRagAnswer(String question, List<RagAnswerService.Context> contexts, Consumer<String> consumer) {
+    public boolean streamRagAnswer(String question, List<RagAnswerService.Context> contexts, Consumer<String> consumer, RagAnswerService.CancellationSignal cancellationSignal) {
+        Thread streamThread = Thread.currentThread();
+        registerCancellation(cancellationSignal, streamThread::interrupt);
         if (useSpringAiProvider()) {
             boolean emitted = false;
             try {
+                throwIfCancelled(cancellationSignal);
                 Iterable<String> pieces = chatClient.prompt()
                         .system("你是中文知识助手。只能根据提供的上下文作答；如果上下文不足，请明确说明。")
                         .user(buildRagPrompt(question, contexts))
@@ -169,6 +174,7 @@ public class DefaultLlmGateway implements LlmGateway {
                         .content()
                         .toIterable();
                 for (String piece : pieces) {
+                    throwIfCancelled(cancellationSignal);
                     if (!StringUtils.hasText(piece)) {
                         continue;
                     }
@@ -192,19 +198,25 @@ public class DefaultLlmGateway implements LlmGateway {
 
         boolean emitted = false;
         try {
+            throwIfCancelled(cancellationSignal);
             HttpRequest request = buildRequest(buildRagPayload(question, contexts, true));
-            HttpResponse<InputStream> response = httpClient.send(
+            CompletableFuture<HttpResponse<InputStream>> responseFuture = httpClient.sendAsync(
                     request,
                     HttpResponse.BodyHandlers.ofInputStream()
             );
+            registerCancellation(cancellationSignal, () -> responseFuture.cancel(true));
+            HttpResponse<InputStream> response = responseFuture.get();
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalStateException("LLM HTTP status is not successful: " + response.statusCode());
             }
 
-            try (InputStream bodyStream = response.body();
+            InputStream rawBodyStream = response.body();
+            registerCancellation(cancellationSignal, () -> closeQuietly(rawBodyStream));
+            try (InputStream bodyStream = rawBodyStream;
                  BufferedReader reader = new BufferedReader(new InputStreamReader(bodyStream, StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
+                    throwIfCancelled(cancellationSignal);
                     String delta = extractStreamDelta(line);
                     if (!StringUtils.hasText(delta)) {
                         if (isDoneLine(line)) {
@@ -214,6 +226,7 @@ public class DefaultLlmGateway implements LlmGateway {
                     }
                     consumer.accept(delta);
                     emitted = true;
+                    throwIfCancelled(cancellationSignal);
                 }
             }
         } catch (Exception ex) {
@@ -228,15 +241,39 @@ public class DefaultLlmGateway implements LlmGateway {
     }
 
     private void throwIfCancelled(Exception ex) {
-        if (ex instanceof CancellationException cancellationException) {
+        Throwable cause = ex instanceof ExecutionException && ex.getCause() != null ? ex.getCause() : ex;
+        if (cause instanceof CancellationException cancellationException) {
             throw cancellationException;
         }
-        if (ex instanceof InterruptedException) {
+        if (cause instanceof InterruptedException) {
             Thread.currentThread().interrupt();
             throw new CancellationException("LLM request interrupted");
         }
         if (Thread.currentThread().isInterrupted()) {
             throw new CancellationException("LLM request interrupted");
+        }
+    }
+
+    private void throwIfCancelled(RagAnswerService.CancellationSignal cancellationSignal) {
+        if ((cancellationSignal != null && cancellationSignal.isCancelled()) || Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("LLM request cancelled");
+        }
+    }
+
+    private void registerCancellation(RagAnswerService.CancellationSignal cancellationSignal, Runnable cancellationAction) {
+        if (cancellationSignal != null && cancellationAction != null) {
+            cancellationSignal.onCancel(cancellationAction);
+        }
+    }
+
+    private void closeQuietly(InputStream stream) {
+        if (stream == null) {
+            return;
+        }
+        try {
+            stream.close();
+        } catch (Exception ignored) {
+            // Best-effort cancellation cleanup.
         }
     }
 

@@ -1,6 +1,7 @@
 package com.zhiguang.be.feed.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.feed.FeedData;
@@ -55,7 +56,7 @@ public class FeedController {
             @RequestParam(required = false) String geoHash,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(feedService.getHomeFeed(page, size, lat, lng, geoHash, currentViewerId(jwt)));
+        return ApiResponse.success(feedService.getHomeFeed(page, size, lat, lng, geoHash, JwtSubjects.optionalUserId(jwt)));
     }
 
     /**

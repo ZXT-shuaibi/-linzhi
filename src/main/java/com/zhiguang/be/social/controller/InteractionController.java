@@ -1,8 +1,10 @@
 package com.zhiguang.be.social.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.guard.RateLimiter;
 import com.zhiguang.be.social.InteractionActionData;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
@@ -47,12 +49,13 @@ public class InteractionController {
      * @return 点赞动作结果
      */
     @PostMapping("/targets/{targetType}/{targetId}/like")
+    @RateLimiter(keyPrefix = "interaction:write", windowMillis = 10_000, limit = 30, message = "Interaction is too frequent")
     public ApiResponse<InteractionActionData> like(
             @PathVariable String targetType,
             @PathVariable long targetId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(interactionService.like(currentUserId(jwt), targetType, targetId));
+        return ApiResponse.success(interactionService.like(JwtSubjects.requireUserId(jwt), targetType, targetId));
     }
 
     /**
@@ -64,12 +67,13 @@ public class InteractionController {
      * @return 取消点赞结果
      */
     @DeleteMapping("/targets/{targetType}/{targetId}/like")
+    @RateLimiter(keyPrefix = "interaction:write", windowMillis = 10_000, limit = 30, message = "Interaction is too frequent")
     public ApiResponse<InteractionActionData> unlike(
             @PathVariable String targetType,
             @PathVariable long targetId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(interactionService.unlike(currentUserId(jwt), targetType, targetId));
+        return ApiResponse.success(interactionService.unlike(JwtSubjects.requireUserId(jwt), targetType, targetId));
     }
 
     /**
@@ -81,12 +85,13 @@ public class InteractionController {
      * @return 收藏动作结果
      */
     @PostMapping("/targets/{targetType}/{targetId}/favorite")
+    @RateLimiter(keyPrefix = "interaction:write", windowMillis = 10_000, limit = 30, message = "Interaction is too frequent")
     public ApiResponse<InteractionActionData> favorite(
             @PathVariable String targetType,
             @PathVariable long targetId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(interactionService.favorite(currentUserId(jwt), targetType, targetId));
+        return ApiResponse.success(interactionService.favorite(JwtSubjects.requireUserId(jwt), targetType, targetId));
     }
 
     /**
@@ -98,12 +103,13 @@ public class InteractionController {
      * @return 取消收藏结果
      */
     @DeleteMapping("/targets/{targetType}/{targetId}/favorite")
+    @RateLimiter(keyPrefix = "interaction:write", windowMillis = 10_000, limit = 30, message = "Interaction is too frequent")
     public ApiResponse<InteractionActionData> unfavorite(
             @PathVariable String targetType,
             @PathVariable long targetId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(interactionService.unfavorite(currentUserId(jwt), targetType, targetId));
+        return ApiResponse.success(interactionService.unfavorite(JwtSubjects.requireUserId(jwt), targetType, targetId));
     }
 
     /**
@@ -121,7 +127,7 @@ public class InteractionController {
             @PathVariable long targetId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(interactionService.summary(currentViewerId(jwt), targetType, targetId));
+        return ApiResponse.success(interactionService.summary(JwtSubjects.optionalUserId(jwt), targetType, targetId));
     }
 
     /**
@@ -139,7 +145,7 @@ public class InteractionController {
             @RequestParam List<Long> targetIds,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(interactionService.summaryBatch(currentViewerId(jwt), targetType, targetIds));
+        return ApiResponse.success(interactionService.summaryBatch(JwtSubjects.optionalUserId(jwt), targetType, targetIds));
     }
 
     /**

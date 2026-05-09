@@ -22,6 +22,7 @@ public class ThreadPoolProperties {
         ragQuery.setCorePoolSize(2);
         ragQuery.setMaximumPoolSize(4);
         ragQuery.setQueueCapacity(100);
+        ragQuery.setRejectionPolicy("abort");
     }
 
     public PoolProperties getTradeOrder() {

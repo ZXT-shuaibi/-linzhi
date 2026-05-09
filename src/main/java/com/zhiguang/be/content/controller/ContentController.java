@@ -1,6 +1,7 @@
 package com.zhiguang.be.content.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.content.dto.ConfirmContentRequest;
@@ -39,7 +40,7 @@ public class ContentController {
 
     @PostMapping({"/posts/drafts", "/knowposts/drafts"})
     public ApiResponse<DraftData> createDraft(@AuthenticationPrincipal Jwt jwt) {
-        return ApiResponse.success(contentService.createDraft(requireUserId(jwt)));
+        return ApiResponse.success(contentService.createDraft(JwtSubjects.requireUserId(jwt)));
     }
 
     @PostMapping({"/posts/{postId}/content/confirm", "/knowposts/{postId}/content/confirm"})
@@ -48,7 +49,7 @@ public class ContentController {
             @Valid @RequestBody ConfirmContentRequest request,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        contentService.confirmContent(requireUserId(jwt), postId, request);
+        contentService.confirmContent(JwtSubjects.requireUserId(jwt), postId, request);
         return ApiResponse.success(null);
     }
 
@@ -58,7 +59,7 @@ public class ContentController {
             @Valid @RequestBody UpdatePostMetadataRequest request,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(contentService.updateMetadata(requireUserId(jwt), postId, request));
+        return ApiResponse.success(contentService.updateMetadata(JwtSubjects.requireUserId(jwt), postId, request));
     }
 
     @PatchMapping({"/posts/{postId}", "/knowposts/{postId}"})
@@ -67,12 +68,12 @@ public class ContentController {
             @Valid @RequestBody UpdatePostMetadataRequest request,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(contentService.updateMetadata(requireUserId(jwt), postId, request));
+        return ApiResponse.success(contentService.updateMetadata(JwtSubjects.requireUserId(jwt), postId, request));
     }
 
     @PostMapping({"/posts/{postId}/publish", "/knowposts/{postId}/publish"})
     public ApiResponse<PostDetail> publish(@PathVariable long postId, @AuthenticationPrincipal Jwt jwt) {
-        return ApiResponse.success(contentService.publish(requireUserId(jwt), postId));
+        return ApiResponse.success(contentService.publish(JwtSubjects.requireUserId(jwt), postId));
     }
 
     @PatchMapping({"/posts/{postId}/top", "/knowposts/{postId}/top"})
@@ -81,7 +82,7 @@ public class ContentController {
             @RequestParam boolean isTop,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(contentService.updateTop(requireUserId(jwt), postId, isTop));
+        return ApiResponse.success(contentService.updateTop(JwtSubjects.requireUserId(jwt), postId, isTop));
     }
 
     @PatchMapping({"/posts/{postId}/visibility", "/knowposts/{postId}/visibility"})
@@ -92,12 +93,12 @@ public class ContentController {
             String visibility,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(contentService.updateVisibility(requireUserId(jwt), postId, visibility));
+        return ApiResponse.success(contentService.updateVisibility(JwtSubjects.requireUserId(jwt), postId, visibility));
     }
 
     @DeleteMapping({"/posts/{postId}", "/knowposts/{postId}"})
     public ApiResponse<Void> delete(@PathVariable long postId, @AuthenticationPrincipal Jwt jwt) {
-        contentService.delete(requireUserId(jwt), postId);
+        contentService.delete(JwtSubjects.requireUserId(jwt), postId);
         return ApiResponse.success(null);
     }
 
@@ -107,7 +108,7 @@ public class ContentController {
             @RequestParam(defaultValue = "20") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(contentService.getPublicFeed(optionalUserId(jwt), page, size));
+        return ApiResponse.success(contentService.getPublicFeed(JwtSubjects.optionalUserId(jwt), page, size));
     }
 
     @GetMapping({"/posts/mine", "/knowposts/mine"})
@@ -116,12 +117,12 @@ public class ContentController {
             @RequestParam(defaultValue = "20") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(contentService.getMyPublished(requireUserId(jwt), page, size));
+        return ApiResponse.success(contentService.getMyPublished(JwtSubjects.requireUserId(jwt), page, size));
     }
 
     @GetMapping({"/posts/{postId}", "/knowposts/{postId}"})
     public ApiResponse<PostDetail> getDetail(@PathVariable long postId, @AuthenticationPrincipal Jwt jwt) {
-        return ApiResponse.success(contentService.getDetail(postId, optionalUserId(jwt)));
+        return ApiResponse.success(contentService.getDetail(postId, JwtSubjects.optionalUserId(jwt)));
     }
 
     private long requireUserId(Jwt jwt) {
@@ -131,9 +132,9 @@ public class ContentController {
         return Long.parseLong(jwt.getSubject());
     }
 
-    private Long optionalUserId(Jwt jwt) {
+    private long optionalUserId(Jwt jwt) {
         if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            return null;
+            return 0L;
         }
         return Long.parseLong(jwt.getSubject());
     }

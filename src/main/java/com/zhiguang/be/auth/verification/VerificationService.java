@@ -27,9 +27,11 @@ public class VerificationService {
         DAILY_LIMIT_SCRIPT.setResultType(Long.class);
         DAILY_LIMIT_SCRIPT.setScriptText(
                 "local current = redis.call('INCR', KEYS[1]); " +
+                        "local limit = tonumber(ARGV[2]); " +
                         "if current == 1 then " +
                         "redis.call('PEXPIRE', KEYS[1], ARGV[1]); " +
                         "end; " +
+                        "if current > limit then return 0; end; " +
                         "return current"
         );
     }
@@ -56,8 +58,8 @@ public class VerificationService {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "验证码发送参数不完整");
         }
 
-        enforceDailyLimit(scene, phone, properties.getDailyLimit());
         enforceAndMarkSendInterval(scene, phone, properties.getSendInterval());
+        reserveDailyQuota(scene, phone, properties.getDailyLimit());
 
         if (smsVerifyService.isEnabled()) {
             String exposedCode = smsVerifyService.send(
@@ -66,7 +68,6 @@ public class VerificationService {
                     properties.getCodeTtl(),
                     properties.getSendInterval()
             );
-            incrementDailyCount(scene, phone, properties.getDailyLimit());
             return new SendCodeResponse(
                     phone,
                     scene,
@@ -78,7 +79,6 @@ public class VerificationService {
 
         String code = generateCode(properties.getCodeLength());
         codeStore.saveCode(scene.value(), phone, code, properties.getCodeTtl(), properties.getMaxAttempts());
-        incrementDailyCount(scene, phone, properties.getDailyLimit());
 
         return new SendCodeResponse(
                 phone,
@@ -129,32 +129,30 @@ public class VerificationService {
         }
     }
 
-    private void enforceDailyLimit(VerificationScene scene, String phone, int limit) {
+    private void reserveDailyQuota(VerificationScene scene, String phone, int limit) {
         if (limit <= 0) {
             return;
+        }
+        Long reserved = stringRedisTemplate.execute(
+                DAILY_LIMIT_SCRIPT,
+                List.of(dailyLimitKey(scene, phone)),
+                String.valueOf(Duration.ofDays(1).toMillis()),
+                String.valueOf(limit)
+        );
+        if (reserved == null || reserved.longValue() <= 0L) {
+            throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "Daily verification code limit exceeded");
         }
         String existing = stringRedisTemplate.opsForValue().get(dailyLimitKey(scene, phone));
         if (!StringUtils.hasText(existing)) {
             return;
         }
         try {
-            if (Long.parseLong(existing) >= limit) {
+            if (Long.parseLong(existing) > limit) {
                 throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "验证码发送次数已达上限");
             }
         } catch (NumberFormatException ex) {
             throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "验证码发送次数已达上限");
         }
-    }
-
-    private void incrementDailyCount(VerificationScene scene, String phone, int limit) {
-        if (limit <= 0) {
-            return;
-        }
-        stringRedisTemplate.execute(
-                DAILY_LIMIT_SCRIPT,
-                List.of(dailyLimitKey(scene, phone)),
-                String.valueOf(Duration.ofDays(1).toMillis())
-        );
     }
 
     private String sendIntervalKey(VerificationScene scene, String phone) {

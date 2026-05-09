@@ -1,6 +1,7 @@
 package com.zhiguang.be.social.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.social.FollowActionData;
@@ -51,7 +52,7 @@ public class FollowController {
             @PathVariable long followeeId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(followService.follow(currentUserId(jwt), followeeId));
+        return ApiResponse.success(followService.follow(JwtSubjects.requireUserId(jwt), followeeId));
     }
 
     /**
@@ -66,7 +67,7 @@ public class FollowController {
             @PathVariable long followeeId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(followService.unfollow(currentUserId(jwt), followeeId));
+        return ApiResponse.success(followService.unfollow(JwtSubjects.requireUserId(jwt), followeeId));
     }
 
     /**
@@ -116,7 +117,7 @@ public class FollowController {
             @RequestParam long targetUserId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(followService.relationStatus(currentViewerId(jwt), targetUserId));
+        return ApiResponse.success(followService.relationStatus(JwtSubjects.optionalUserId(jwt), targetUserId));
     }
 
     /**

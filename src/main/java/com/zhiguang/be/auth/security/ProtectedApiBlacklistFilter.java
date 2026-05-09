@@ -21,7 +21,6 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
 
 /**
  * 受保护接口黑名单过滤器。
@@ -29,18 +28,6 @@ import java.util.Set;
  */
 @Component
 public class ProtectedApiBlacklistFilter extends OncePerRequestFilter {
-
-    private static final Set<String> PUBLIC_PATHS = Set.of(
-            "/api/v1/auth/send-code",
-            "/api/v1/auth/login",
-            "/api/v1/auth/register",
-            "/api/v1/auth/token/refresh",
-            "/api/v1/auth/logout",
-            "/api/v1/auth/password/reset",
-            "/api/v1/_meta/ping",
-            "/actuator/health",
-            "/error"
-    );
 
     private final AuthBlocklistService blocklistService;
     private final AccessTokenBlocklistStore accessTokenBlocklistStore;
@@ -68,17 +55,6 @@ public class ProtectedApiBlacklistFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 公开接口不执行黑名单二次校验。
-     *
-     * @param request 当前 HTTP 请求
-     * @return 公开接口返回 true，其余返回 false
-     */
-    @Override
-    protected boolean shouldNotFilter(HttpServletRequest request) {
-        return PUBLIC_PATHS.contains(request.getServletPath());
-    }
-
-    /**
      * 对受保护请求执行黑名单校验。
      * 命中账号黑名单或 access token 失效黑名单时，立即拒绝访问并撤销 refresh token。
      *
@@ -91,6 +67,7 @@ public class ProtectedApiBlacklistFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+        boolean publicRequest = PublicApiPaths.matches(request);
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (!(authentication instanceof JwtAuthenticationToken jwtAuthenticationToken) || !authentication.isAuthenticated()) {
             filterChain.doFilter(request, response);
@@ -107,6 +84,12 @@ public class ProtectedApiBlacklistFilter extends OncePerRequestFilter {
         boolean blockedByLoginBlacklist = loginBlacklistStore.isBlocked(userId);
         boolean blockedByAccessTokenBlocklist = accessTokenBlocklistStore.isBlocked(userId, issuedAt);
         if (!blockedByLoginBlacklist && !blockedByAccessTokenBlocklist) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        if (publicRequest) {
+            SecurityContextHolder.clearContext();
             filterChain.doFilter(request, response);
             return;
         }

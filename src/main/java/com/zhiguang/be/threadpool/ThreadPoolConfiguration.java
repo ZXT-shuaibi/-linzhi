@@ -85,9 +85,12 @@ public class ThreadPoolConfiguration {
         if ("caller-runs".equalsIgnoreCase(policy) || "callerRuns".equalsIgnoreCase(policy)) {
             return new AdaptiveBufferedThreadPoolExecutor.CallerRunsPolicy();
         }
+        if ("abort".equalsIgnoreCase(policy)) {
+            return new AdaptiveBufferedThreadPoolExecutor.AbortPolicy();
+        }
         if ("count".equalsIgnoreCase(policy)) {
             return new AdaptiveBufferedThreadPoolExecutor.CountPolicy();
         }
-        throw new IllegalArgumentException("不支持的线程池拒绝策略: " + policy + "，可选值为 caller-runs / count / discard");
+        throw new IllegalArgumentException("不支持的线程池拒绝策略: " + policy + "，可选值为 caller-runs / abort / count / discard");
     }
 }

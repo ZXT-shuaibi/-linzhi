@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.AbstractQueuedSynchronizer;
 import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -44,6 +45,9 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
     private static final int TERMINATED = 3 << COUNT_BITS;
 
     private static final boolean ONLY_ONE = true;
+    private static final int BLOCK_BEFORE_SPIN_ROUNDS = 2;
+    private static final int SPIN_HINTS_PER_ROUND = 64;
+    private static final long MAX_BACKOFF_NANOS = TimeUnit.MILLISECONDS.toNanos(1000L);
 
     private static int runStateOf(int c) {
         return c & ~CAPACITY;
@@ -74,6 +78,10 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
     private final ReentrantLock mainLock = new ReentrantLock();
     private final Condition termination = mainLock.newCondition();
     private final HashSet<Worker> workers = new HashSet<Worker>();
+    /**
+     * TPLL(Thread Pool Load Level) pressure score.
+     * Forced waiting and rejection increase it, successful enqueue and task completion decrease it.
+     */
     private final AtomicInteger threadLoad = new AtomicInteger(0);
     private final AtomicLong rejectedCount = new AtomicLong(0L);
 
@@ -240,6 +248,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
 
         currentCtl = ctl.get();
         if (shouldBufferToQueue() && isRunning(currentCtl) && workQueue.offer(command)) {
+            decrementThreadLoad();
             int recheck = ctl.get();
             if (!isRunning(recheck) && remove(command)) {
                 reject(command);
@@ -285,6 +294,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
         if (!isRunning(currentCtl) || !workQueue.offer(command)) {
             return false;
         }
+        decrementThreadLoad();
 
         int recheck = ctl.get();
         if (!isRunning(recheck) && remove(command)) {
@@ -299,26 +309,26 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
 
     /**
      * 启用防拒绝能力后，在高峰期尝试继续接纳任务。
-     * 根据线程负载和 CPU 负载决定是直接试探入队、阻塞等待还是空转重试。
+     * 根据 TPLL 压力分和 CPU 负载决定是阻塞等待、退避空转还是直接拒绝。
      */
     private boolean forceEnqueue(Runnable command, int currentCtl) {
         if (!preventRejection || !isRunning(currentCtl)) {
             return false;
         }
 
-        int currentLoad = threadLoad.incrementAndGet();
-        try {
-            double cpuLoad = basicCalculate.getCPULoad();
-            if (currentLoad > threadLoadJudge && cpuLoad > cpuLoadJudge) {
-                return offerOnce(command);
-            }
-            if (currentLoad > threadLoadJudge) {
-                return spinAndRetry(command);
-            }
-            return blockAndRetry(command);
-        } finally {
+        int currentLoad = incrementThreadLoad();
+        double cpuLoad = basicCalculate.getCPULoad();
+        if (isHighThreadLoad(currentLoad) && isHighCpuLoad(cpuLoad)) {
+            decrementThreadLoad();
+            return false;
+        }
+        boolean enqueued = isHighThreadLoad(currentLoad)
+                ? spinAndRetry(command)
+                : blockAndRetry(command);
+        if (!enqueued) {
             decrementThreadLoad();
         }
+        return enqueued;
     }
 
     /**
@@ -331,20 +341,25 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
         if (!workQueue.offer(command)) {
             return false;
         }
+        decrementThreadLoad();
         ensureWorkerForQueuedTasks();
         return true;
     }
 
     /**
-     * 阻塞等待一定时间再尝试入队。
+     * BWS：先试探入队，再进行轻量自旋，最后进入有超时的阻塞等待。
      */
     private boolean blockAndRetry(Runnable command) {
         if (!isRunning(ctl.get())) {
             return false;
         }
+        if (offerOnce(command) || spinBeforeBlock(command)) {
+            return true;
+        }
         try {
             boolean offered = workQueue.offer(command, blockTimeoutMillis, TimeUnit.MILLISECONDS);
             if (offered) {
+                decrementThreadLoad();
                 ensureWorkerForQueuedTasks();
             }
             return offered;
@@ -355,28 +370,72 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
     }
 
     /**
-     * 使用指数退避进行空转重试。
+     * BISS：短自旋提示 CPU，然后让出时间片/短暂停顿，并使用指数退避。
+     * 达到最大退避轮数后升级为 BWS，避免提交线程长期空转烧 CPU。
      */
     private boolean spinAndRetry(Runnable command) {
-        long currentWaitMillis = spinWaitMillis;
+        long currentBackoffNanos = TimeUnit.MILLISECONDS.toNanos(spinWaitMillis);
         for (int i = 0; i < maxRetryAttempts; i++) {
             if (!isRunning(ctl.get())) {
                 return false;
             }
 
-            long startTime = System.currentTimeMillis();
-            long elapsedTime = 0L;
-            while (elapsedTime < currentWaitMillis) {
-                elapsedTime = System.currentTimeMillis() - startTime;
-            }
-
             if (workQueue.offer(command)) {
+                decrementThreadLoad();
                 ensureWorkerForQueuedTasks();
                 return true;
             }
-            currentWaitMillis = Math.min(currentWaitMillis * 2L, 1000L);
+            adaptiveBackoff(currentBackoffNanos);
+            if (Thread.currentThread().isInterrupted()) {
+                return false;
+            }
+            currentBackoffNanos = Math.min(currentBackoffNanos * 2L, MAX_BACKOFF_NANOS);
+        }
+        return blockAndRetry(command);
+    }
+
+    /**
+     * BWS 的阻塞前轻量自旋。这里不做纯 while 忙等，只给 CPU 自旋提示并短暂让出执行权。
+     */
+    private boolean spinBeforeBlock(Runnable command) {
+        int rounds = Math.min(maxRetryAttempts, BLOCK_BEFORE_SPIN_ROUNDS);
+        long backoffNanos = Math.min(TimeUnit.MILLISECONDS.toNanos(spinWaitMillis), TimeUnit.MICROSECONDS.toNanos(500L));
+        for (int i = 0; i < rounds; i++) {
+            for (int spin = 0; spin < SPIN_HINTS_PER_ROUND; spin++) {
+                Thread.onSpinWait();
+            }
+            if (workQueue.offer(command)) {
+                decrementThreadLoad();
+                ensureWorkerForQueuedTasks();
+                return true;
+            }
+            Thread.yield();
+            LockSupport.parkNanos(backoffNanos);
+            if (Thread.currentThread().isInterrupted() || !isRunning(ctl.get())) {
+                return false;
+            }
+            backoffNanos = Math.min(backoffNanos * 2L, TimeUnit.MILLISECONDS.toNanos(spinWaitMillis));
         }
         return false;
+    }
+
+    /**
+     * BISS 的退避动作：先短自旋，再让出时间片，最后按当前退避窗口短暂停顿。
+     */
+    private void adaptiveBackoff(long backoffNanos) {
+        for (int spin = 0; spin < SPIN_HINTS_PER_ROUND; spin++) {
+            Thread.onSpinWait();
+        }
+        Thread.yield();
+        LockSupport.parkNanos(backoffNanos);
+    }
+
+    private boolean isHighThreadLoad(int currentLoad) {
+        return currentLoad >= threadLoadJudge;
+    }
+
+    private boolean isHighCpuLoad(double cpuLoad) {
+        return cpuLoad >= cpuLoadJudge;
     }
 
     /**
@@ -394,6 +453,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
      */
     private void reject(Runnable command) {
         rejectedCount.incrementAndGet();
+        incrementThreadLoad();
         handler.rejectedExecution(command, this);
     }
 
@@ -546,6 +606,7 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
                 } finally {
                     task = null;
                     worker.completedTasks++;
+                    decrementThreadLoad();
                     worker.unlock();
                 }
             }
@@ -680,6 +741,18 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
         do {
             // 自旋直到减计数成功。
         } while (!compareAndDecrementWorkerCount(ctl.get()));
+    }
+
+    private int incrementThreadLoad() {
+        for (;;) {
+            int current = threadLoad.get();
+            if (current == Integer.MAX_VALUE) {
+                return current;
+            }
+            if (threadLoad.compareAndSet(current, current + 1)) {
+                return current + 1;
+            }
+        }
     }
 
     private void decrementThreadLoad() {
@@ -1024,10 +1097,21 @@ public class AdaptiveBufferedThreadPoolExecutor extends AbstractExecutorService 
         @Override
         public void rejectedExecution(Runnable task, AdaptiveBufferedThreadPoolExecutor executor) {
             if (!executor.isShutdown()) {
-                task.run();
+                try {
+                    task.run();
+                } finally {
+                    executor.decrementThreadLoad();
+                }
                 return;
             }
             throw new RejectedExecutionException("线程池已关闭，无法继续执行任务");
+        }
+    }
+
+    public static class AbortPolicy implements AdaptiveRejectedExecutionHandler {
+        @Override
+        public void rejectedExecution(Runnable task, AdaptiveBufferedThreadPoolExecutor executor) {
+            throw new RejectedExecutionException("Task rejected from " + executor);
         }
     }
 

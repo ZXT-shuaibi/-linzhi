@@ -5,6 +5,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 public final class Transactions {
 
+    private static final ThreadLocal<Boolean> RUNNING_AFTER_COMMIT = new ThreadLocal<Boolean>();
+
     private Transactions() {
     }
 
@@ -12,14 +14,20 @@ public final class Transactions {
         if (task == null) {
             return;
         }
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+        if (Boolean.TRUE.equals(RUNNING_AFTER_COMMIT.get())
+                || !TransactionSynchronizationManager.isSynchronizationActive()) {
             task.run();
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                task.run();
+                RUNNING_AFTER_COMMIT.set(Boolean.TRUE);
+                try {
+                    task.run();
+                } finally {
+                    RUNNING_AFTER_COMMIT.remove();
+                }
             }
         });
     }

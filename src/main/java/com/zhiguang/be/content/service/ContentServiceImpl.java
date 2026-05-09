@@ -1,12 +1,11 @@
 package com.zhiguang.be.content.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
 import com.zhiguang.be.common.tx.Transactions;
+import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.common.util.Numbers;
 import com.zhiguang.be.content.dto.ConfirmContentRequest;
 import com.zhiguang.be.content.dto.DraftData;
@@ -50,6 +49,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import static com.zhiguang.be.common.util.Texts.hasText;
+import static com.zhiguang.be.common.util.Texts.normalizeNullable;
 
 @Service
 public class ContentServiceImpl implements ContentService {
@@ -750,28 +750,15 @@ public class ContentServiceImpl implements ContentService {
     }
 
     private String toJson(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (JsonProcessingException ex) {
-            throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "内容模块 JSON 序列化失败");
-        }
+        return Jsons.toJson(objectMapper, value, "内容模块 JSON 序列化失败");
     }
 
     private List<String> parseStringList(String json) {
-        if (!hasText(json)) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(json, new TypeReference<List<String>>() {});
-        } catch (JsonProcessingException ex) {
-            return List.of();
-        }
+        return Jsons.parseStringList(objectMapper, json);
     }
 
     private String normalizeNullableText(String value) {
-        if (value == null) return null;
-        String normalized = value.trim();
-        return normalized.isEmpty() ? null : normalized;
+        return normalizeNullable(value);
     }
 
     private String abbreviateError(String errorMessage) {

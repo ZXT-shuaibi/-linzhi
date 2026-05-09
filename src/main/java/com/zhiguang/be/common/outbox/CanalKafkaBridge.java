@@ -15,8 +15,12 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Canal 到 Kafka 的桥接器。
@@ -95,11 +99,13 @@ public class CanalKafkaBridge implements SmartLifecycle {
         } catch (Exception ex) {
             log.error("Canal bridge stopped by error", ex);
         } finally {
+            running = false;
             disconnectQuietly();
         }
     }
 
     private void publishBatch(Message message) throws Exception {
+        List<CompletableFuture<?>> sendFutures = new ArrayList<CompletableFuture<?>>();
         for (CanalEntry.Entry entry : message.getEntries()) {
             if (entry.getEntryType() != CanalEntry.EntryType.ROWDATA) {
                 continue;
@@ -128,8 +134,16 @@ public class CanalKafkaBridge implements SmartLifecycle {
             messageNode.put("table", entry.getHeader().getTableName());
             messageNode.put("type", eventType == CanalEntry.EventType.INSERT ? "INSERT" : "UPDATE");
             messageNode.set("data", dataArray);
-            kafkaTemplate.send(canalProperties.getTopic(), objectMapper.writeValueAsString(messageNode));
+            sendFutures.add(kafkaTemplate.send(canalProperties.getTopic(), objectMapper.writeValueAsString(messageNode)));
         }
+        for (CompletableFuture<?> sendFuture : sendFutures) {
+            sendFuture.get(kafkaSendTimeoutMillis(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private long kafkaSendTimeoutMillis() {
+        long intervalBasedTimeout = Math.max(canalProperties.getIntervalMs(), 1L) * 10L;
+        return Math.min(Math.max(intervalBasedTimeout, 10_000L), 60_000L);
     }
 
     @Override

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.auth.mapper.AuthUserMapper;
 import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.security.ProtectedApiBlacklistFilter;
+import com.zhiguang.be.auth.security.PublicApiPaths;
 import com.zhiguang.be.common.api.ErrorResponse;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.web.filter.RequestIdFilter;
@@ -68,36 +69,10 @@ public class SecurityConfiguration {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
-                                "/api/v1/auth/send-code",
-                                "/api/v1/auth/login",
-                                "/api/v1/auth/register",
-                                "/api/v1/auth/token/refresh",
-                                "/api/v1/auth/logout",
-                                "/api/v1/auth/password/reset",
-                                "/api/v1/_meta/ping",
-                                "/actuator/health",
-                                "/error"
-                        ).permitAll()
+                        .requestMatchers(PublicApiPaths.PUBLIC_ENDPOINTS).permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/posts/mine").authenticated()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/feed").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/*/comments").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/discover/nearby").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/discover/nearby").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/*").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/search/posts").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/feed/home").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/trade/activities").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/trade/activities/*").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*/posts").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*/following").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*/followers").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/*/summary").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/summary-batch").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/follows/status").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/social/counters/users/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, PublicApiPaths.PUBLIC_GET_ENDPOINTS).permitAll()
+                        .requestMatchers(HttpMethod.POST, PublicApiPaths.PUBLIC_POST_ENDPOINTS).permitAll()
                         .requestMatchers("/api/v1/platform/**").access(adminAccess)
                         .requestMatchers(HttpMethod.POST, RAG_PUBLIC_REINDEX_PATH, RAG_POST_REINDEX_PATH).access(adminAccess)
                         .requestMatchers(HttpMethod.POST, "/api/v1/discover/location").access(adminAccess)
