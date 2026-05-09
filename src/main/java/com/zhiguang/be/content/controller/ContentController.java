@@ -2,8 +2,6 @@ package com.zhiguang.be.content.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
 import com.zhiguang.be.auth.security.JwtSubjects;
-import com.zhiguang.be.common.exception.BusinessException;
-import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.content.dto.ConfirmContentRequest;
 import com.zhiguang.be.content.dto.DraftData;
 import com.zhiguang.be.content.dto.PostDetail;
@@ -12,7 +10,6 @@ import com.zhiguang.be.content.dto.UpdatePostMetadataRequest;
 import com.zhiguang.be.content.service.ContentService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Pattern;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
@@ -125,17 +122,4 @@ public class ContentController {
         return ApiResponse.success(contentService.getDetail(postId, JwtSubjects.optionalUserId(jwt)));
     }
 
-    private long requireUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
-        }
-        return Long.parseLong(jwt.getSubject());
-    }
-
-    private long optionalUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            return 0L;
-        }
-        return Long.parseLong(jwt.getSubject());
-    }
 }

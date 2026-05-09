@@ -1,6 +1,8 @@
 package com.zhiguang.be.search;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.geo.GeoDistances;
+import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
 import org.springframework.stereotype.Component;
@@ -26,15 +28,18 @@ public class DbSearchProvider implements SearchProvider {
     private final SearchMapper searchMapper;
     private final SearchProperties searchProperties;
     private final InteractionService interactionService;
+    private final ObjectMapper objectMapper;
 
     public DbSearchProvider(
             SearchMapper searchMapper,
             SearchProperties searchProperties,
-            InteractionService interactionService
+            InteractionService interactionService,
+            ObjectMapper objectMapper
     ) {
         this.searchMapper = searchMapper;
         this.searchProperties = searchProperties;
         this.interactionService = interactionService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -313,25 +318,7 @@ public class DbSearchProvider implements SearchProvider {
         if (!hasText(rawValue)) {
             return Collections.emptyList();
         }
-        String normalized = rawValue
-                .replace('[', ' ')
-                .replace(']', ' ')
-                .replace('"', ' ')
-                .replace('\'', ' ')
-                .replaceAll("\\s+", " ")
-                .trim();
-        if (normalized.isEmpty()) {
-            return Collections.emptyList();
-        }
-        String[] parts = normalized.split(",");
-        List<String> values = new ArrayList<String>();
-        for (String part : parts) {
-            String item = part.trim();
-            if (!item.isEmpty() && !values.contains(item)) {
-                values.add(item);
-            }
-        }
-        return values;
+        return Jsons.parseNormalizedStringList(objectMapper, rawValue);
     }
 
     private String firstListValue(List<String> values) {
@@ -365,6 +352,10 @@ public class DbSearchProvider implements SearchProvider {
     private List<String> extractTags(String rawTagValue) {
         if (!hasText(rawTagValue)) {
             return Collections.emptyList();
+        }
+        List<String> jsonTags = Jsons.parseNormalizedStringList(objectMapper, rawTagValue);
+        if (!jsonTags.isEmpty()) {
+            return jsonTags;
         }
         String normalized = rawTagValue
                 .replace('[', ' ')

@@ -1,10 +1,8 @@
 package com.zhiguang.be.storage;
 
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.common.api.ApiResponse;
-import com.zhiguang.be.common.exception.BusinessException;
-import com.zhiguang.be.common.exception.ErrorCode;
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
@@ -73,9 +71,6 @@ public class StorageController {
     }
 
     private long requireUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
-        }
-        return Long.parseLong(jwt.getSubject());
+        return JwtSubjects.requireUserId(jwt);
     }
 }

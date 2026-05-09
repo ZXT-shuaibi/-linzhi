@@ -16,11 +16,8 @@ import com.zhiguang.be.auth.model.SendCodeResponse;
 import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.auth.service.AuthService;
 import com.zhiguang.be.common.api.ApiResponse;
-import com.zhiguang.be.common.exception.BusinessException;
-import com.zhiguang.be.common.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -129,13 +126,6 @@ public class AuthController {
     @GetMapping("/me")
     public ApiResponse<AuthUserResponse> me(@AuthenticationPrincipal Jwt jwt) {
         return ApiResponse.success(authService.me(JwtSubjects.requireSubject(jwt)));
-    }
-
-    private String requireUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
-        }
-        return jwt.getSubject();
     }
 
     /**

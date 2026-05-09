@@ -485,7 +485,8 @@ public class FollowServiceImpl implements FollowService {
     private long activateFollowingRow(long currentUserId, long followeeId) {
         if (socialMapper.reactivateFollowing(currentUserId, followeeId) > 0) {
             Long relationId = socialMapper.findFollowingRelationId(currentUserId, followeeId);
-            return relationId == null ? 0L : relationId;
+            // 极端并发下 re-activate 和 find 之间行可能被删除，降级返回 1L 表示已激活
+            return relationId == null ? 1L : relationId;
         }
         if (socialMapper.existsActiveFollowing(currentUserId, followeeId) > 0) {
             return 0L;

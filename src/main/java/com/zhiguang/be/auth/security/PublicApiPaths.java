@@ -20,10 +20,13 @@ public final class PublicApiPaths {
 
     public static final String[] PUBLIC_GET_ENDPOINTS = {
             "/api/v1/posts/feed",
+            "/api/v1/knowposts/feed",
             "/api/v1/posts/*/comments",
+            "/api/v1/knowposts/*/comments",
             "/api/v1/discover/nearby",
             "/api/v1/discover/map/**",
             "/api/v1/posts/*",
+            "/api/v1/knowposts/*",
             "/api/v1/search/posts",
             "/api/v1/search/suggest",
             "/api/v1/feed/home",

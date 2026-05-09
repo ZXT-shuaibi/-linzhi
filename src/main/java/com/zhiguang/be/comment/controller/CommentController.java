@@ -1,15 +1,13 @@
 package com.zhiguang.be.comment.controller;
 
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.comment.model.CommentItemData;
 import com.zhiguang.be.comment.model.CommentPageData;
 import com.zhiguang.be.comment.model.CreateCommentRequest;
 import com.zhiguang.be.comment.service.CommentService;
 import com.zhiguang.be.common.api.ApiResponse;
-import com.zhiguang.be.common.exception.BusinessException;
-import com.zhiguang.be.common.exception.ErrorCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
@@ -52,16 +50,10 @@ public class CommentController {
     }
 
     private long requireUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
-        }
-        return Long.parseLong(jwt.getSubject());
+        return JwtSubjects.requireUserId(jwt);
     }
 
     private Long optionalUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            return null;
-        }
-        return Long.parseLong(jwt.getSubject());
+        return JwtSubjects.optionalUserId(jwt);
     }
 }

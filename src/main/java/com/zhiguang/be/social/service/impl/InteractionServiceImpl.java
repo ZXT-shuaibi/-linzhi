@@ -1007,26 +1007,6 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     }
 
     /**
-     * 同步实体计数 SDS。
-     *
-     * @param targetType 目标类型
-     * @param targetId 目标 ID
-     * @param action 动作类型
-     * @param delta 变化量
-     */
-    private void incrementEntityCounter(String targetType, long targetId, String action, int delta) {
-        int fieldIndex = "like".equals(action) ? SocialCounterSchema.IDX_LIKE : SocialCounterSchema.IDX_FAV;
-        stringRedisTemplate.execute(
-                entityCounterIncrementScript,
-                Collections.singletonList(SocialRedisKeys.entityCounterKey(targetType, targetId)),
-                String.valueOf(SocialCounterSchema.SCHEMA_LEN),
-                String.valueOf(SocialCounterSchema.FIELD_SIZE),
-                String.valueOf(fieldIndex),
-                String.valueOf(delta)
-        );
-    }
-
-    /**
      * 将本次互动增量写入聚合桶，供后台折叠进实体计数快照。
      *
      * @param targetType 目标类型

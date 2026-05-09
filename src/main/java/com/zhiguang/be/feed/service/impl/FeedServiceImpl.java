@@ -145,7 +145,10 @@ public class FeedServiceImpl implements FeedService {
     }
 
     private SingleFlightLock acquireSingleFlightLock(String cacheKey) {
-        evictIdleSingleFlightLocks();
+        evictIdleSingleFlightLocks(false);
+        if (!singleFlightLocks.containsKey(cacheKey) && singleFlightLocks.size() >= SINGLE_FLIGHT_MAX_LOCKS) {
+            evictIdleSingleFlightLocks(true);
+        }
         if (!singleFlightLocks.containsKey(cacheKey) && singleFlightLocks.size() >= SINGLE_FLIGHT_MAX_LOCKS) {
             SingleFlightLock detachedLock = new SingleFlightLock(System.currentTimeMillis(), false);
             detachedLock.retain();
@@ -170,14 +173,14 @@ public class FeedServiceImpl implements FeedService {
         singleFlightLocks.remove(cacheKey, lock);
     }
 
-    private void evictIdleSingleFlightLocks() {
-        if (singleFlightLocks.size() < SINGLE_FLIGHT_MAX_LOCKS) {
+    private void evictIdleSingleFlightLocks(boolean aggressive) {
+        if (!aggressive && singleFlightLocks.size() < SINGLE_FLIGHT_MAX_LOCKS) {
             return;
         }
         long now = System.currentTimeMillis();
         for (Map.Entry<String, SingleFlightLock> entry : singleFlightLocks.entrySet()) {
             SingleFlightLock lock = entry.getValue();
-            if (lock.isIdleExpired(now, SINGLE_FLIGHT_IDLE_TTL_MILLIS)) {
+            if ((aggressive && lock.isIdle()) || lock.isIdleExpired(now, SINGLE_FLIGHT_IDLE_TTL_MILLIS)) {
                 singleFlightLocks.remove(entry.getKey(), lock);
             }
         }
@@ -899,7 +902,11 @@ public class FeedServiceImpl implements FeedService {
         }
 
         private boolean isIdleExpired(long now, long ttlMillis) {
-            return references.get() == 0 && now - createdAtMillis >= ttlMillis;
+            return isIdle() && now - createdAtMillis >= ttlMillis;
+        }
+
+        private boolean isIdle() {
+            return references.get() == 0;
         }
     }
 

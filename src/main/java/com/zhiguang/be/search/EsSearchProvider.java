@@ -19,7 +19,9 @@ import co.elastic.clients.elasticsearch.core.search.Highlight;
 import co.elastic.clients.elasticsearch.core.search.HighlightField;
 import co.elastic.clients.elasticsearch.core.search.Suggestion;
 import co.elastic.clients.util.NamedValue;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.geo.GeoDistances;
+import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
 import org.slf4j.Logger;
@@ -59,15 +61,18 @@ public class EsSearchProvider implements SearchProvider {
     private final ElasticsearchClient elasticsearchClient;
     private final SearchProperties searchProperties;
     private final InteractionService interactionService;
+    private final ObjectMapper objectMapper;
 
     public EsSearchProvider(
             ElasticsearchClient elasticsearchClient,
             SearchProperties searchProperties,
-            InteractionService interactionService
+            InteractionService interactionService,
+            ObjectMapper objectMapper
     ) {
         this.elasticsearchClient = elasticsearchClient;
         this.searchProperties = searchProperties;
         this.interactionService = interactionService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -581,18 +586,7 @@ public class EsSearchProvider implements SearchProvider {
         if (raw.isEmpty()) {
             return List.of();
         }
-        List<String> values = new ArrayList<String>();
-        String normalized = raw.replace('[', ' ').replace(']', ' ').replace('"', ' ').replace('\'', ' ').trim();
-        if (normalized.isEmpty()) {
-            return List.of();
-        }
-        for (String part : normalized.split(",")) {
-            String item = part.trim();
-            if (!item.isEmpty() && !values.contains(item)) {
-                values.add(item);
-            }
-        }
-        return values;
+        return Jsons.parseNormalizedStringList(objectMapper, raw);
     }
 
     private Double computeDistanceMeters(Double lat1, Double lng1, Double lat2, Double lng2) {
