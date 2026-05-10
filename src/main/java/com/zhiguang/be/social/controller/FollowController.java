@@ -117,10 +117,4 @@ public class FollowController {
         return ApiResponse.success(followService.relationStatus(JwtSubjects.optionalUserId(jwt), targetUserId));
     }
 
-    /**
-     * 从 JWT 中解析当前用户 ID。
-     *
-     * @param jwt 当前登录态
-     * @return 当前用户 ID
-     */
 }

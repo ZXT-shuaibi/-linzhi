@@ -70,7 +70,7 @@ public class SecurityConfiguration {
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PublicApiPaths.PUBLIC_ENDPOINTS).permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/mine").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/mine", "/api/v1/knowposts/mine").authenticated()
                         .requestMatchers(HttpMethod.GET, PublicApiPaths.PUBLIC_GET_ENDPOINTS).permitAll()
                         .requestMatchers(HttpMethod.POST, PublicApiPaths.PUBLIC_POST_ENDPOINTS).permitAll()
                         .requestMatchers("/api/v1/platform/**").access(adminAccess)
