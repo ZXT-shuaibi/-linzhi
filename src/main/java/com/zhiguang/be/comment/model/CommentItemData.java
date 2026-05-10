@@ -1,12 +1,16 @@
 package com.zhiguang.be.comment.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.time.Instant;
 
 public record CommentItemData(
-        String commentId,
+        @JsonProperty("id") String commentId,
         String postId,
         String content,
-        CommentAuthorData author,
+        @JsonProperty("authorId") String authorUserId,
+        @JsonProperty("authorNickname") String authorNickname,
+        @JsonProperty("authorAvatar") String authorAvatar,
         Instant createdAt
 ) {
 }

@@ -740,8 +740,8 @@ public class LbsDiscoverServiceImpl implements LbsDiscoverService {
                 } finally {
                     try {
                         cursor.close();
-                    } catch (Exception ignored) {
-                        // Best-effort cursor cleanup.
+                    } catch (Exception ex) {
+                        log.warn("Failed to close geo index scan cursor", ex);
                     }
                 }
                 return result;

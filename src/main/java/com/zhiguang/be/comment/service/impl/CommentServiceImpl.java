@@ -1,7 +1,6 @@
 package com.zhiguang.be.comment.service.impl;
 
 import com.zhiguang.be.comment.mapper.CommentMapper;
-import com.zhiguang.be.comment.model.CommentAuthorData;
 import com.zhiguang.be.comment.model.CommentItemData;
 import com.zhiguang.be.comment.model.CommentPageData;
 import com.zhiguang.be.comment.model.CommentRow;
@@ -48,7 +47,7 @@ public class CommentServiceImpl implements CommentService {
         if (hasMore) {
             rows = rows.subList(0, safeSize);
         }
-        return new CommentPageData(toItems(rows), safePage, safeSize, hasMore);
+        return new CommentPageData(toItems(rows), new CommentPageData.CommentPageMeta(safePage, safeSize, rows.size()));
     }
 
     @Override
@@ -63,7 +62,7 @@ public class CommentServiceImpl implements CommentService {
                 String.valueOf(commentId),
                 String.valueOf(postId),
                 content,
-                new CommentAuthorData(String.valueOf(currentUserId), null, null),
+                String.valueOf(currentUserId), null, null,
                 null
         ) : toItem(row);
     }
@@ -102,11 +101,9 @@ public class CommentServiceImpl implements CommentService {
                 String.valueOf(row.getCommentId()),
                 String.valueOf(row.getPostId()),
                 row.getContent(),
-                new CommentAuthorData(
-                        String.valueOf(row.getUserId()),
-                        row.getNickname(),
-                        row.getAvatar()
-                ),
+                String.valueOf(row.getUserId()),
+                row.getNickname(),
+                row.getAvatar(),
                 row.getCreatedAt()
         );
     }

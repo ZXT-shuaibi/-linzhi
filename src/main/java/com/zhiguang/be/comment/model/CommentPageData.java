@@ -1,11 +1,12 @@
 package com.zhiguang.be.comment.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 public record CommentPageData(
         List<CommentItemData> items,
-        int page,
-        int size,
-        boolean hasMore
+        @JsonProperty("page") CommentPageMeta pageMeta
 ) {
+    public record CommentPageMeta(int page, int size, int total) {}
 }
