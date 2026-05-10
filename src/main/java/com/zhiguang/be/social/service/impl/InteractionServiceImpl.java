@@ -1,11 +1,13 @@
 package com.zhiguang.be.social.service.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.id.SnowflakeIdGenerator;
+import com.zhiguang.be.common.tx.Transactions;
+import com.zhiguang.be.common.util.Numbers;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
+import com.zhiguang.be.feed.service.FeedCacheInvalidationService;
 import com.zhiguang.be.social.CounterEventPayload;
 import com.zhiguang.be.social.SocialCounterSchema;
 import com.zhiguang.be.social.InteractionActionData;
@@ -15,6 +17,7 @@ import com.zhiguang.be.social.SocialRedisKeys;
 import com.zhiguang.be.social.kafka.CounterEvent;
 import com.zhiguang.be.social.kafka.CounterEventProducer;
 import com.zhiguang.be.social.mapper.SocialMapper;
+import com.zhiguang.be.social.service.CounterAggregationOperations;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
@@ -24,15 +27,15 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -42,14 +45,13 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * 社交互动服务实现。
  * 负责点赞、收藏、互动汇总、位图缓存和实体计数 SDS 的维护。
  */
 @Service
-public class InteractionServiceImpl implements InteractionService {
+public class InteractionServiceImpl implements InteractionService, CounterAggregationOperations {
 
     private static final Logger log = LoggerFactory.getLogger(InteractionServiceImpl.class);
     private static final String DISCOVER_TYPE = "knowledge";
@@ -65,6 +67,7 @@ public class InteractionServiceImpl implements InteractionService {
     private final UserSocialCounterService userSocialCounterService;
     private final CounterEventProducer counterEventProducer;
     private final LbsDiscoverService lbsDiscoverService;
+    private final FeedCacheInvalidationService feedCacheInvalidationService;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final DefaultRedisScript<Long> bitmapToggleScript;
@@ -100,6 +103,7 @@ public class InteractionServiceImpl implements InteractionService {
             UserSocialCounterService userSocialCounterService,
             CounterEventProducer counterEventProducer,
             ObjectProvider<LbsDiscoverService> lbsDiscoverServiceProvider,
+            ObjectProvider<FeedCacheInvalidationService> feedCacheInvalidationServiceProvider,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper
     ) {
@@ -109,6 +113,7 @@ public class InteractionServiceImpl implements InteractionService {
         this.userSocialCounterService = userSocialCounterService;
         this.counterEventProducer = counterEventProducer;
         this.lbsDiscoverService = lbsDiscoverServiceProvider.getIfAvailable();
+        this.feedCacheInvalidationService = feedCacheInvalidationServiceProvider.getIfAvailable();
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
 
@@ -371,14 +376,14 @@ public class InteractionServiceImpl implements InteractionService {
             String action,
             boolean active
     ) {
-        ensureAuthenticatedUser(currentUserId);
+        SocialServiceSupport.ensureAuthenticatedUser(currentUserId);
         PostTargetSnapshot snapshot = loadTargetSnapshot(currentUserId, targetType, targetId);
         boolean changed = active
                 ? activateInteractionState(currentUserId, targetType, targetId, action)
                 : deactivateInteractionState(currentUserId, targetType, targetId, action);
 
         if (!changed) {
-            return buildActionData(targetType, targetId, action, active);
+            return buildActionData(targetType, targetId, action, active, false);
         }
 
         int delta = active ? 1 : -1;
@@ -389,24 +394,24 @@ public class InteractionServiceImpl implements InteractionService {
                 "interaction",
                 targetId,
                 eventType,
-                serialize(CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId, delta))
+                SocialServiceSupport.serialize(objectMapper, CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId, delta))
         );
 
-        runAfterCommit(() -> {
+        Transactions.runAfterCommit(() -> {
             try {
                 syncBitmap(targetType, targetId, currentUserId, action, active);
-                if (counterEventProducer.isEnabled()) {
-                    counterEventProducer.publish(CounterEvent.of(
-                            targetType,
-                            String.valueOf(targetId),
-                            resolveBitmapMetric(action),
-                            resolveCounterFieldIndex(action),
-                            currentUserId,
-                            delta
-                    ));
-                } else {
+                CounterEvent counterEvent = CounterEvent.of(
+                        targetType,
+                        String.valueOf(targetId),
+                        resolveBitmapMetric(action),
+                        resolveCounterFieldIndex(action),
+                        currentUserId,
+                        delta
+                );
+                if (!counterEventProducer.isEnabled() || !counterEventProducer.publish(counterEvent)) {
                     incrementAggregateBucket(targetType, targetId, action, delta);
                 }
+                invalidateFeedCache(targetType, targetId);
                 if ("like".equals(action)) {
                     userSocialCounterService.incrementLikesReceived(snapshot.getCreatorId(), delta);
                 } else {
@@ -426,7 +431,7 @@ public class InteractionServiceImpl implements InteractionService {
             }
         });
 
-        return buildActionData(targetType, targetId, action, active);
+        return buildActionData(targetType, targetId, action, active, true);
     }
 
     /**
@@ -472,14 +477,22 @@ public class InteractionServiceImpl implements InteractionService {
      * @param active 当前动作是否生效
      * @return 动作结果
      */
-    private InteractionActionData buildActionData(String targetType, long targetId, String action, boolean active) {
+    private InteractionActionData buildActionData(String targetType, long targetId, String action, boolean active, boolean changed) {
         return new InteractionActionData(
                 targetType,
                 String.valueOf(targetId),
                 action,
                 active,
+                changed,
                 Math.toIntExact(Instant.now().getEpochSecond())
         );
+    }
+
+    private void invalidateFeedCache(String targetType, long targetId) {
+        if (feedCacheInvalidationService == null || !"post".equalsIgnoreCase(targetType)) {
+            return;
+        }
+        feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(targetId));
     }
 
     /**
@@ -559,10 +572,10 @@ public class InteractionServiceImpl implements InteractionService {
             return null;
         }
         return new PostTargetSnapshot(
-                toLong(postId),
-                toLong(creatorId),
-                toStringValue(row.get("status")),
-                toStringValue(row.get("visible"))
+                Numbers.toLong(postId),
+                Numbers.toLong(creatorId),
+                SocialServiceSupport.toStringValue(row.get("status")),
+                SocialServiceSupport.toStringValue(row.get("visible"))
         );
     }
 
@@ -622,9 +635,9 @@ public class InteractionServiceImpl implements InteractionService {
             List<Map<String, Object>> rows = socialMapper.aggregateActiveInteractionCountsBatch(targetType, fallbackTargetIds);
             if (rows != null) {
                 for (Map<String, Object> row : rows) {
-                    long targetId = toLong(row.get("targetId"));
-                    String actionType = toStringValue(row.get("actionType"));
-                    long total = toLong(row.get("total"));
+                    long targetId = Numbers.toLong(row.get("targetId"));
+                    String actionType = SocialServiceSupport.toStringValue(row.get("actionType"));
+                    long total = Numbers.toLong(row.get("total"));
                     long[] stats = result.get(targetId);
                     if (stats == null) {
                         stats = new long[]{0L, 0L};
@@ -724,8 +737,8 @@ public class InteractionServiceImpl implements InteractionService {
         List<Map<String, Object>> rows = socialMapper.listActiveInteractionsByUserAndTargets(currentUserId, targetType, targetIds);
         if (rows != null) {
             for (Map<String, Object> row : rows) {
-                long targetId = toLong(row.get("targetId"));
-                String actionType = toStringValue(row.get("actionType"));
+                long targetId = Numbers.toLong(row.get("targetId"));
+                String actionType = SocialServiceSupport.toStringValue(row.get("actionType"));
                 boolean[] states = result.get(targetId);
                 if (states == null) {
                     continue;
@@ -846,17 +859,6 @@ public class InteractionServiceImpl implements InteractionService {
     private void ensureSupportedTargetType(String targetType) {
         if (!"post".equalsIgnoreCase(targetType)) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "当前只支持 post 类型");
-        }
-    }
-
-    /**
-     * 校验当前操作用户是否已登录。
-     *
-     * @param currentUserId 当前操作用户 ID
-     */
-    private void ensureAuthenticatedUser(long currentUserId) {
-        if (currentUserId <= 0L) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
         }
     }
 
@@ -1005,26 +1007,6 @@ public class InteractionServiceImpl implements InteractionService {
     }
 
     /**
-     * 同步实体计数 SDS。
-     *
-     * @param targetType 目标类型
-     * @param targetId 目标 ID
-     * @param action 动作类型
-     * @param delta 变化量
-     */
-    private void incrementEntityCounter(String targetType, long targetId, String action, int delta) {
-        int fieldIndex = "like".equals(action) ? SocialCounterSchema.IDX_LIKE : SocialCounterSchema.IDX_FAV;
-        stringRedisTemplate.execute(
-                entityCounterIncrementScript,
-                Collections.singletonList(SocialRedisKeys.entityCounterKey(targetType, targetId)),
-                String.valueOf(SocialCounterSchema.SCHEMA_LEN),
-                String.valueOf(SocialCounterSchema.FIELD_SIZE),
-                String.valueOf(fieldIndex),
-                String.valueOf(delta)
-        );
-    }
-
-    /**
      * 将本次互动增量写入聚合桶，供后台折叠进实体计数快照。
      *
      * @param targetType 目标类型
@@ -1071,9 +1053,10 @@ public class InteractionServiceImpl implements InteractionService {
      * 立即执行一次聚合桶刷写。
      * 供本地调度链或 Kafka 聚合消费者统一复用。
      */
+    @Override
     public void flushAggregateBucketsNow() {
-        Set<String> keys = stringRedisTemplate.keys(SocialRedisKeys.aggregateBucketPattern());
-        if (keys == null || keys.isEmpty()) {
+        List<String> keys = scanRedisKeys(SocialRedisKeys.aggregateBucketPattern());
+        if (keys.isEmpty()) {
             return;
         }
 
@@ -1095,6 +1078,7 @@ public class InteractionServiceImpl implements InteractionService {
      *
      * @param event Kafka 计数事件
      */
+    @Override
     public void acceptAggregateEvent(CounterEvent event) {
         if (event == null) {
             return;
@@ -1325,8 +1309,8 @@ public class InteractionServiceImpl implements InteractionService {
      * @return 若存在位图分片则返回汇总值；若完全不存在分片则返回 null
      */
     private Long bitCountShardsPipelined(String metric, String targetType, long targetId) {
-        Set<String> keys = stringRedisTemplate.keys(SocialRedisKeys.bitmapPattern(metric, targetType, targetId));
-        if (keys == null || keys.isEmpty()) {
+        List<String> keys = scanRedisKeys(SocialRedisKeys.bitmapPattern(metric, targetType, targetId));
+        if (keys.isEmpty()) {
             return null;
         }
 
@@ -1346,6 +1330,35 @@ public class InteractionServiceImpl implements InteractionService {
             }
         }
         return sum;
+    }
+
+    private List<String> scanRedisKeys(String pattern) {
+        try {
+            List<String> keys = stringRedisTemplate.execute((RedisCallback<List<String>>) connection -> {
+                List<String> result = new ArrayList<String>();
+                ScanOptions options = ScanOptions.scanOptions()
+                        .match(pattern)
+                        .count(500)
+                        .build();
+                Cursor<byte[]> cursor = connection.scan(options);
+                try {
+                    while (cursor.hasNext()) {
+                        result.add(new String(cursor.next(), StandardCharsets.UTF_8));
+                    }
+                } finally {
+                    try {
+                        cursor.close();
+                    } catch (Exception ignored) {
+                        // Ignore scan cursor close failures; the scan itself is best-effort.
+                    }
+                }
+                return result;
+            });
+            return keys == null ? Collections.emptyList() : keys;
+        } catch (Exception ex) {
+            log.warn("scan redis keys failed, pattern={}", pattern, ex);
+            return Collections.emptyList();
+        }
     }
 
     /**
@@ -1412,61 +1425,6 @@ public class InteractionServiceImpl implements InteractionService {
             return "favorite";
         }
         return null;
-    }
-
-    /**
-     * 序列化 outbox 事件载荷。
-     *
-     * @param payload 事件对象
-     * @return JSON 字符串
-     */
-    private String serialize(Object payload) {
-        try {
-            return objectMapper.writeValueAsString(payload);
-        } catch (JsonProcessingException ex) {
-            throw new BusinessException(ErrorCode.INTERNAL_ERROR, HttpStatus.INTERNAL_SERVER_ERROR, "事件序列化失败");
-        }
-    }
-
-    /**
-     * 在事务提交后执行额外逻辑。
-     *
-     * @param runnable 提交后执行的任务
-     */
-    private void runAfterCommit(Runnable runnable) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            runnable.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                runnable.run();
-            }
-        });
-    }
-
-    /**
-     * 将任意对象转成 long。
-     *
-     * @param value 原始对象
-     * @return long 数值
-     */
-    private long toLong(Object value) {
-        if (value instanceof Number) {
-            return ((Number) value).longValue();
-        }
-        return Long.parseLong(String.valueOf(value));
-    }
-
-    /**
-     * 将任意对象转成字符串。
-     *
-     * @param value 原始对象
-     * @return 字符串值
-     */
-    private String toStringValue(Object value) {
-        return value == null ? null : String.valueOf(value);
     }
 
     /**

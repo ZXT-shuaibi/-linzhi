@@ -61,13 +61,13 @@ public class DiscoverMapServiceImpl implements DiscoverMapService {
                 return Optional.empty();
             }
             JsonNode first = geocodes.get(0);
-            double[] location = parseLocation(first.path("location").asText(null));
+            AmapLocation location = parseAmapLocation(first.path("location").asText(null));
             if (location == null) {
                 return Optional.empty();
             }
             return Optional.of(new GeoPoint(
-                    location[1],
-                    location[0],
+                    location.lat(),
+                    location.lng(),
                     textOrNull(first, "formatted_address"),
                     normalizeAmapText(first.get("province")),
                     normalizeAmapText(first.get("city")),
@@ -89,7 +89,7 @@ public class DiscoverMapServiceImpl implements DiscoverMapService {
             String response = restTemplate.getForObject(
                     UriComponentsBuilder.fromHttpUrl(discoverProperties.getMapProvider().getReverseGeocodeEndpoint())
                             .queryParam("key", discoverProperties.getMapProvider().getApiKey())
-                            .queryParam("location", formatLocation(lng, lat))
+                            .queryParam("location", formatAmapLocation(lat, lng))
                             .queryParam("extensions", "base")
                             .build(true)
                             .toUri(),
@@ -135,7 +135,7 @@ public class DiscoverMapServiceImpl implements DiscoverMapService {
                     UriComponentsBuilder.fromHttpUrl(discoverProperties.getMapProvider().getPoiSearchEndpoint())
                             .queryParam("key", discoverProperties.getMapProvider().getApiKey())
                             .queryParam("keywords", keyword.trim())
-                            .queryParam("location", formatLocation(lng, lat))
+                            .queryParam("location", formatAmapLocation(lat, lng))
                             .queryParam("radius", safeRadius)
                             .queryParam("page_num", safePage)
                             .queryParam("page_size", safeSize)
@@ -155,9 +155,9 @@ public class DiscoverMapServiceImpl implements DiscoverMapService {
 
             List<PoiItem> items = new ArrayList<PoiItem>(pois.size());
             for (JsonNode poi : pois) {
-                double[] location = parseLocation(textOrNull(poi, "location"));
-                Double poiLat = location == null ? null : location[1];
-                Double poiLng = location == null ? null : location[0];
+                AmapLocation location = parseAmapLocation(textOrNull(poi, "location"));
+                Double poiLat = location == null ? null : location.lat();
+                Double poiLng = location == null ? null : location.lng();
                 items.add(new PoiItem(
                         textOrNull(poi, "id"),
                         textOrNull(poi, "name"),
@@ -223,7 +223,7 @@ public class DiscoverMapServiceImpl implements DiscoverMapService {
         return null;
     }
 
-    private double[] parseLocation(String location) {
+    private AmapLocation parseAmapLocation(String location) {
         if (!StringUtils.hasText(location)) {
             return null;
         }
@@ -232,17 +232,19 @@ public class DiscoverMapServiceImpl implements DiscoverMapService {
             return null;
         }
         try {
-            return new double[]{
-                    Double.parseDouble(parts[0].trim()),
-                    Double.parseDouble(parts[1].trim())
-            };
+            double lng = Double.parseDouble(parts[0].trim());
+            double lat = Double.parseDouble(parts[1].trim());
+            return new AmapLocation(lat, lng);
         } catch (NumberFormatException ex) {
             return null;
         }
     }
 
-    private String formatLocation(Double lng, Double lat) {
+    private String formatAmapLocation(Double lat, Double lng) {
         return String.format(Locale.ROOT, "%.6f,%.6f", lng.doubleValue(), lat.doubleValue());
+    }
+
+    private record AmapLocation(Double lat, Double lng) {
     }
 
     private Optional<String> optionalText(String value) {

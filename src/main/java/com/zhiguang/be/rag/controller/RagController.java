@@ -1,9 +1,10 @@
 package com.zhiguang.be.rag.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.guard.RateLimiter;
 import com.zhiguang.be.rag.model.RagQueryRequest;
-import com.zhiguang.be.rag.service.RagIndexService;
-import com.zhiguang.be.rag.service.RagQueryService;
+import com.zhiguang.be.rag.service.RagIndexOperations;
+import com.zhiguang.be.rag.service.RagQueryOperations;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import org.springframework.http.MediaType;
@@ -24,13 +25,13 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/v1/rag")
 public class RagController {
 
-    private final RagQueryService ragQueryService;
-    private final RagIndexService ragIndexService;
+    private final RagQueryOperations ragQueryService;
+    private final RagIndexOperations ragIndexService;
 
     /**
      * 注入 RAG 相关服务。
      */
-    public RagController(RagQueryService ragQueryService, RagIndexService ragIndexService) {
+    public RagController(RagQueryOperations ragQueryService, RagIndexOperations ragIndexService) {
         this.ragQueryService = ragQueryService;
         this.ragIndexService = ragIndexService;
     }
@@ -39,6 +40,7 @@ public class RagController {
      * 发起流式问答。
      */
     @PostMapping(value = "/queries/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @RateLimiter(keyPrefix = "rag:stream", windowMillis = 60_000, limit = 20, message = "RAG query is too frequent")
     public SseEmitter stream(@Valid @RequestBody RagQueryRequest request) {
         return ragQueryService.stream(request);
     }

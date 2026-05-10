@@ -34,6 +34,9 @@ public interface ProfileMapper {
             @Param("gender") String gender,
             @Param("birthday") java.time.LocalDate birthday,
             @Param("school") String school,
-            @Param("tagsJson") String tagsJson
+            @Param("tagsJson") String tagsJson,
+            @Param("clearBio") boolean clearBio,
+            @Param("clearBirthday") boolean clearBirthday,
+            @Param("clearSchool") boolean clearSchool
     );
 }

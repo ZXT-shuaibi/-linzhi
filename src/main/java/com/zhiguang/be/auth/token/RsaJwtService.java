@@ -30,6 +30,7 @@ public class RsaJwtService implements JwtService {
     private static final String ACCESS_TOKEN_TYPE = "access";
     private static final String REFRESH_TOKEN_TYPE = "refresh";
     private static final String TOKEN_TYPE_CLAIM = "token_type";
+    private static final String ROLE_CLAIM = "role";
 
     private final JwtEncoder jwtEncoder;
     private final JwtDecoder tokenJwtDecoder;
@@ -60,16 +61,16 @@ public class RsaJwtService implements JwtService {
      * @return 包含双令牌的认证结果
      */
     @Override
-    public AuthTokens issueTokens(String userId) {
+    public AuthTokens issueTokens(String userId, String role) {
         Instant now = Instant.now();
 
         String accessJti = UUID.randomUUID().toString();
         Instant accessExpiresAt = now.plus(properties.getAccessTokenTtlMinutes(), ChronoUnit.MINUTES);
-        String accessToken = encodeToken(userId, accessJti, ACCESS_TOKEN_TYPE, now, accessExpiresAt);
+        String accessToken = encodeToken(userId, role, accessJti, ACCESS_TOKEN_TYPE, now, accessExpiresAt);
 
         String refreshJti = UUID.randomUUID().toString();
         Instant refreshExpiresAt = now.plus(properties.getRefreshTokenTtlDays(), ChronoUnit.DAYS);
-        String refreshToken = encodeToken(userId, refreshJti, REFRESH_TOKEN_TYPE, now, refreshExpiresAt);
+        String refreshToken = encodeToken(userId, role, refreshJti, REFRESH_TOKEN_TYPE, now, refreshExpiresAt);
 
         return new AuthTokens(accessToken, accessExpiresAt, refreshToken, refreshExpiresAt, "Bearer");
     }
@@ -102,7 +103,9 @@ public class RsaJwtService implements JwtService {
             throw unauthorizedException();
         }
 
-        return new RefreshTokenClaims(userId, jti, expiresAt);
+        String role = jwt.getClaimAsString(ROLE_CLAIM);
+
+        return new RefreshTokenClaims(userId, role, jti, expiresAt);
     }
 
     /**
@@ -116,7 +119,7 @@ public class RsaJwtService implements JwtService {
      * @param expiresAt 过期时间
      * @return 已签名的 JWT 字符串
      */
-    private String encodeToken(String userId, String jti, String tokenType, Instant issuedAt, Instant expiresAt) {
+    private String encodeToken(String userId, String role, String jti, String tokenType, Instant issuedAt, Instant expiresAt) {
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer(properties.getIssuer())
                 .subject(userId)
@@ -124,6 +127,7 @@ public class RsaJwtService implements JwtService {
                 .expiresAt(expiresAt)
                 .id(jti)
                 .claim(TOKEN_TYPE_CLAIM, tokenType)
+                .claim(ROLE_CLAIM, role)
                 .build();
 
         JwsHeader header = JwsHeader.with(SignatureAlgorithm.RS256)

@@ -1,12 +1,13 @@
 package com.zhiguang.be.feed.service.impl;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.cache.CacheRegions;
 import com.zhiguang.be.cache.hotkey.HotKeyDetector;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.common.geo.GeoDistances;
+import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.content.dto.PostAuthor;
 import com.zhiguang.be.feed.FeedData;
 import com.zhiguang.be.feed.FeedItem;
@@ -33,6 +34,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 首页 Feed 服务。
@@ -47,7 +50,8 @@ public class FeedServiceImpl implements FeedService {
     private static final String FRAGMENT_CACHE_KEY_PREFIX = "feed:fragment:post:";
     private static final int DEFAULT_CANDIDATE_WINDOW = 100;
     private static final int MAX_CANDIDATE_WINDOW = 500;
-    private static final double EARTH_RADIUS_METERS = 6_371_000D;
+    private static final int SINGLE_FLIGHT_MAX_LOCKS = 1024;
+    private static final long SINGLE_FLIGHT_IDLE_TTL_MILLIS = 30_000L;
 
     private final FeedMapper feedMapper;
     private final CacheService cacheService;
@@ -56,7 +60,7 @@ public class FeedServiceImpl implements FeedService {
     private final FollowService followService;
     private final InteractionService interactionService;
     private final UserSocialCounterService userSocialCounterService;
-    private final ConcurrentHashMap<String, Object> singleFlightLocks = new ConcurrentHashMap<String, Object>();
+    private final ConcurrentHashMap<String, SingleFlightLock> singleFlightLocks = new ConcurrentHashMap<String, SingleFlightLock>();
 
     /**
      * 注入 Feed 服务依赖。
@@ -114,7 +118,7 @@ public class FeedServiceImpl implements FeedService {
             return enrichFeedData(redisCached, viewerId, "L1+L0");
         }
 
-        Object lock = singleFlightLocks.computeIfAbsent(cacheKey, key -> new Object());
+        SingleFlightLock lock = acquireSingleFlightLock(cacheKey);
         synchronized (lock) {
             try {
                 FeedData localCachedAgain = readLocalCache(cacheKey);
@@ -135,7 +139,49 @@ public class FeedServiceImpl implements FeedService {
                 writeLocalCache(cacheKey, freshData);
                 return enrichFeedData(freshData, viewerId, "DB");
             } finally {
-                singleFlightLocks.remove(cacheKey);
+                releaseSingleFlightLock(cacheKey, lock);
+            }
+        }
+    }
+
+    private SingleFlightLock acquireSingleFlightLock(String cacheKey) {
+        evictIdleSingleFlightLocks(false);
+        if (!singleFlightLocks.containsKey(cacheKey) && singleFlightLocks.size() >= SINGLE_FLIGHT_MAX_LOCKS) {
+            evictIdleSingleFlightLocks(true);
+        }
+        if (!singleFlightLocks.containsKey(cacheKey) && singleFlightLocks.size() >= SINGLE_FLIGHT_MAX_LOCKS) {
+            SingleFlightLock detachedLock = new SingleFlightLock(System.currentTimeMillis(), false);
+            detachedLock.retain();
+            return detachedLock;
+        }
+
+        long now = System.currentTimeMillis();
+        AtomicReference<SingleFlightLock> reference = new AtomicReference<SingleFlightLock>();
+        singleFlightLocks.compute(cacheKey, (key, existing) -> {
+            SingleFlightLock lock = existing == null ? new SingleFlightLock(now, true) : existing;
+            lock.retain();
+            reference.set(lock);
+            return lock;
+        });
+        return reference.get();
+    }
+
+    private void releaseSingleFlightLock(String cacheKey, SingleFlightLock lock) {
+        if (lock == null || lock.release() > 0 || !lock.shared()) {
+            return;
+        }
+        singleFlightLocks.remove(cacheKey, lock);
+    }
+
+    private void evictIdleSingleFlightLocks(boolean aggressive) {
+        if (!aggressive && singleFlightLocks.size() < SINGLE_FLIGHT_MAX_LOCKS) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, SingleFlightLock> entry : singleFlightLocks.entrySet()) {
+            SingleFlightLock lock = entry.getValue();
+            if ((aggressive && lock.isIdle()) || lock.isIdleExpired(now, SINGLE_FLIGHT_IDLE_TTL_MILLIS)) {
+                singleFlightLocks.remove(entry.getKey(), lock);
             }
         }
     }
@@ -408,21 +454,8 @@ public class FeedServiceImpl implements FeedService {
      * @return 距离，单位米；内容没有位置时返回 null
      */
     private Double calculateDistanceMeters(double viewerLat, double viewerLng, Double postLat, Double postLng) {
-        if (postLat == null || postLng == null) {
-            return null;
-        }
-
-        double latRad1 = Math.toRadians(viewerLat);
-        double latRad2 = Math.toRadians(postLat);
-        double deltaLat = Math.toRadians(postLat - viewerLat);
-        double deltaLng = Math.toRadians(postLng - viewerLng);
-
-        double sinLat = Math.sin(deltaLat / 2D);
-        double sinLng = Math.sin(deltaLng / 2D);
-        double a = sinLat * sinLat
-                + Math.cos(latRad1) * Math.cos(latRad2) * sinLng * sinLng;
-        double c = 2D * Math.atan2(Math.sqrt(a), Math.sqrt(1D - a));
-        return roundDistance(EARTH_RADIUS_METERS * c);
+        Double distance = GeoDistances.nullableHaversineMeters(viewerLat, viewerLng, postLat, postLng);
+        return distance == null ? null : roundDistance(distance);
     }
 
     /**
@@ -740,15 +773,7 @@ public class FeedServiceImpl implements FeedService {
      * @return 字符串列表
      */
     private List<String> parseStringList(String json) {
-        if (!StringUtils.hasText(json)) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(json, new TypeReference<List<String>>() {
-            });
-        } catch (Exception ex) {
-            return List.of();
-        }
+        return Jsons.parseStringList(objectMapper, json);
     }
 
     /**
@@ -850,6 +875,38 @@ public class FeedServiceImpl implements FeedService {
     ) {
         private static CachedFeedPageItem from(FeedItem item) {
             return new CachedFeedPageItem(item.postId(), item.distanceMeters(), item.hotScore());
+        }
+    }
+
+    private static final class SingleFlightLock {
+
+        private final long createdAtMillis;
+        private final boolean shared;
+        private final AtomicInteger references = new AtomicInteger(0);
+
+        private SingleFlightLock(long createdAtMillis, boolean shared) {
+            this.createdAtMillis = createdAtMillis;
+            this.shared = shared;
+        }
+
+        private void retain() {
+            references.incrementAndGet();
+        }
+
+        private int release() {
+            return references.updateAndGet(current -> Math.max(0, current - 1));
+        }
+
+        private boolean shared() {
+            return shared;
+        }
+
+        private boolean isIdleExpired(long now, long ttlMillis) {
+            return isIdle() && now - createdAtMillis >= ttlMillis;
+        }
+
+        private boolean isIdle() {
+            return references.get() == 0;
         }
     }
 

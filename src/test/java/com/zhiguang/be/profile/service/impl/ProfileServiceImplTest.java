@@ -7,6 +7,7 @@ import com.zhiguang.be.content.service.ContentService;
 import com.zhiguang.be.profile.mapper.ProfileMapper;
 import com.zhiguang.be.profile.model.ProfileAvatarRequest;
 import com.zhiguang.be.profile.model.ProfileData;
+import com.zhiguang.be.profile.model.ProfilePatchRequest;
 import com.zhiguang.be.profile.model.ProfileUserRow;
 import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.UserSocialCounterData;
@@ -15,6 +16,8 @@ import com.zhiguang.be.social.service.UserSocialCounterService;
 import com.zhiguang.be.storage.StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -79,7 +82,10 @@ class ProfileServiceImplTest {
                 isNull(),
                 isNull(),
                 isNull(),
-                isNull()
+                isNull(),
+                eq(false),
+                eq(false),
+                eq(false)
         );
         assertEquals("https://mock-oss.local/public/avatars/7/20260422/avatar.png", result.avatar());
         assertTrue(result.self());
@@ -103,7 +109,34 @@ class ProfileServiceImplTest {
                 isNull(),
                 isNull(),
                 isNull(),
-                isNull()
+                isNull(),
+                eq(false),
+                eq(false),
+                eq(false)
+        );
+    }
+
+    @Test
+    void updateProfileShouldClearNullableFieldsWhenRequested() {
+        when(profileMapper.findByUserId(7L)).thenReturn(row(null), row(null));
+
+        profileService.updateProfile(
+                7L,
+                new ProfilePatchRequest(null, null, null, null, null, null, List.of("bio", "birthday", "school"))
+        );
+
+        verify(profileMapper).updateProfile(
+                eq(7L),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                isNull(),
+                eq(true),
+                eq(true),
+                eq(true)
         );
     }
 

@@ -16,10 +16,10 @@ public class RagIndexInitializer {
 
     private static final Logger log = LoggerFactory.getLogger(RagIndexInitializer.class);
 
-    private final RagIndexService ragIndexService;
+    private final RagIndexOperations ragIndexService;
     private final RagProperties ragProperties;
 
-    public RagIndexInitializer(RagIndexService ragIndexService, RagProperties ragProperties) {
+    public RagIndexInitializer(RagIndexOperations ragIndexService, RagProperties ragProperties) {
         this.ragIndexService = ragIndexService;
         this.ragProperties = ragProperties;
     }

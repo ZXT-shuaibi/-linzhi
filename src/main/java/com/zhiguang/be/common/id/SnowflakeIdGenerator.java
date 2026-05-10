@@ -3,6 +3,8 @@ package com.zhiguang.be.common.id;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.locks.LockSupport;
+
 /**
  * Snowflake 分布式ID生成器。
  *
@@ -28,6 +30,8 @@ public class SnowflakeIdGenerator {
     private static final long WORKER_ID_SHIFT = SEQUENCE_BITS;
     private static final long DATACENTER_ID_SHIFT = SEQUENCE_BITS + WORKER_ID_BITS;
     private static final long TIMESTAMP_SHIFT = SEQUENCE_BITS + WORKER_ID_BITS + DATACENTER_ID_BITS;
+    private static final int MAX_SPIN_WAIT_ATTEMPTS = 64;
+    private static final long PARK_WAIT_NANOS = 100_000L;
 
     private final long workerId;
     private final long datacenterId;
@@ -86,7 +90,13 @@ public class SnowflakeIdGenerator {
 
     private long waitNextMillis(long lastTimestamp) {
         long timestamp = currentTimeMillis();
+        int attempts = 0;
         while (timestamp <= lastTimestamp) {
+            if (attempts++ < MAX_SPIN_WAIT_ATTEMPTS) {
+                Thread.onSpinWait();
+            } else {
+                LockSupport.parkNanos(PARK_WAIT_NANOS);
+            }
             timestamp = currentTimeMillis();
         }
         return timestamp;

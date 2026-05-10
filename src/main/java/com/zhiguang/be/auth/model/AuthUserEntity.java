@@ -10,21 +10,24 @@ public class AuthUserEntity {
     private final String phone;
     private final String nickname;
     private final String passwordHash;
+    private final String role;
 
-    public AuthUserEntity(String userId, String phone, String nickname, String passwordHash) {
+    public AuthUserEntity(String userId, String phone, String nickname, String passwordHash, String role) {
         this.userId = userId;
         this.phone = phone;
         this.nickname = nickname;
         this.passwordHash = passwordHash;
+        this.role = role;
     }
 
     public String userId() { return userId; }
     public String phone() { return phone; }
     public String nickname() { return nickname; }
     public String passwordHash() { return passwordHash; }
+    public String role() { return role; }
 
     public AuthUserEntity withPasswordHash(String newPasswordHash) {
-        return new AuthUserEntity(this.userId, this.phone, this.nickname, newPasswordHash);
+        return new AuthUserEntity(this.userId, this.phone, this.nickname, newPasswordHash, this.role);
     }
 
     @Override

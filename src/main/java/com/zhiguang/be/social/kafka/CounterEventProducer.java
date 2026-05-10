@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * 计数事件 Kafka 生产者。
  * 当前默认关闭，只在显式开启后把互动计数事件发送到 Kafka，
@@ -44,24 +46,25 @@ public class CounterEventProducer {
      *
      * @param event 计数事件
      */
-    public void publish(CounterEvent event) {
+    public boolean publish(CounterEvent event) {
         if (!enabled || event == null) {
-            return;
+            return false;
         }
 
         try {
             String payload = objectMapper.writeValueAsString(event);
             String key = event.getEntityType() + ":" + event.getEntityId();
             kafkaTemplate.send(CounterTopics.EVENTS, key, payload)
-                    .whenComplete((result, throwable) -> {
-                        if (throwable != null) {
-                            log.warn("publish counter event to kafka failed, entityType={}, entityId={}",
-                                    event.getEntityType(), event.getEntityId(), throwable);
-                        }
-                    });
+                    .get(3, TimeUnit.SECONDS);
+            return true;
         } catch (JsonProcessingException ex) {
             log.warn("serialize counter event failed, entityType={}, entityId={}",
                     event.getEntityType(), event.getEntityId(), ex);
+            return false;
+        } catch (Exception ex) {
+            log.warn("publish counter event to kafka failed, entityType={}, entityId={}",
+                    event.getEntityType(), event.getEntityId(), ex);
+            return false;
         }
     }
 

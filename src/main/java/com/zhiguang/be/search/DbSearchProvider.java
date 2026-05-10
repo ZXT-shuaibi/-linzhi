@@ -1,5 +1,8 @@
 package com.zhiguang.be.search;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.common.geo.GeoDistances;
+import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.social.InteractionSummary;
 import com.zhiguang.be.social.service.InteractionService;
 import org.springframework.stereotype.Component;
@@ -14,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.zhiguang.be.common.util.Texts.hasText;
+
 /**
  * 数据库基础版搜索提供者。
  */
@@ -23,15 +28,18 @@ public class DbSearchProvider implements SearchProvider {
     private final SearchMapper searchMapper;
     private final SearchProperties searchProperties;
     private final InteractionService interactionService;
+    private final ObjectMapper objectMapper;
 
     public DbSearchProvider(
             SearchMapper searchMapper,
             SearchProperties searchProperties,
-            InteractionService interactionService
+            InteractionService interactionService,
+            ObjectMapper objectMapper
     ) {
         this.searchMapper = searchMapper;
         this.searchProperties = searchProperties;
         this.interactionService = interactionService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -165,10 +173,6 @@ public class DbSearchProvider implements SearchProvider {
         int fetchMultiplier = Math.max(searchProperties.getFetchMultiplier(), 1);
         int maxFetchLimit = Math.max(searchProperties.getMaxFetchLimit(), safeSize + 1);
         return Math.min(Math.max(safeSize * fetchMultiplier, safeSize + 1), maxFetchLimit);
-    }
-
-    private boolean hasText(String value) {
-        return value != null && !value.isBlank();
     }
 
     private Map<String, InteractionSummary> loadInteractionMap(long currentUserId, List<SearchPostRow> rows) {
@@ -314,25 +318,7 @@ public class DbSearchProvider implements SearchProvider {
         if (!hasText(rawValue)) {
             return Collections.emptyList();
         }
-        String normalized = rawValue
-                .replace('[', ' ')
-                .replace(']', ' ')
-                .replace('"', ' ')
-                .replace('\'', ' ')
-                .replaceAll("\\s+", " ")
-                .trim();
-        if (normalized.isEmpty()) {
-            return Collections.emptyList();
-        }
-        String[] parts = normalized.split(",");
-        List<String> values = new ArrayList<String>();
-        for (String part : parts) {
-            String item = part.trim();
-            if (!item.isEmpty() && !values.contains(item)) {
-                values.add(item);
-            }
-        }
-        return values;
+        return Jsons.parseNormalizedStringList(objectMapper, rawValue);
     }
 
     private String firstListValue(List<String> values) {
@@ -366,6 +352,10 @@ public class DbSearchProvider implements SearchProvider {
     private List<String> extractTags(String rawTagValue) {
         if (!hasText(rawTagValue)) {
             return Collections.emptyList();
+        }
+        List<String> jsonTags = Jsons.parseNormalizedStringList(objectMapper, rawTagValue);
+        if (!jsonTags.isEmpty()) {
+            return jsonTags;
         }
         String normalized = rawTagValue
                 .replace('[', ' ')
@@ -408,14 +398,7 @@ public class DbSearchProvider implements SearchProvider {
         if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) {
             return null;
         }
-        double earthRadius = 6371000D;
-        double dLat = Math.toRadians(lat2 - lat1);
-        double dLng = Math.toRadians(lng2 - lng1);
-        double a = Math.sin(dLat / 2D) * Math.sin(dLat / 2D)
-                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-                * Math.sin(dLng / 2D) * Math.sin(dLng / 2D);
-        double c = 2D * Math.atan2(Math.sqrt(a), Math.sqrt(1D - a));
-        return earthRadius * c;
+        return GeoDistances.haversineMeters(lat1, lng1, lat2, lng2);
     }
 
     private Instant toInstant(long epochMillis) {

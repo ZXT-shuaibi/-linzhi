@@ -2,11 +2,10 @@ package com.zhiguang.be.feed.service;
 
 import com.zhiguang.be.cache.CacheRegions;
 import com.zhiguang.be.cache.service.CacheService;
+import com.zhiguang.be.common.tx.Transactions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.util.concurrent.CompletableFuture;
@@ -42,16 +41,7 @@ public class FeedCacheInvalidationService {
             return;
         }
         Runnable task = () -> doubleDeletePost(postId.trim());
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            task.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                task.run();
-            }
-        });
+        Transactions.runAfterCommit(task);
     }
 
     /**

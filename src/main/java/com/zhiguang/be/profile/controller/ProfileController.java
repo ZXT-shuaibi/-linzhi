@@ -1,8 +1,7 @@
 package com.zhiguang.be.profile.controller;
 
 import com.zhiguang.be.common.api.ApiResponse;
-import com.zhiguang.be.common.exception.BusinessException;
-import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.content.dto.PostPageData;
 import com.zhiguang.be.profile.model.ProfileAvatarRequest;
 import com.zhiguang.be.profile.model.ProfileData;
@@ -11,7 +10,6 @@ import com.zhiguang.be.profile.model.ProfilePatchRequest;
 import com.zhiguang.be.profile.service.ProfileService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
@@ -47,7 +45,7 @@ public class ProfileController {
      */
     @GetMapping("/me")
     public ApiResponse<ProfileData> me(@AuthenticationPrincipal Jwt jwt) {
-        return ApiResponse.success(profileService.me(requireUserId(jwt)));
+        return ApiResponse.success(profileService.me(JwtSubjects.requireUserId(jwt)));
     }
 
     /**
@@ -58,7 +56,7 @@ public class ProfileController {
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody ProfilePatchRequest request
     ) {
-        return ApiResponse.success(profileService.updateProfile(requireUserId(jwt), request));
+        return ApiResponse.success(profileService.updateProfile(JwtSubjects.requireUserId(jwt), request));
     }
 
     /**
@@ -69,7 +67,7 @@ public class ProfileController {
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody ProfileAvatarRequest request
     ) {
-        return ApiResponse.success(profileService.updateAvatar(requireUserId(jwt), request));
+        return ApiResponse.success(profileService.updateAvatar(JwtSubjects.requireUserId(jwt), request));
     }
 
     /**
@@ -81,7 +79,7 @@ public class ProfileController {
             @PathVariable @Min(1) long userId,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getProfile(optionalUserId(jwt), userId));
+        return ApiResponse.success(profileService.getProfile(JwtSubjects.optionalUserId(jwt), userId));
     }
 
     /**
@@ -94,7 +92,7 @@ public class ProfileController {
             @RequestParam(defaultValue = "20") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getPublishedPosts(optionalUserId(jwt), userId, page, size));
+        return ApiResponse.success(profileService.getPublishedPosts(JwtSubjects.optionalUserId(jwt), userId, page, size));
     }
 
     /**
@@ -107,7 +105,7 @@ public class ProfileController {
             @RequestParam(defaultValue = "10") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getFollowingProfiles(optionalUserId(jwt), userId, page, size));
+        return ApiResponse.success(profileService.getFollowingProfiles(JwtSubjects.optionalUserId(jwt), userId, page, size));
     }
 
     /**
@@ -120,27 +118,7 @@ public class ProfileController {
             @RequestParam(defaultValue = "10") int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(profileService.getFollowerProfiles(optionalUserId(jwt), userId, page, size));
+        return ApiResponse.success(profileService.getFollowerProfiles(JwtSubjects.optionalUserId(jwt), userId, page, size));
     }
 
-    /**
-     * 提取当前登录用户 ID。
-     */
-    private long requireUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "当前请求未登录");
-        }
-        return Long.parseLong(jwt.getSubject());
-    }
-
-    /**
-     * 提取可选用户 ID。
-     * 匿名访问时返回 0，便于服务层统一处理。
-     */
-    private long optionalUserId(Jwt jwt) {
-        if (jwt == null || jwt.getSubject() == null || jwt.getSubject().isBlank()) {
-            return 0L;
-        }
-        return Long.parseLong(jwt.getSubject());
-    }
 }

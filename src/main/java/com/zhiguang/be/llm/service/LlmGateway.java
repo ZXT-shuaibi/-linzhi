@@ -31,5 +31,5 @@ public interface LlmGateway {
      * @param consumer 增量文本消费者
      * @return 成功走真实流式输出时返回 true，否则返回 false
      */
-    boolean streamRagAnswer(String question, List<RagAnswerService.Context> contexts, Consumer<String> consumer);
+    boolean streamRagAnswer(String question, List<RagAnswerService.Context> contexts, Consumer<String> consumer, RagAnswerService.CancellationSignal cancellationSignal);
 }

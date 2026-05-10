@@ -21,7 +21,19 @@ public interface RagAnswerService {
      * @param consumer 增量输出回调
      * @return 成功走真实流式输出时返回 true
      */
-    boolean streamAnswer(String question, List<Context> contexts, Consumer<String> consumer);
+    boolean streamAnswer(String question, List<Context> contexts, Consumer<String> consumer, CancellationSignal cancellationSignal);
+
+    /**
+     * Streaming cancellation hook. Implementations can poll the flag and register IO cleanup callbacks.
+     */
+    interface CancellationSignal {
+
+        boolean isCancelled();
+
+        default void onCancel(Runnable cancellationAction) {
+            // Optional hook for providers that can close sockets/streams on client abort.
+        }
+    }
 
     /**
      * 回答生成上下文。

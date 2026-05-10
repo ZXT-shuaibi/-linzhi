@@ -61,10 +61,19 @@
         <set>
             <if test="nickname != null">nickname = #{nickname},</if>
             <if test="avatar != null">avatar = #{avatar},</if>
-            <if test="bio != null">bio = #{bio},</if>
+            <choose>
+                <when test="clearBio == true">bio = null,</when>
+                <when test="bio != null">bio = #{bio},</when>
+            </choose>
             <if test="gender != null">gender = #{gender},</if>
-            <if test="birthday != null">birthday = #{birthday},</if>
-            <if test="school != null">school = #{school},</if>
+            <choose>
+                <when test="clearBirthday == true">birthday = null,</when>
+                <when test="birthday != null">birthday = #{birthday},</when>
+            </choose>
+            <choose>
+                <when test="clearSchool == true">school = null,</when>
+                <when test="school != null">school = #{school},</when>
+            </choose>
             <if test="tagsJson != null">tags_json = #{tagsJson},</if>
             updated_at = current_timestamp
         </set>

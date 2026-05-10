@@ -34,7 +34,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @Service
-public class StorageService {
+public class StorageService implements StorageOperations {
 
     private static final DateTimeFormatter DATE_FORMATTER =
             DateTimeFormatter.BASIC_ISO_DATE.withZone(ZoneOffset.UTC);
@@ -47,6 +47,7 @@ public class StorageService {
         this.knowPostMapper = knowPostMapper;
     }
 
+    @Override
     public StoragePresignData createPresign(long currentUserId, StoragePresignRequest request) {
         String scene = normalizeScene(request.scene());
         String contentType = normalizeContentType(request.contentType());
@@ -72,6 +73,7 @@ public class StorageService {
         );
     }
 
+    @Override
     public StorageMultipartInitData initiateMultipartUpload(
             long currentUserId,
             StorageMultipartInitRequest request
@@ -107,6 +109,7 @@ public class StorageService {
         );
     }
 
+    @Override
     public StorageMultipartPartPresignData createMultipartPartPresign(
             long currentUserId,
             StorageMultipartPartPresignRequest request
@@ -128,6 +131,7 @@ public class StorageService {
         return new StorageMultipartPartPresignData(uploadUrl, expireAt, headers);
     }
 
+    @Override
     public StorageMultipartCompleteData completeMultipartUpload(
             long currentUserId,
             StorageMultipartCompleteRequest request
@@ -141,6 +145,7 @@ public class StorageService {
         return new StorageMultipartCompleteData(request.objectKey(), toPublicUrl(request.objectKey()), etag);
     }
 
+    @Override
     public void abortMultipartUpload(long currentUserId, StorageMultipartAbortRequest request) {
         requireOwnedObjectKey(currentUserId, request.objectKey());
         String uploadId = requireText(request.uploadId(), "uploadId is required");

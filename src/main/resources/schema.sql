@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS users (
     tags_json JSON,
     -- 账户状态，如 active/disabled/banned。
     status VARCHAR(16) NOT NULL DEFAULT 'active',
+    -- 角色，USER 普通用户 / ADMIN 管理员。
+    role VARCHAR(16) NOT NULL DEFAULT 'USER',
     -- 创建时间。
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- 最后更新时间。
@@ -301,6 +303,25 @@ CREATE INDEX IF NOT EXISTS ix_like_favorite_target_action_status
 -- 便于按用户查询自己的互动记录。
 CREATE INDEX IF NOT EXISTS ix_like_favorite_user_status
     ON like_favorite(user_id, rel_status, updated_at);
+
+-- post_comments：帖子评论表。
+-- 一期先支持详情页一级评论列表和发布，后续可扩展回复、删除和审核状态。
+CREATE TABLE IF NOT EXISTS post_comments (
+    id BIGINT PRIMARY KEY,
+    post_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    content VARCHAR(1000) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_post_comments_post FOREIGN KEY (post_id) REFERENCES know_posts(id),
+    CONSTRAINT fk_post_comments_user FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_post_comments_post_created
+    ON post_comments(post_id, status, created_at, id);
+CREATE INDEX IF NOT EXISTS ix_post_comments_user_created
+    ON post_comments(user_id, created_at);
 
 -- trade_activity：交易活动主表。
 -- 一期先承接秒杀/团购活动本身，库存最终以 MySQL 为准，Redis 做高并发预扣与热点视图。

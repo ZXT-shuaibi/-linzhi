@@ -11,6 +11,7 @@ package com.zhiguang.be.auth.model;
 public record AuthUserResponse(
         String userId,
         String phone,
-        String nickname
+        String nickname,
+        String role
 ) {
 }

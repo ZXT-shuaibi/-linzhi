@@ -9,6 +9,7 @@ public class InteractionActionData {
     private final String targetId;
     private final String action;
     private final boolean active;
+    private final boolean changed;
     private final int snapshotVersion;
 
     /**
@@ -20,11 +21,12 @@ public class InteractionActionData {
      * @param active 当前动作是否生效
      * @param snapshotVersion 当前快照版本
      */
-    public InteractionActionData(String targetType, String targetId, String action, boolean active, int snapshotVersion) {
+    public InteractionActionData(String targetType, String targetId, String action, boolean active, boolean changed, int snapshotVersion) {
         this.targetType = targetType;
         this.targetId = targetId;
         this.action = action;
         this.active = active;
+        this.changed = changed;
         this.snapshotVersion = snapshotVersion;
     }
 
@@ -42,6 +44,10 @@ public class InteractionActionData {
 
     public boolean isActive() {
         return active;
+    }
+
+    public boolean isChanged() {
+        return changed;
     }
 
     public int getSnapshotVersion() {

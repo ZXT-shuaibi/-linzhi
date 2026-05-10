@@ -13,6 +13,7 @@ import com.zhiguang.be.auth.model.RegisterRequest;
 import com.zhiguang.be.auth.model.RegisterResult;
 import com.zhiguang.be.auth.model.SendCodeRequest;
 import com.zhiguang.be.auth.model.SendCodeResponse;
+import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.auth.service.AuthService;
 import com.zhiguang.be.common.api.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -124,7 +125,7 @@ public class AuthController {
      */
     @GetMapping("/me")
     public ApiResponse<AuthUserResponse> me(@AuthenticationPrincipal Jwt jwt) {
-        return ApiResponse.success(authService.me(jwt.getSubject()));
+        return ApiResponse.success(authService.me(JwtSubjects.requireSubject(jwt)));
     }
 
     /**

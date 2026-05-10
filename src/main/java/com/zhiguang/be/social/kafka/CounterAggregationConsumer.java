@@ -1,7 +1,7 @@
 package com.zhiguang.be.social.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.zhiguang.be.social.service.impl.InteractionServiceImpl;
+import com.zhiguang.be.social.service.CounterAggregationOperations;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -22,7 +22,7 @@ public class CounterAggregationConsumer {
     private static final Logger log = LoggerFactory.getLogger(CounterAggregationConsumer.class);
 
     private final ObjectMapper objectMapper;
-    private final InteractionServiceImpl interactionService;
+    private final CounterAggregationOperations counterAggregationOperations;
 
     /**
      * 构造计数聚合消费者。
@@ -30,9 +30,9 @@ public class CounterAggregationConsumer {
      * @param objectMapper Jackson 组件
      * @param interactionService 互动服务实现
      */
-    public CounterAggregationConsumer(ObjectMapper objectMapper, InteractionServiceImpl interactionService) {
+    public CounterAggregationConsumer(ObjectMapper objectMapper, CounterAggregationOperations counterAggregationOperations) {
         this.objectMapper = objectMapper;
-        this.interactionService = interactionService;
+        this.counterAggregationOperations = counterAggregationOperations;
     }
 
     /**
@@ -51,7 +51,7 @@ public class CounterAggregationConsumer {
     public void onMessage(String message, Acknowledgment acknowledgment) throws Exception {
         CounterEvent event = objectMapper.readValue(message, CounterEvent.class);
         try {
-            interactionService.acceptAggregateEvent(event);
+            counterAggregationOperations.acceptAggregateEvent(event);
             acknowledgment.acknowledge();
         } catch (Exception ex) {
             log.warn("consume counter event failed, entityType={}, entityId={}, metric={}",
@@ -65,6 +65,6 @@ public class CounterAggregationConsumer {
      */
     @Scheduled(fixedDelayString = "${social.counter.kafka.flush-delay-ms:1000}")
     public void flush() {
-        interactionService.flushAggregateBucketsNow();
+        counterAggregationOperations.flushAggregateBucketsNow();
     }
 }

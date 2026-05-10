@@ -1,7 +1,10 @@
 package com.zhiguang.be.auth.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.auth.mapper.AuthUserMapper;
+import com.zhiguang.be.auth.model.AuthUserEntity;
 import com.zhiguang.be.auth.security.ProtectedApiBlacklistFilter;
+import com.zhiguang.be.auth.security.PublicApiPaths;
 import com.zhiguang.be.common.api.ErrorResponse;
 import com.zhiguang.be.common.exception.ErrorCode;
 import com.zhiguang.be.common.web.filter.RequestIdFilter;
@@ -16,10 +19,17 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.security.web.SecurityFilterChain;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -29,6 +39,9 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfiguration {
+
+    static final String RAG_PUBLIC_REINDEX_PATH = "/api/v1/rag/reindex/public";
+    static final String RAG_POST_REINDEX_PATH = "/api/v1/rag/posts/*/reindex";
 
     /**
      * 构建应用的安全过滤链。
@@ -47,44 +60,29 @@ public class SecurityConfiguration {
             @Qualifier("accessJwtDecoder") JwtDecoder accessJwtDecoder,
             RequestIdFilter requestIdFilter,
             ProtectedApiBlacklistFilter protectedApiBlacklistFilter,
+            AuthUserMapper authUserMapper,
             ObjectMapper objectMapper
     ) throws Exception {
+        AuthorizationManager<RequestAuthorizationContext> adminAccess = latestRoleAuthorizationManager(authUserMapper, "ADMIN");
+
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
-                                "/api/v1/auth/send-code",
-                                "/api/v1/auth/login",
-                                "/api/v1/auth/register",
-                                "/api/v1/auth/token/refresh",
-                                "/api/v1/auth/logout",
-                                "/api/v1/auth/password/reset",
-                                "/api/v1/_meta/ping",
-                                "/actuator/health",
-                                "/error"
-                        ).permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/mine").authenticated()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/feed").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/discover/nearby").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/discover/nearby").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/*").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/search/posts").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/feed/home").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/trade/activities").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/trade/activities/*").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*/posts").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*/following").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/profile/users/*/followers").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/*/summary").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/targets/*/summary-batch").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/follows/status").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/social/counters/users/*").permitAll()
+                        .requestMatchers(PublicApiPaths.PUBLIC_ENDPOINTS).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/posts/mine", "/api/v1/knowposts/mine").authenticated()
+                        .requestMatchers(HttpMethod.GET, PublicApiPaths.PUBLIC_GET_ENDPOINTS).permitAll()
+                        .requestMatchers(HttpMethod.POST, PublicApiPaths.PUBLIC_POST_ENDPOINTS).permitAll()
+                        .requestMatchers("/api/v1/platform/**").access(adminAccess)
+                        .requestMatchers(HttpMethod.POST, RAG_PUBLIC_REINDEX_PATH, RAG_POST_REINDEX_PATH).access(adminAccess)
+                        .requestMatchers(HttpMethod.POST, "/api/v1/discover/location").access(adminAccess)
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/discover/location").access(adminAccess)
                         .anyRequest().authenticated()
                 )
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(accessJwtDecoder)))
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .jwt(jwt -> jwt
+                                .decoder(accessJwtDecoder)
+                                .jwtAuthenticationConverter(jwtAuthenticationConverter())))
                 .addFilterBefore(requestIdFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(protectedApiBlacklistFilter, BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
@@ -100,6 +98,39 @@ public class SecurityConfiguration {
                 .anonymous(Customizer.withDefaults());
 
         return http.build();
+    }
+
+    /**
+     * 将 JWT 中的 role claim 映射为 Spring Security 的 ROLE_ 前缀授权。
+     * USER → ROLE_USER, ADMIN → ROLE_ADMIN。
+     */
+    private JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(jwt -> {
+            String role = jwt.getClaimAsString("role");
+            if (role == null) {
+                return Collections.emptyList();
+            }
+            return List.of(new SimpleGrantedAuthority("ROLE_" + role));
+        });
+        return converter;
+    }
+
+    private AuthorizationManager<RequestAuthorizationContext> latestRoleAuthorizationManager(
+            AuthUserMapper authUserMapper,
+            String requiredRole
+    ) {
+        return (authenticationSupplier, context) -> {
+            Authentication authentication = authenticationSupplier.get();
+            if (authentication == null || !authentication.isAuthenticated()) {
+                return new AuthorizationDecision(false);
+            }
+            boolean granted = authUserMapper.findByUserId(authentication.getName())
+                    .map(AuthUserEntity::role)
+                    .map(role -> requiredRole.equalsIgnoreCase(role))
+                    .orElse(false);
+            return new AuthorizationDecision(granted);
+        };
     }
 
     /**
