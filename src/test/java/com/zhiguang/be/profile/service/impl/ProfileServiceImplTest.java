@@ -122,7 +122,7 @@ class ProfileServiceImplTest {
 
         profileService.updateProfile(
                 7L,
-                new ProfilePatchRequest(null, null, null, null, null, null, List.of("bio", "birthday", "school"))
+                new ProfilePatchRequest(null, null, null, null, null, null, true, true, true)
         );
 
         verify(profileMapper).updateProfile(

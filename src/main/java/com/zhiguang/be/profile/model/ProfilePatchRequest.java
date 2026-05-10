@@ -32,6 +32,8 @@ public record ProfilePatchRequest(
 
         List<@Size(max = 32, message = "标签长度不能超过 32") String> tags,
 
-        List<String> clearFields
+        boolean clearBio,
+        boolean clearBirthday,
+        boolean clearSchool
 ) {
 }

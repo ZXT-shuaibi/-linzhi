@@ -38,11 +38,15 @@ public final class PublicApiPaths {
             "/api/v1/interactions/targets/*/*/summary",
             "/api/v1/interactions/targets/*/summary-batch",
             "/api/v1/follows/status",
+            "/api/v1/follows/users/*/following",
+            "/api/v1/follows/users/*/followers",
             "/api/v1/social/counters/users/*"
     };
 
     public static final String[] PUBLIC_POST_ENDPOINTS = {
-            "/api/v1/discover/nearby"
+            "/api/v1/discover/nearby",
+            "/api/v1/llm/posts/description",
+            "/api/v1/rag/queries/stream"
     };
 
     private static final AntPathMatcher PATH_MATCHER = new AntPathMatcher();

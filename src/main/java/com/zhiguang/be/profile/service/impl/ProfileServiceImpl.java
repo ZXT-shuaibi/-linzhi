@@ -28,14 +28,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 @Service
 public class ProfileServiceImpl implements ProfileService {
-
-    private static final Set<String> CLEARABLE_PROFILE_FIELDS = Set.of("bio", "birthday", "school");
 
     private final ProfileMapper profileMapper;
     private final FollowService followService;
@@ -76,8 +72,7 @@ public class ProfileServiceImpl implements ProfileService {
     @Transactional
     public ProfileData updateProfile(long currentUserId, ProfilePatchRequest request) {
         requireUser(currentUserId);
-        Set<String> clearFields = normalizeClearFields(request.clearFields());
-        if (!hasAnyUpdateField(request, clearFields)) {
+        if (!hasAnyUpdateField(request)) {
             throw new BusinessException(
                     ErrorCode.BAD_REQUEST,
                     HttpStatus.BAD_REQUEST,
@@ -85,9 +80,9 @@ public class ProfileServiceImpl implements ProfileService {
             );
         }
 
-        boolean clearBio = clearFields.contains("bio");
-        boolean clearBirthday = clearFields.contains("birthday");
-        boolean clearSchool = clearFields.contains("school");
+        boolean clearBio = request.clearBio();
+        boolean clearBirthday = request.clearBirthday();
+        boolean clearSchool = request.clearSchool();
 
         profileMapper.updateProfile(
                 currentUserId,
@@ -186,36 +181,16 @@ public class ProfileServiceImpl implements ProfileService {
         return row;
     }
 
-    private boolean hasAnyUpdateField(ProfilePatchRequest request, Set<String> clearFields) {
-        return !clearFields.isEmpty()
+    private boolean hasAnyUpdateField(ProfilePatchRequest request) {
+        return request.clearBio()
+                || request.clearBirthday()
+                || request.clearSchool()
                 || request.nickname() != null
                 || request.bio() != null
                 || request.gender() != null
                 || request.birthday() != null
                 || request.school() != null
                 || request.tags() != null;
-    }
-
-    private Set<String> normalizeClearFields(List<String> clearFields) {
-        if (clearFields == null || clearFields.isEmpty()) {
-            return Set.of();
-        }
-        Set<String> normalized = new java.util.LinkedHashSet<>();
-        for (String rawField : clearFields) {
-            if (rawField == null || rawField.isBlank()) {
-                continue;
-            }
-            String field = rawField.trim().toLowerCase(Locale.ROOT);
-            if (!CLEARABLE_PROFILE_FIELDS.contains(field)) {
-                throw new BusinessException(
-                        ErrorCode.BAD_REQUEST,
-                        HttpStatus.BAD_REQUEST,
-                        "Unsupported clear field: " + rawField
-                );
-            }
-            normalized.add(field);
-        }
-        return normalized;
     }
 
     private String normalizeNullableText(String value) {
