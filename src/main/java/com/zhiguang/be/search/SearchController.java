@@ -2,11 +2,8 @@ package com.zhiguang.be.search;
 
 import com.zhiguang.be.common.api.ApiResponse;
 import com.zhiguang.be.auth.security.JwtSubjects;
-import com.zhiguang.be.common.exception.BusinessException;
-import com.zhiguang.be.common.exception.ErrorCode;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
@@ -58,14 +55,4 @@ public class SearchController {
         return ApiResponse.success(searchService.suggest(q, size));
     }
 
-    private long currentViewerId(Jwt jwt) {
-        if (jwt == null) {
-            return 0L;
-        }
-        try {
-            return Long.parseLong(jwt.getSubject());
-        } catch (Exception ex) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, HttpStatus.UNAUTHORIZED, "无效的登录态");
-        }
-    }
 }

@@ -22,7 +22,6 @@ public final class PublicApiPaths {
             "/api/v1/posts/feed",
             "/api/v1/knowposts/feed",
             "/api/v1/posts/*/comments",
-            "/api/v1/knowposts/*/comments",
             "/api/v1/discover/nearby",
             "/api/v1/discover/map/**",
             "/api/v1/posts/*",
