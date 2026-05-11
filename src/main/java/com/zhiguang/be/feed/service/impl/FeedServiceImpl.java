@@ -2,6 +2,8 @@ package com.zhiguang.be.feed.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.cache.CacheRegions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.zhiguang.be.cache.hotkey.HotKeyDetector;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.exception.BusinessException;
@@ -44,6 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class FeedServiceImpl implements FeedService {
 
+    private static final Logger log = LoggerFactory.getLogger(FeedServiceImpl.class);
     private static final long LOCAL_CACHE_TTL_MILLIS = 5_000L;
     private static final Duration PAGE_CACHE_TTL = Duration.ofSeconds(30);
     private static final Duration FRAGMENT_CACHE_TTL = Duration.ofSeconds(90);
@@ -626,6 +629,7 @@ public class FeedServiceImpl implements FeedService {
         try {
             return objectMapper.readValue(raw, CachedFeedFragment.class);
         } catch (Exception ex) {
+            log.debug("Failed to parse cached feed fragment, will re-fetch from upstream", ex);
             return null;
         }
     }
