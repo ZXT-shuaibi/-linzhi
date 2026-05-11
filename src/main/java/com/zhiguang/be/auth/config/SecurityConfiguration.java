@@ -27,6 +27,8 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.web.SecurityFilterChain;
 
 import java.util.Collections;
@@ -42,6 +44,8 @@ public class SecurityConfiguration {
 
     static final String RAG_PUBLIC_REINDEX_PATH = "/api/v1/rag/reindex/public";
     static final String RAG_POST_REINDEX_PATH = "/api/v1/rag/posts/*/reindex";
+
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfiguration.class);
 
     /**
      * 构建应用的安全过滤链。
@@ -148,7 +152,8 @@ public class SecurityConfiguration {
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             ErrorResponse body = ErrorResponse.of(errorCode.code(), errorCode.defaultMessage(), List.of());
             response.getWriter().write(objectMapper.writeValueAsString(body));
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            log.warn("Failed to write authentication error response", ex);
             response.setStatus(status);
         }
     }
