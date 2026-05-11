@@ -237,7 +237,7 @@ class AuthServiceImplTest {
     }
 
     /**
-     * refresh 绛惧彂鏂颁护鐗屾椂搴斾娇鐢ㄦ暟鎹簱鏈€鏂扮殑瑙掕壊锛岄伩鍏嶉檷鏉冨悗鏃?role 琚户缁部鐢ㄣ€?
+     * 管理员降权时刷新令牌应被拒绝，强制重新登录以获取最新角色。
      */
     @Test
     void refreshTokenShouldRejectWhenAdminIsDowngraded() {

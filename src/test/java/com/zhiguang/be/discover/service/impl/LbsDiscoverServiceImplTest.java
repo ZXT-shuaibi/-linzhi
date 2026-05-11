@@ -256,7 +256,7 @@ class LbsDiscoverServiceImplTest {
     }
 
     /**
-     * 楠岃瘉瀵瑰鐨?post/mixed 鍏ュ彛浼氬洖钀藉埌鍐呴儴 knowledge 绱㈠紩锛屽苟鍦ㄥ搷搴斾腑杩斿洖 post 鍙ｅ緞銆?
+     * 验证对外的 post/mixed 入口会回落到内部 knowledge 索引，并在响应中返回 post 口径。
      */
     @Test
     void searchNearbyShouldMapExternalPostTypeToKnowledgeIndex() {
