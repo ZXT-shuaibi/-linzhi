@@ -240,6 +240,13 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
         }
 
+        if (isRoleDowngraded(claims, account)) {
+            revokeAllSessionsAndBlockAccessTokens(claims.userId());
+            blocklistService.blockLogin(account, Duration.ofHours(1));
+            auditLogger.log(AuditEvent.of("REFRESH_FAILED", account.phone(), false, "管理员角色被降级，需重新登录"));
+            throw new BusinessException(ErrorCode.LOGIN_BLOCKED, HttpStatus.FORBIDDEN);
+        }
+
         AuthTokens tokens = jwtService.issueTokens(account.userId(), account.role());
         RefreshTokenClaims newClaims = jwtService.verifyRefreshToken(tokens.refreshToken());
         if (!refreshTokenStore.rotate(claims.userId(), claims.jti(), newClaims.jti(), newClaims.expiresAt())) {
@@ -601,6 +608,10 @@ public class AuthServiceImpl implements AuthService {
      */
     private boolean isRefreshBlocked(AuthUserEntity account) {
         return loginBlacklistStore.isBlocked(account.userId()) || isAnyBlocked(relatedIdentifiers(null, account));
+    }
+
+    private boolean isRoleDowngraded(RefreshTokenClaims claims, AuthUserEntity account) {
+        return "ADMIN".equalsIgnoreCase(claims.role()) && !"ADMIN".equalsIgnoreCase(account.role());
     }
 
     /**

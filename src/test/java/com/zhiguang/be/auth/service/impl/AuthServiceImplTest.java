@@ -240,17 +240,16 @@ class AuthServiceImplTest {
      * refresh 绛惧彂鏂颁护鐗屾椂搴斾娇鐢ㄦ暟鎹簱鏈€鏂扮殑瑙掕壊锛岄伩鍏嶉檷鏉冨悗鏃?role 琚户缁部鐢ㄣ€?
      */
     @Test
-    void refreshTokenShouldUseLatestRoleFromDatabase() {
+    void refreshTokenShouldRejectWhenAdminIsDowngraded() {
         TestFixture fixture = new TestFixture();
         RegisterResult result = fixture.service.register(new RegisterRequest("13800138108", "Passw0rd!", "Passw0rd!", "tester", "123456"), CLIENT_INFO);
         fixture.updateRole(result.userId(), "ADMIN");
         AuthSessionData adminSession = fixture.service.login(new LoginRequest("13800138108", "Passw0rd!", "h5", null), CLIENT_INFO);
 
         fixture.updateRole(result.userId(), "USER");
-        AuthTokens refreshed = fixture.service.refreshToken(adminSession.tokens().refreshToken());
-
-        RefreshTokenClaims newClaims = fixture.jwtService.verifyRefreshToken(refreshed.refreshToken());
-        assertEquals("USER", newClaims.role());
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> fixture.service.refreshToken(adminSession.tokens().refreshToken()));
+        assertEquals(ErrorCode.LOGIN_BLOCKED, ex.errorCode());
     }
 
     /**
