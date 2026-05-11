@@ -22,5 +22,7 @@ public interface CommentMapper {
             @Param("offset") int offset
     );
 
+    int countComments(@Param("postId") long postId);
+
     CommentRow findById(@Param("commentId") long commentId);
 }

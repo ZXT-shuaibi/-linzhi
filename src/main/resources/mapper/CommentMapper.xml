@@ -27,6 +27,11 @@
         values (#{commentId}, #{postId}, #{userId}, #{content}, 'active', current_timestamp, current_timestamp)
     </insert>
 
+    <select id="countComments" resultType="int">
+        select count(1) from post_comments
+         where post_id = #{postId} and status = 'active'
+    </select>
+
     <select id="listComments" resultMap="CommentRowMap">
         select
         <include refid="CommentRowColumns"/>
