@@ -3,6 +3,7 @@ package com.zhiguang.be.auth.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhiguang.be.auth.mapper.AuthUserMapper;
 import com.zhiguang.be.auth.model.AuthUserEntity;
+import com.zhiguang.be.auth.security.AdminGuardFilter;
 import com.zhiguang.be.auth.security.ProtectedApiBlacklistFilter;
 import com.zhiguang.be.auth.security.PublicApiPaths;
 import com.zhiguang.be.common.api.ErrorResponse;
@@ -89,6 +90,7 @@ public class SecurityConfiguration {
                                 .jwtAuthenticationConverter(jwtAuthenticationConverter())))
                 .addFilterBefore(requestIdFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(protectedApiBlacklistFilter, BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(new AdminGuardFilter(), BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) ->
                                 writeError(response, HttpServletResponse.SC_UNAUTHORIZED, ErrorCode.UNAUTHORIZED, objectMapper))

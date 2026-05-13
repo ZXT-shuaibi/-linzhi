@@ -11,6 +11,7 @@ import com.zhiguang.be.content.model.OutboxEventEntity;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
 import com.zhiguang.be.feed.service.FeedCacheInvalidationService;
 import com.zhiguang.be.search.SearchIndexService;
+import com.zhiguang.be.rag.service.RagIndexService;
 import com.zhiguang.be.social.RelationStatusData;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
@@ -70,6 +71,11 @@ class ContentServiceImplTest {
         ObjectProvider<SearchIndexService> searchIndexServiceProvider = mock(ObjectProvider.class);
         when(searchIndexServiceProvider.getIfAvailable()).thenReturn(searchIndexService);
         when(searchIndexService.isLocalSyncEnabled()).thenReturn(false);
+        when(searchIndexService.isKafkaOutboxEnabled()).thenReturn(true);
+
+        ObjectProvider<RagIndexService> ragIndexServiceProvider = mock(ObjectProvider.class);
+        when(ragIndexServiceProvider.getIfAvailable()).thenReturn(null);
+
         when(followService.relationStatus(anyLong(), anyLong())).thenReturn(new RelationStatusData(false, false, false));
 
         service = new ContentServiceImpl(
@@ -81,6 +87,7 @@ class ContentServiceImplTest {
                 userSocialCounterService,
                 storageService,
                 searchIndexServiceProvider,
+                ragIndexServiceProvider,
                 snowflakeIdGenerator,
                 new ObjectMapper().findAndRegisterModules()
         );
@@ -243,13 +250,28 @@ class ContentServiceImplTest {
                     eq("author"),
                     any(),
                     any(),
-                    eq(publishedAt.toEpochMilli()),
+                    anyLong(),
                     eq(0),
                     eq(0)
             );
         } finally {
             TransactionSynchronizationManager.clearSynchronization();
         }
+    }
+
+    @Test
+    void publishShouldSyncSearchLocallyWhenKafkaOutboxIsDisabled() {
+        Instant publishedAt = Instant.now();
+        when(searchIndexService.isLocalSyncEnabled()).thenReturn(false);
+        when(searchIndexService.isKafkaOutboxEnabled()).thenReturn(false);
+        when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7", "metadata_completed", null));
+        when(knowPostMapper.publish(eq("1001"), eq("7"), eq("public"), eq("published"), any(), any())).thenReturn(1);
+        when(knowPostMapper.findDetailById("1001")).thenReturn(detail("1001", "7", false, publishedAt));
+        when(snowflakeIdGenerator.nextId()).thenReturn(9001L);
+
+        service.publish(7L, 1001L);
+
+        verify(searchIndexService).syncPost(1001L);
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.zhiguang.be.social.service.impl;
 
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
+import com.zhiguang.be.social.SocialCounterSchema;
 import com.zhiguang.be.social.SocialRedisKeys;
 import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.mapper.SocialMapper;
@@ -171,20 +172,8 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
         long followings = socialMapper.countFollowingActive(userId);
         long followers = socialMapper.countFollowersFromFollowing(userId);
         long posts = socialMapper.countPublishedPostsByCreatorId(userId);
-        List<Long> publishedPostIds = socialMapper.listPublishedPostIdsByCreatorId(userId);
-
-        long likedPosts = 0L;
-        long favedPosts = 0L;
-        if (publishedPostIds != null && !publishedPostIds.isEmpty()) {
-            Map<Long, long[]> interactionStats = readPostInteractionCounters(publishedPostIds);
-            for (Long postId : publishedPostIds) {
-                long[] stats = interactionStats.get(postId);
-                if (stats != null) {
-                    likedPosts += stats[0];
-                    favedPosts += stats[1];
-                }
-            }
-        }
+        long likedPosts = socialMapper.countLikesReceivedByCreatorId(userId);
+        long favedPosts = socialMapper.countFavoritesReceivedByCreatorId(userId);
 
         byte[] raw = new byte[FIELD_SIZE * FIELD_COUNT];
         writeInt32BE(raw, OFFSET_FOLLOWINGS, followings);
@@ -245,12 +234,18 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
         long cachedFollowings = readInt32BE(raw, OFFSET_FOLLOWINGS);
         long cachedFollowers = readInt32BE(raw, OFFSET_FOLLOWERS);
         long cachedPosts = readInt32BE(raw, OFFSET_POSTS);
+        long cachedLikedPosts = readInt32BE(raw, OFFSET_LIKED_POSTS);
+        long cachedFavedPosts = readInt32BE(raw, OFFSET_FAVED_POSTS);
         long dbFollowings = socialMapper.countFollowingActive(userId);
         long dbFollowers = socialMapper.countFollowersFromFollowing(userId);
         long dbPosts = socialMapper.countPublishedPostsByCreatorId(userId);
+        long dbLikedPosts = socialMapper.countLikesReceivedByCreatorId(userId);
+        long dbFavedPosts = socialMapper.countFavoritesReceivedByCreatorId(userId);
         return cachedFollowings == dbFollowings
                 && cachedFollowers == dbFollowers
-                && cachedPosts == dbPosts;
+                && cachedPosts == dbPosts
+                && cachedLikedPosts == dbLikedPosts
+                && cachedFavedPosts == dbFavedPosts;
     }
 
     /**
@@ -369,14 +364,7 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
      * @return 解析后的数值
      */
     private long readInt32BE(byte[] buffer, int offset) {
-        if (buffer == null || buffer.length < offset + FIELD_SIZE) {
-            return 0L;
-        }
-        long value = 0L;
-        for (int i = 0; i < FIELD_SIZE; i++) {
-            value = (value << 8) | (buffer[offset + i] & 0xFFL);
-        }
-        return value;
+        return SocialCounterSchema.readInt32BE(buffer, offset);
     }
 
     /**
@@ -387,10 +375,6 @@ public class UserSocialCounterServiceImpl implements UserSocialCounterService {
      * @param value 待写入数值
      */
     private void writeInt32BE(byte[] buffer, int offset, long value) {
-        long safeValue = Math.max(0L, Math.min(value, 0xFFFF_FFFFL));
-        buffer[offset] = (byte) ((safeValue >>> 24) & 0xFF);
-        buffer[offset + 1] = (byte) ((safeValue >>> 16) & 0xFF);
-        buffer[offset + 2] = (byte) ((safeValue >>> 8) & 0xFF);
-        buffer[offset + 3] = (byte) (safeValue & 0xFF);
+        SocialCounterSchema.writeInt32BE(buffer, offset, value);
     }
 }

@@ -207,6 +207,22 @@ public interface SocialMapper {
     long countPublishedPostsByCreatorId(@Param("creatorId") long creatorId);
 
     /**
+     * 统计用户点赞过的帖子数。
+     *
+     * @param userId 用户 ID
+     * @return 点赞帖子数
+     */
+    long countLikesReceivedByCreatorId(@Param("creatorId") long creatorId);
+
+    /**
+     * 统计用户收藏过的帖子数。
+     *
+     * @param userId 用户 ID
+     * @return 收藏帖子数
+     */
+    long countFavoritesReceivedByCreatorId(@Param("creatorId") long creatorId);
+
+    /**
      * 查询用户已发布帖子 ID 列表。
      *
      * @param creatorId 作者用户 ID

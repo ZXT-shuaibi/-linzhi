@@ -85,7 +85,7 @@ public class CacheService {
             return null;
         }
         recordLocalHit(stats);
-        return type.cast(value);
+        return type.cast(defensiveCopy(value));
     }
 
     /**
@@ -420,6 +420,26 @@ public class CacheService {
 
     private long sum(LongAdder adder) {
         return adder == null ? 0L : adder.sum();
+    }
+
+    /**
+     * 对缓存值进行防御性拷贝。
+     * 对于 List / Map / Set 等可变容器类型返回浅拷贝，避免调用方修改缓存内部对象；
+     * 对于 String、Integer、Long、record 等不可变类型则直接透传。
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> T defensiveCopy(Object value) {
+        if (value instanceof List<?> list) {
+            return (T) new ArrayList<>(list);
+        }
+        if (value instanceof Map<?, ?> map) {
+            return (T) new LinkedHashMap<>(map);
+        }
+        if (value instanceof java.util.Set<?> set) {
+            return (T) new java.util.LinkedHashSet<>(set);
+        }
+        // 对于 record、String、Integer、Long 等其他不可变类型，直接返回原引用
+        return (T) value;
     }
 
     /**

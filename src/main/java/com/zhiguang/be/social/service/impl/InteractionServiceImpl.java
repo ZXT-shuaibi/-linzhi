@@ -147,7 +147,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                         + "local function read32be(s, off)\n"
                         + "  local b = {string.byte(s, off + 1, off + 4)}\n"
                         + "  local n = 0\n"
-                        + "  for i = 1, 4 do n = n * 256 + b[i] end\n"
+                        + "  for i = 1, 4 do n = n * 256 + (b[i] or 0) end\n"
                         + "  return n\n"
                         + "end\n"
                         + "local function write32be(n)\n"
@@ -156,7 +156,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                         + "  return string.char(unpack(t))\n"
                         + "end\n"
                         + "local cnt = redis.call('GET', cntKey)\n"
-                        + "if not cnt then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
+                        + "if not cnt or string.len(cnt) < schemaLen * fieldSize then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
                         + "local off = idx * fieldSize\n"
                         + "local v = read32be(cnt, off) + delta\n"
                         + "if v < 0 then v = 0 end\n"
@@ -175,10 +175,12 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                         + "local fieldSize = tonumber(ARGV[2])\n"
                         + "local likeField = ARGV[3]\n"
                         + "local favoriteField = ARGV[4]\n"
+                        + "local likeOffset = tonumber(ARGV[5])\n"
+                        + "local favoriteOffset = tonumber(ARGV[6])\n"
                         + "local function read32be(s, off)\n"
                         + "  local b = {string.byte(s, off + 1, off + 4)}\n"
                         + "  local n = 0\n"
-                        + "  for i = 1, 4 do n = n * 256 + b[i] end\n"
+                        + "  for i = 1, 4 do n = n * 256 + (b[i] or 0) end\n"
                         + "  return n\n"
                         + "end\n"
                         + "local function write32be(n)\n"
@@ -194,13 +196,13 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                         + "local favoriteDelta = tonumber(redis.call('HGET', aggKey, favoriteField) or '0')\n"
                         + "if likeDelta == 0 and favoriteDelta == 0 then return '0,0' end\n"
                         + "local cnt = redis.call('GET', cntKey)\n"
-                        + "if not cnt then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
-                        + "local likeValue = read32be(cnt, fieldSize) + likeDelta\n"
+                        + "if not cnt or string.len(cnt) < schemaLen * fieldSize then cnt = string.rep(string.char(0), schemaLen * fieldSize) end\n"
+                        + "local likeValue = read32be(cnt, likeOffset) + likeDelta\n"
                         + "if likeValue < 0 then likeValue = 0 end\n"
-                        + "cnt = writeValue(cnt, fieldSize, likeValue)\n"
-                        + "local favoriteValue = read32be(cnt, fieldSize * 2) + favoriteDelta\n"
+                        + "cnt = writeValue(cnt, likeOffset, likeValue)\n"
+                        + "local favoriteValue = read32be(cnt, favoriteOffset) + favoriteDelta\n"
                         + "if favoriteValue < 0 then favoriteValue = 0 end\n"
-                        + "cnt = writeValue(cnt, fieldSize * 2, favoriteValue)\n"
+                        + "cnt = writeValue(cnt, favoriteOffset, favoriteValue)\n"
                         + "redis.call('SET', cntKey, cnt)\n"
                         + "redis.call('DEL', aggKey)\n"
                         + "return tostring(likeDelta) .. ',' .. tostring(favoriteDelta)\n"
@@ -397,41 +399,72 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                 SocialServiceSupport.serialize(objectMapper, CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId, delta))
         );
 
-        Transactions.runAfterCommit(() -> {
-            try {
-                syncBitmap(targetType, targetId, currentUserId, action, active);
-                CounterEvent counterEvent = CounterEvent.of(
-                        targetType,
-                        String.valueOf(targetId),
-                        resolveBitmapMetric(action),
-                        resolveCounterFieldIndex(action),
-                        currentUserId,
-                        delta
-                );
-                if (!counterEventProducer.isEnabled() || !counterEventProducer.publish(counterEvent)) {
-                    incrementAggregateBucket(targetType, targetId, action, delta);
-                }
-                invalidateFeedCache(targetType, targetId);
-                if ("like".equals(action)) {
-                    userSocialCounterService.incrementLikesReceived(snapshot.getCreatorId(), delta);
-                } else {
-                    userSocialCounterService.incrementFavoritesReceived(snapshot.getCreatorId(), delta);
-                }
-                refreshDiscoverInteractionStats(snapshot, targetType, targetId, action, delta);
-            } catch (Exception ex) {
-                log.warn(
-                        "refresh interaction cache failed, userId={}, targetType={}, targetId={}, action={}, active={}",
-                        currentUserId,
-                        targetType,
-                        targetId,
-                        action,
-                        active,
-                        ex
-                );
-            }
-        });
+        Transactions.runAfterCommit(() -> applyInteractionProjection(
+                snapshot,
+                targetType,
+                targetId,
+                currentUserId,
+                action,
+                active,
+                delta
+        ));
 
         return buildActionData(targetType, targetId, action, active, true);
+    }
+
+    private void applyInteractionProjection(
+            PostTargetSnapshot snapshot,
+            String targetType,
+            long targetId,
+            long currentUserId,
+            String action,
+            boolean active,
+            int delta
+    ) {
+        boolean needsRedisRetry = false;
+        try {
+            syncBitmap(targetType, targetId, currentUserId, action, active);
+        } catch (Exception ex) {
+            needsRedisRetry = true;
+            log.warn("sync interaction bitmap failed, userId={}, targetType={}, targetId={}, action={}, active={}",
+                    currentUserId, targetType, targetId, action, active, ex);
+        }
+
+        try {
+            projectEntityCounterDelta(targetType, targetId, currentUserId, action, delta);
+        } catch (Exception ex) {
+            needsRedisRetry = true;
+            log.warn("project interaction counter failed, userId={}, targetType={}, targetId={}, action={}, delta={}",
+                    currentUserId, targetType, targetId, action, delta, ex);
+        }
+
+        if (needsRedisRetry) {
+            scheduleBitmapRetry(targetType, targetId, currentUserId, action, active);
+        }
+
+        try {
+            invalidateFeedCache(targetType, targetId);
+        } catch (Exception ex) {
+            log.warn("invalidate interaction feed cache failed, targetType={}, targetId={}", targetType, targetId, ex);
+        }
+
+        try {
+            if ("like".equals(action)) {
+                userSocialCounterService.incrementLikesReceived(snapshot.getCreatorId(), delta);
+            } else {
+                userSocialCounterService.incrementFavoritesReceived(snapshot.getCreatorId(), delta);
+            }
+        } catch (Exception ex) {
+            log.warn("update author interaction counters failed, creatorId={}, action={}, delta={}",
+                    snapshot.getCreatorId(), action, delta, ex);
+        }
+
+        try {
+            refreshDiscoverInteractionStats(snapshot, targetType, targetId, action, delta);
+        } catch (Exception ex) {
+            log.warn("refresh discover interaction stats failed, targetType={}, targetId={}, action={}, delta={}",
+                    targetType, targetId, action, delta, ex);
+        }
     }
 
     /**
@@ -549,9 +582,6 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                 throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "目标内容不存在");
             }
             ensureSnapshotAccessible(currentUserId, snapshot);
-            if (!snapshot.interactable()) {
-                throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "当前内容不可互动");
-            }
         }
         return snapshots;
     }
@@ -656,8 +686,11 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                     stats = new long[]{0L, 0L};
                     result.put(targetId, stats);
                 }
+                // Atomically read aggregate deltas and clear the bucket
+                long[] aggregateDeltas = foldAndClearAggregateBucket(targetType, targetId);
+                stats[0] += aggregateDeltas[0];
+                stats[1] += aggregateDeltas[1];
                 writeEntityCounterSnapshot(targetType, targetId, stats[0], stats[1]);
-                clearAggregateBucket(targetType, targetId);
             }
         }
 
@@ -807,9 +840,6 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
             throw new BusinessException(ErrorCode.NOT_FOUND, HttpStatus.NOT_FOUND, "目标内容不存在");
         }
         ensureSnapshotAccessible(currentUserId, snapshot);
-        if (!snapshot.interactable()) {
-            throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "当前内容不可互动");
-        }
         return snapshot;
     }
 
@@ -891,8 +921,11 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                         likeCount == null ? 0L : likeCount,
                         favoriteCount == null ? 0L : favoriteCount
                 };
+                // Atomically fold aggregate deltas into snapshot before writing
+                long[] aggregateDeltas = foldAndClearAggregateBucket(targetType, targetId);
+                baseStats[0] += aggregateDeltas[0];
+                baseStats[1] += aggregateDeltas[1];
                 writeEntityCounterSnapshot(targetType, targetId, baseStats[0], baseStats[1]);
-                clearAggregateBucket(targetType, targetId);
             }
         }
 
@@ -1023,14 +1056,90 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         stringRedisTemplate.opsForHash().increment(aggKey, field, delta);
     }
 
+    private void projectEntityCounterDelta(String targetType, long targetId, long userId, String action, int delta) {
+        CounterEvent counterEvent = CounterEvent.of(
+                targetType,
+                String.valueOf(targetId),
+                resolveBitmapMetric(action),
+                resolveCounterFieldIndex(action),
+                userId,
+                delta
+        );
+        if (!counterEventProducer.isEnabled() || !counterEventProducer.publish(counterEvent)) {
+            incrementAggregateBucket(targetType, targetId, action, delta);
+        }
+    }
+
     /**
-     * 清理实体聚合桶。
+     * 写入 Redis 重试标记，供定时任务兜底补偿失败的位图/聚合桶同步。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
+     * @param currentUserId 当前用户 ID
+     * @param action 动作类型
+     * @param active 是否生效
      */
-    private void clearAggregateBucket(String targetType, long targetId) {
-        stringRedisTemplate.delete(SocialRedisKeys.aggregateBucketKey(targetType, targetId));
+    private void scheduleBitmapRetry(String targetType, long targetId, long currentUserId, String action, boolean active) {
+        String retryKey = SocialRedisKeys.interactionRetryKey(targetType, targetId, currentUserId, action);
+        String retryValue = active ? "1" : "0";
+        try {
+            stringRedisTemplate.opsForValue().set(retryKey, retryValue, Duration.ofMinutes(5));
+        } catch (Exception ignore) {
+            // Silently ignore if Redis is also unavailable
+        }
+    }
+
+    /**
+     * 定时扫描重试标记并重放失败的位图同步。
+     */
+    @Scheduled(fixedDelayString = "${social.interaction-retry-delay-ms:10000}")
+    public void retryFailedBitmapSyncs() {
+        List<String> keys = scanRedisKeys("retry:interaction:*");
+        for (String key : keys) {
+            try {
+                String[] parts = key.split(":");
+                if (parts.length >= 6) {
+                    String type = parts[2];
+                    long targetId = Long.parseLong(parts[3]);
+                    long userId = Long.parseLong(parts[4]);
+                    String action = parts[5];
+                    boolean active = "1".equals(stringRedisTemplate.opsForValue().get(key));
+                    syncBitmap(type, targetId, userId, action, active);
+                    rebuildEntityCounterFromDb(type, targetId);
+                    stringRedisTemplate.delete(key);
+                }
+            } catch (Exception ex) {
+                log.debug("Retry interaction bitmap sync failed for key={}", key, ex);
+            }
+        }
+    }
+
+    /**
+     * 原子地读取聚合桶增量并清空桶。
+     * 使用单个 Lua 脚本避免在读取和删除之间存在竞态窗口。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @return 长度为 2 的数组，下标 0 为点赞增量，下标 1 为收藏增量
+     */
+    private long[] foldAndClearAggregateBucket(String targetType, long targetId) {
+        String aggKey = SocialRedisKeys.aggregateBucketKey(targetType, targetId);
+        String luaScript =
+                "local likeVal = redis.call('HGET', KEYS[1], ARGV[1]) or '0'\n" +
+                        "local favVal = redis.call('HGET', KEYS[1], ARGV[2]) or '0'\n" +
+                        "redis.call('DEL', KEYS[1])\n" +
+                        "return {likeVal, favVal}";
+        DefaultRedisScript<List> script = new DefaultRedisScript<>(luaScript, List.class);
+        List<?> result = stringRedisTemplate.execute(
+                script,
+                List.of(aggKey),
+                AGGREGATE_FIELD_LIKE,
+                AGGREGATE_FIELD_FAVORITE
+        );
+        if (result == null || result.size() < 2) {
+            return new long[]{0L, 0L};
+        }
+        return new long[]{Long.parseLong(String.valueOf(result.get(0))), Long.parseLong(String.valueOf(result.get(1)))};
     }
 
     /**
@@ -1119,7 +1228,9 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                 String.valueOf(SocialCounterSchema.SCHEMA_LEN),
                 String.valueOf(SocialCounterSchema.FIELD_SIZE),
                 AGGREGATE_FIELD_LIKE,
-                AGGREGATE_FIELD_FAVORITE
+                AGGREGATE_FIELD_FAVORITE,
+                String.valueOf(OFFSET_LIKE),
+                String.valueOf(OFFSET_FAVORITE)
         );
         if (result != null && !"0,0".equals(result)) {
             log.debug("fold aggregate bucket success, targetType={}, targetId={}, delta={}", targetType, targetId, result);
@@ -1184,25 +1295,9 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         }
 
         try {
-            Long likeCount = bitCountShardsPipelined("like", targetType, targetId);
-            Long favoriteCount = bitCountShardsPipelined("fav", targetType, targetId);
-            if (likeCount == null && favoriteCount == null) {
-                return null;
-            }
-
-            if (likeCount == null) {
-                likeCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "like");
-            }
-            if (favoriteCount == null) {
-                favoriteCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "favorite");
-            }
-
-            long safeLikeCount = likeCount == null ? 0L : likeCount;
-            long safeFavoriteCount = favoriteCount == null ? 0L : favoriteCount;
-            writeEntityCounterSnapshot(targetType, targetId, safeLikeCount, safeFavoriteCount);
-            stringRedisTemplate.delete(SocialRedisKeys.aggregateBucketKey(targetType, targetId));
+            long[] rebuilt = rebuildEntityCounterFromDb(targetType, targetId);
             resetRebuildBackoff(targetType, targetId);
-            return new long[]{safeLikeCount, safeFavoriteCount};
+            return rebuilt;
         } catch (Exception ex) {
             escalateRebuildBackoff(targetType, targetId);
             log.warn("rebuild entity counter from bitmap failed, targetType={}, targetId={}", targetType, targetId, ex);
@@ -1297,6 +1392,16 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                 Collections.singletonList(lockKey),
                 lockValue
         );
+    }
+
+    private long[] rebuildEntityCounterFromDb(String targetType, long targetId) {
+        Long likeCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "like");
+        Long favoriteCount = socialMapper.aggregateActiveInteractionCount(targetType, targetId, "favorite");
+        long safeLikeCount = likeCount == null ? 0L : likeCount;
+        long safeFavoriteCount = favoriteCount == null ? 0L : favoriteCount;
+        writeEntityCounterSnapshot(targetType, targetId, safeLikeCount, safeFavoriteCount);
+        stringRedisTemplate.delete(SocialRedisKeys.aggregateBucketKey(targetType, targetId));
+        return new long[]{safeLikeCount, safeFavoriteCount};
     }
 
     /**
@@ -1478,11 +1583,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
      * @return 解析后的数值
      */
     private long readInt32BE(byte[] buffer, int offset) {
-        long value = 0L;
-        for (int i = 0; i < SocialCounterSchema.FIELD_SIZE; i++) {
-            value = (value << 8) | (buffer[offset + i] & 0xFFL);
-        }
-        return value;
+        return SocialCounterSchema.readInt32BE(buffer, offset);
     }
 
     /**
@@ -1493,11 +1594,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
      * @param value 待写入的计数值
      */
     private void writeInt32BE(byte[] buffer, int offset, long value) {
-        long safeValue = Math.max(0L, Math.min(value, 0xFFFF_FFFFL));
-        buffer[offset] = (byte) ((safeValue >>> 24) & 0xFF);
-        buffer[offset + 1] = (byte) ((safeValue >>> 16) & 0xFF);
-        buffer[offset + 2] = (byte) ((safeValue >>> 8) & 0xFF);
-        buffer[offset + 3] = (byte) (safeValue & 0xFF);
+        SocialCounterSchema.writeInt32BE(buffer, offset, value);
     }
 
     /**

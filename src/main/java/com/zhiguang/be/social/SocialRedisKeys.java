@@ -146,6 +146,17 @@ public final class SocialRedisKeys {
     }
 
     /**
+     * 返回关注/粉丝列表的空标记哨兵键。
+     *
+     * @param userId 用户 ID
+     * @param followingMode true 表示关注列表，false 表示粉丝列表
+     * @return Redis 哨兵键
+     */
+    public static String followEmptySentinelKey(long userId, boolean followingMode) {
+        return followingMode ? "uf:empty:flws:" + userId : "uf:empty:fans:" + userId;
+    }
+
+    /**
      * 返回关系事件幂等去重键。
      *
      * @param eventType 事件类型
@@ -201,5 +212,18 @@ public final class SocialRedisKeys {
      */
     public static long bitOffsetOf(long userId) {
         return BitmapShard.bitOf(userId);
+    }
+
+    /**
+     * 返回互动位图/聚合桶同步重试标记键。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param userId 用户 ID
+     * @param action 动作类型
+     * @return Redis 键
+     */
+    public static String interactionRetryKey(String targetType, long targetId, long userId, String action) {
+        return "retry:interaction:" + targetType + ":" + targetId + ":" + userId + ":" + action;
     }
 }

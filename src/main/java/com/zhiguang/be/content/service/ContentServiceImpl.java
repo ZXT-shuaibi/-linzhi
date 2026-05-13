@@ -23,6 +23,7 @@ import com.zhiguang.be.content.model.OutboxEventEntity;
 import com.zhiguang.be.content.model.PostSyncPayload;
 import com.zhiguang.be.discover.service.LbsDiscoverService;
 import com.zhiguang.be.feed.service.FeedCacheInvalidationService;
+import com.zhiguang.be.rag.service.RagIndexService;
 import com.zhiguang.be.search.SearchIndexService;
 import com.zhiguang.be.storage.StorageService;
 import com.zhiguang.be.social.InteractionSummary;
@@ -81,6 +82,7 @@ public class ContentServiceImpl implements ContentService {
     private final UserSocialCounterService userSocialCounterService;
     private final StorageService storageService;
     private final SearchIndexService searchIndexService;
+    private final RagIndexService ragIndexService;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final ObjectMapper objectMapper;
 
@@ -93,6 +95,9 @@ public class ContentServiceImpl implements ContentService {
     @Value("${content.outbox-max-retry-attempts:5}")
     private int outboxMaxRetryAttempts;
 
+    @Value("${content.outbox-retry-base-delay-ms:10000}")
+    private long outboxRetryBaseDelayMs;
+
     public ContentServiceImpl(
             KnowPostMapper knowPostMapper,
             LbsDiscoverService lbsDiscoverService,
@@ -102,6 +107,7 @@ public class ContentServiceImpl implements ContentService {
             UserSocialCounterService userSocialCounterService,
             StorageService storageService,
             ObjectProvider<SearchIndexService> searchIndexServiceProvider,
+            ObjectProvider<RagIndexService> ragIndexServiceProvider,
             SnowflakeIdGenerator snowflakeIdGenerator,
             ObjectMapper objectMapper
     ) {
@@ -113,6 +119,7 @@ public class ContentServiceImpl implements ContentService {
         this.userSocialCounterService = userSocialCounterService;
         this.storageService = storageService;
         this.searchIndexService = searchIndexServiceProvider.getIfAvailable();
+        this.ragIndexService = ragIndexServiceProvider.getIfAvailable();
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.objectMapper = objectMapper;
     }
@@ -301,6 +308,7 @@ public class ContentServiceImpl implements ContentService {
             incrementPublishedPostCounter(creatorId, 1);
             syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), visibility, publishTime);
             syncSearchIndex(postId);
+            syncRagIndex(postId);
         });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
@@ -322,6 +330,7 @@ public class ContentServiceImpl implements ContentService {
         Transactions.runAfterCommit(() -> {
             syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), entity.visible(), entity.publishTime());
             syncSearchIndex(postId);
+            syncRagIndex(postId);
         });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
@@ -345,6 +354,7 @@ public class ContentServiceImpl implements ContentService {
         Transactions.runAfterCommit(() -> {
             syncDiscoverIndex(postId, entity.title(), entity.latitude(), entity.longitude(), normalizedVisibility, entity.publishTime());
             syncSearchIndex(postId);
+            syncRagIndex(postId);
         });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
         return getDetail(postId, creatorId);
@@ -374,6 +384,7 @@ public class ContentServiceImpl implements ContentService {
             }
             removeFromDiscover(postId);
             removeFromSearchIndex(postId);
+            removeFromRagIndex(postId);
         });
         feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(postId));
     }
@@ -431,10 +442,17 @@ public class ContentServiceImpl implements ContentService {
     @Scheduled(fixedDelayString = "${content.outbox-reconcile-delay-ms:10000}")
     public void reconcileDiscoverOutbox() {
         int maxRetryAttempts = normalizedOutboxMaxRetryAttempts();
-        List<OutboxEventEntity> events = knowPostMapper.listPendingOutbox(20, maxRetryAttempts);
+        List<OutboxEventEntity> allPending = knowPostMapper.listPendingOutbox(20, maxRetryAttempts);
+        List<OutboxEventEntity> events = new ArrayList<>();
+        for (OutboxEventEntity event : allPending) {
+            if (shouldRetryNow(event)) {
+                events.add(event);
+            }
+        }
         for (OutboxEventEntity event : events) {
             try {
                 reconcileSearchState(event);
+                reconcileRagState(event);
                 reconcileDiscoverState(event.aggregateId());
                 knowPostMapper.markOutboxPublished(event.id(), Instant.now());
             } catch (Exception ex) {
@@ -507,7 +525,7 @@ public class ContentServiceImpl implements ContentService {
     }
 
     private void reconcileSearchState(OutboxEventEntity event) throws Exception {
-        if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
+        if (!shouldProjectSearchLocally()) {
             return;
         }
         Long postId = Numbers.toLongOrNull(event.aggregateId());
@@ -531,6 +549,19 @@ public class ContentServiceImpl implements ContentService {
 
     private int normalizedOutboxMaxRetryAttempts() {
         return Math.max(outboxMaxRetryAttempts, 1);
+    }
+
+    private boolean shouldRetryNow(OutboxEventEntity event) {
+        if (event.retryCount() <= 0) {
+            return true;
+        }
+        // Exponential backoff: baseDelay * 2^(retryCount-1), capped at 5 minutes
+        long backoffMs = Math.min(
+                outboxRetryBaseDelayMs * (1L << Math.min(event.retryCount() - 1, 5)),
+                300_000L
+        );
+        return event.createdAt() != null
+                && Instant.now().isAfter(event.createdAt().plus(Duration.ofMillis(backoffMs)));
     }
 
     private void enqueuePostSyncEvent(long postId, String eventType, Instant occurredAt) {
@@ -577,7 +608,7 @@ public class ContentServiceImpl implements ContentService {
     }
 
     private void syncSearchIndex(long postId) {
-        if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
+        if (!shouldProjectSearchLocally()) {
             return;
         }
         try {
@@ -588,7 +619,7 @@ public class ContentServiceImpl implements ContentService {
     }
 
     private void removeFromSearchIndex(long postId) {
-        if (searchIndexService == null || !searchIndexService.isLocalSyncEnabled()) {
+        if (!shouldProjectSearchLocally()) {
             return;
         }
         try {
@@ -596,6 +627,11 @@ public class ContentServiceImpl implements ContentService {
         } catch (Exception ex) {
             log.warn("Failed to remove post {} from search index: {}", postId, ex.getMessage());
         }
+    }
+
+    private boolean shouldProjectSearchLocally() {
+        return searchIndexService != null
+                && (searchIndexService.isLocalSyncEnabled() || !searchIndexService.isKafkaOutboxEnabled());
     }
 
     private void syncDiscoverIndexStrict(String postIdStr, String title, Double latitude,
@@ -759,6 +795,43 @@ public class ContentServiceImpl implements ContentService {
 
     private String normalizeNullableText(String value) {
         return normalizeNullable(value);
+    }
+
+    private void reconcileRagState(OutboxEventEntity event) {
+        if (ragIndexService == null) {
+            return;
+        }
+        Long postId = Numbers.toLongOrNull(event.aggregateId());
+        if (postId == null) {
+            return;
+        }
+        try {
+            ragIndexService.ensureIndexed(String.valueOf(postId));
+        } catch (Exception ex) {
+            log.warn("Failed to reconcile post {} RAG state: {}", postId, ex.getMessage());
+        }
+    }
+
+    private void syncRagIndex(long postId) {
+        if (ragIndexService == null) {
+            return;
+        }
+        try {
+            ragIndexService.ensureIndexed(String.valueOf(postId));
+        } catch (Exception ex) {
+            log.warn("Failed to sync post {} to RAG index: {}", postId, ex.getMessage());
+        }
+    }
+
+    private void removeFromRagIndex(long postId) {
+        if (ragIndexService == null) {
+            return;
+        }
+        try {
+            ragIndexService.ensureIndexed(String.valueOf(postId));
+        } catch (Exception ex) {
+            log.warn("Failed to remove post {} from RAG index: {}", postId, ex.getMessage());
+        }
     }
 
     private String abbreviateError(String errorMessage) {

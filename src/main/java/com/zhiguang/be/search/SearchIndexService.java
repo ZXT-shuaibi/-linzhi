@@ -173,6 +173,10 @@ public class SearchIndexService {
         return searchProperties.getOutbox().isLocalSyncEnabled();
     }
 
+    public boolean isKafkaOutboxEnabled() {
+        return searchProperties.getOutbox().isKafkaEnabled();
+    }
+
     private void syncRow(SearchIndexDocumentRow row, InteractionSummary interactionSummary) {
         try {
             syncRowStrict(row, interactionSummary);

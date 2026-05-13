@@ -162,6 +162,8 @@ public class RelationEventProcessor {
         try {
             String followingKey = SocialRedisKeys.followingKey(followerId);
             String followerKey = SocialRedisKeys.followerKey(followeeId);
+            stringRedisTemplate.delete(SocialRedisKeys.followEmptySentinelKey(followerId, true));
+            stringRedisTemplate.delete(SocialRedisKeys.followEmptySentinelKey(followeeId, false));
             if (active) {
                 long score = System.currentTimeMillis();
                 stringRedisTemplate.opsForZSet().add(followingKey, String.valueOf(followeeId), score);

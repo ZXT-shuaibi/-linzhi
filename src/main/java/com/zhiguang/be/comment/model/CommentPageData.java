@@ -6,7 +6,8 @@ import java.util.List;
 
 public record CommentPageData(
         List<CommentItemData> items,
-        @JsonProperty("page") CommentPageMeta pageMeta
+        @JsonProperty("page") CommentPageMeta pageMeta,
+        boolean hasMore
 ) {
     public record CommentPageMeta(int page, int size, int total) {}
 }

@@ -104,10 +104,7 @@ public class EsSearchProvider implements SearchProvider {
             response = executeSearch(queryText, safeSize, tagText, afterValues, lat, lng, radius);
         } catch (Exception ex) {
             log.warn("es search failed, q={}, page={}, size={}, tag={}", queryText, safePage, safeSize, tagText, ex);
-            return new SearchPostsData(
-                    Collections.<SearchResultItem>emptyList(),
-                    new CursorPageMeta(safePage, safeSize, false, null, List.of())
-            );
+            throw new IllegalStateException("es search failed", ex);
         }
 
         List<SearchResultItem> items = new ArrayList<SearchResultItem>();
@@ -176,7 +173,7 @@ public class EsSearchProvider implements SearchProvider {
             response = executeSuggest(q.trim(), safeSize);
         } catch (Exception ex) {
             log.warn("es suggest failed, q={}, size={}", q, safeSize, ex);
-            return new SuggestData(Collections.<SuggestItem>emptyList());
+            throw new IllegalStateException("es suggest failed", ex);
         }
 
         Set<String> deduplicated = new LinkedHashSet<String>();

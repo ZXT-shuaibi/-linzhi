@@ -34,6 +34,7 @@
 ## 2. 模块1：认证系统
 
 ### 2.1 调用入口
+- `POST /auth/send-code`
 - `POST /auth/register`
 - `POST /auth/login`
 - `POST /auth/token/refresh`
@@ -41,6 +42,7 @@
 - `POST /auth/password/reset`
 
 ### 2.2 请求参数
+- 发送验证码：`phone/scene(register|login|reset_password)`
 - 注册：`phone/password/nickname/smsCode`
 - 登录：`identifier/password/channel/captchaToken`
 - 刷新：`refreshToken`
@@ -48,7 +50,9 @@
 - 重置密码：`phone/smsCode/newPassword`
 
 ### 2.3 响应结构
-- 注册/登录：`AuthSessionData(userId,tokens)`
+- 发送验证码：`SendCodeResponse(sent/expireAt)`
+- 注册：`RegisterResult(userId)`（注册后不自动登录，前端需额外调用 /auth/login）
+- 登录：`AuthSessionData(userId,tokens)`
 - 刷新：`AuthTokens`
 - 登出/重置：`ActionResult(success/action/resourceId/status)`
 
@@ -120,21 +124,33 @@
 - `POST /storage/presign`
 - `POST /posts/{postId}/content/confirm`
 - `PUT /posts/{postId}/metadata`
+- `PATCH /posts/{postId}`
 - `POST /posts/{postId}/publish`
+- `PATCH /posts/{postId}/top`
+- `PATCH /posts/{postId}/visibility`
+- `DELETE /posts/{postId}`
 - `GET /posts/{postId}`
+- `GET /posts/feed`
+- `GET /posts/mine`
 
 ### 4.2 请求参数
-- 草稿：`contentType/sourceType`
+- 草稿：无（自动生成）
 - 预签名：`postId/filename/contentType/purpose(content|cover|image)`
 - 内容确认：`objectKey/etag/sha256/size`
-- 元数据：`title/summary/tags/coverUrl/location`
-- 发布：`visibility(public|followers|private)/publishAt`
+- 元数据：`title/summary/tags/imageUrls/location/isTop/visibility`
+- 发布：无参数
+- 修改：同元数据（PATCH）
+- 置顶：`isTop`
+- 可见性：`visibility(public|followers|private)`
+- Feed 列表：`page/size`，可选 `lat/lng/geoHash`
+- 我的帖子：`page/size`
 
 ### 4.3 响应结构
 - 草稿：`DraftData(postId,status,createdAt)`
 - 预签名：`PresignData(uploadUrl,objectKey,expireAt)`
-- 确认：`ConfirmContentData(postId,status,objectKey)`
-- 详情/发布：`PostDetail`
+- 确认：空（成功无数据体）
+- 详情/发布/元数据更新：`PostDetail`
+- 列表：`PostPageData(items,page,size,hasMore)`
 
 ### 4.4 错误码处理
 - `404`：`postId` 不存在或无权限。
@@ -237,12 +253,91 @@
 
 ---
 
-## 7. 模块6：智能Feed流
+## 7. 模块6：个人资料（Profile）
 
 ### 7.1 调用入口
-- `GET /feed/home`
+- `GET /profile/me`
+- `PATCH /profile/me`
+- `POST /profile/avatar`
+- `GET /profile/users/{userId}`
+- `GET /profile/users/{userId}/posts`
+- `GET /profile/users/{userId}/following`
+- `GET /profile/users/{userId}/followers`
 
 ### 7.2 请求参数
+- 更新资料：`nickname/bio`
+- 更新头像：`avatarUrl`
+- 用户主页/帖子/关注/粉丝：`userId`
+- 帖子列表：`page/size`
+
+### 7.3 响应结构
+- 资料：`ProfileData(userId,nickname,avatar,bio,socialCounters,relationStatus)`
+- 用户列表：`ProfileListData(items,page,size,hasMore)`
+- 帖子列表：`PostPageData(items,page,size,hasMore)`
+
+### 7.4 错误码处理
+- `404`：用户不存在。
+- `401`：未登录访问需认证的操作。
+
+### 7.5 页面状态机
+- 个人页：`加载中 -> 展示资料/编辑 -> 保存`
+- 他人主页：`加载中 -> 展示资料+帖子`
+
+### 7.6 SSE/轮询策略
+- 无。
+
+### 7.7 缓存与重试策略
+- 用户资料可短 TTL（如 60s）缓存。
+- 帖子列表分页缓存，翻页失败保留上页数据。
+
+### 7.8 联调注意事项
+- `/profile/users/{userId}` 支持匿名访问；携带 token 时补充关系态。
+- 头像更新接口单独暴露，方便独立上传流程。
+
+---
+
+## 8. 模块7：评论系统
+
+### 8.1 调用入口
+- `GET /posts/{postId}/comments`
+- `POST /posts/{postId}/comments`
+
+### 8.2 请求参数
+- 列表：`page/size`
+- 创建：`content`
+
+### 8.3 响应结构
+- 列表：`CommentPageData(items,page,hasMore)`
+- `CommentItemData(id,postId,content,authorId,authorNickname,authorAvatar,createdAt)`
+
+### 8.4 错误码处理
+- `404`：帖子不存在。
+- `401`：评论创建需登录。
+- `409`：内容不可互动。
+
+### 8.5 页面状态机
+- 评论列表：`加载 -> 展示 + 翻页加载更多`
+- 发表评论：`输入 -> 提交 -> 列表前置`
+
+### 8.6 SSE/轮询策略
+- 无。
+
+### 8.7 缓存与重试策略
+- 评论列表分页缓存，提交成功后乐观插入。
+- 创建动作不自动重试，避免重复评论。
+
+### 8.8 联调注意事项
+- 评论列表支持 optional auth（携带 token 时可看到可见性过滤后的评论）。
+- 评论创建必须携带有效 access token。
+
+---
+
+## 9. 模块8：智能Feed流
+
+### 9.1 调用入口
+- `GET /feed/home`
+
+### 9.2 请求参数
 - `page/size`
 - 可选地理：`lat/lng/geoHash`
 
@@ -269,7 +364,7 @@
 
 ---
 
-## 8. 模块7：高并发交易引擎
+## 10. 模块9：高并发交易引擎
 
 ### 8.1 调用入口
 - `POST /trade/seckill/requests`
@@ -309,7 +404,7 @@
 
 ---
 
-## 9. 模块8：LADBTP线程池（运维视角）
+## 11. 模块10：LADBTP线程池（运维视角）
 
 ### 9.1 调用入口
 - `GET /ops/thread-pools/{poolName}`
@@ -339,7 +434,7 @@
 
 ---
 
-## 10. 模块9：缓存与防护中心（运维视角）
+## 12. 模块11：缓存与防护中心（运维视角）
 
 ### 10.1 调用入口
 - `GET /ops/rate-limits/scenes/{scene}`
@@ -368,7 +463,7 @@
 
 ---
 
-## 11. 模块10：数据库设计规范（前端消费视角）
+## 13. 模块12：数据库设计规范（前端消费视角）
 
 ### 11.1 调用入口
 - 无前端直连 API。
@@ -396,7 +491,7 @@
 
 ---
 
-## 12. 模块11：整体一致性保障（前端感知面）
+## 14. 模块13：整体一致性保障（前端感知面）
 
 ### 12.1 调用入口
 - 无前端直连一致性基础设施 API。
@@ -424,7 +519,7 @@
 
 ---
 
-## 13. 模块12：可扩展性与未来规划（治理面）
+## 15. 模块14：可扩展性与未来规划（治理面）
 
 ### 13.1 调用入口
 - `GET /ops/metrics/overview`
@@ -454,17 +549,19 @@
 
 ## 14. 前端接口清单索引（按模块）
 
-- 模块1：5 个操作
+- 模块1：6 个操作
 - 模块2：3 个操作
-- 模块3：6 个操作
+- 模块3：10 个操作
 - 模块4：1 个操作
 - 模块5：9 个操作
 - 模块6：1 个操作
 - 模块7：4 个操作
 - 模块8：1 个操作（运维）
 - 模块9：1 个操作（运维）
-- 模块10：0（无直连）
-- 模块11：0（无直连）
-- 模块12：1 个操作（运维）
+- 模块10：4 个操作（评论模块）
+- 模块11：8 个操作（Profile 模块）
+- 模块12：0（无直连）
+- 模块13：0（无直连）
+- 模块14：1 个操作（运维）
 
-总计：32 个操作，已全量覆盖。
+总计：50 个操作，已全量覆盖。

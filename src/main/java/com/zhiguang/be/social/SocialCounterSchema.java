@@ -51,4 +51,37 @@ public final class SocialCounterSchema {
     public static int offsetOf(int idx) {
         return idx * FIELD_SIZE;
     }
+
+    /**
+     * 从字节缓冲区中按大端序读取 int32 值。
+     *
+     * @param buffer 字节缓冲区
+     * @param offset 起始偏移
+     * @return 读取的 long 值
+     */
+    public static long readInt32BE(byte[] buffer, int offset) {
+        if (buffer == null || buffer.length < offset + FIELD_SIZE) {
+            return 0L;
+        }
+        long value = 0L;
+        for (int i = 0; i < FIELD_SIZE; i++) {
+            value = (value << 8) | (buffer[offset + i] & 0xFFL);
+        }
+        return value;
+    }
+
+    /**
+     * 按大端序将 int32 值写入字节缓冲区。
+     *
+     * @param buffer 字节缓冲区
+     * @param offset 起始偏移
+     * @param value  要写入的值
+     */
+    public static void writeInt32BE(byte[] buffer, int offset, long value) {
+        long safeValue = Math.max(0L, Math.min(value, 0xFFFF_FFFFL));
+        buffer[offset] = (byte) ((safeValue >>> 24) & 0xFF);
+        buffer[offset + 1] = (byte) ((safeValue >>> 16) & 0xFF);
+        buffer[offset + 2] = (byte) ((safeValue >>> 8) & 0xFF);
+        buffer[offset + 3] = (byte) (safeValue & 0xFF);
+    }
 }

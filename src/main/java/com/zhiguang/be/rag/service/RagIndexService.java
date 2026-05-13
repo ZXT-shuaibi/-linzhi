@@ -87,7 +87,7 @@ public class RagIndexService implements RagIndexOperations {
         }
 
         if (useVectorStore()) {
-            IndexedFingerprint fingerprint = findIndexedFingerprint(postId);
+            IndexedFingerprint fingerprint = findIndexedFingerprint(postId, buildIndexVersion(entity));
             if (fingerprint != null && isUpToDate(entity, fingerprint)) {
                 return fingerprint.chunkCount();
             }
@@ -309,7 +309,7 @@ public class RagIndexService implements RagIndexOperations {
     /**
      * 从向量索引中读取已有指纹，判断是否需要重建。
      */
-    private IndexedFingerprint findIndexedFingerprint(String postId) {
+    private IndexedFingerprint findIndexedFingerprint(String postId, String indexVersion) {
         if (!useVectorStore()) {
             return null;
         }
@@ -318,7 +318,10 @@ public class RagIndexService implements RagIndexOperations {
             request.setJsonEntity("{"
                     + "\"size\":1,"
                     + "\"track_total_hits\":true,"
-                    + "\"query\":{\"term\":{\"metadata.postId\":\"" + escapeJson(postId) + "\"}}"
+                    + "\"query\":{\"bool\":{\"must\":["
+                    + "{\"term\":{\"metadata.postId\":\"" + escapeJson(postId) + "\"}},"
+                    + "{\"term\":{\"metadata.indexVersion\":\"" + escapeJson(indexVersion) + "\"}}"
+                    + "]}}"
                     + "}");
             JsonNode root = parseResponse(ragVectorRestClient.performRequest(request));
             JsonNode hits = root.path("hits").path("hits");
@@ -342,11 +345,12 @@ public class RagIndexService implements RagIndexOperations {
      * 通过 VectorStore 写入向量分片。
      */
     private void writeChunksToVectorStore(KnowPostEntity entity, List<IndexedChunk> chunks) {
-        deleteVectorChunks(entity.postId());
+        String indexVersion = buildIndexVersion(entity);
         List<Document> documents = new ArrayList<Document>(chunks.size());
         for (IndexedChunk chunk : chunks) {
             Map<String, Object> metadata = new java.util.LinkedHashMap<String, Object>();
             metadata.put("postId", entity.postId());
+            metadata.put("indexVersion", indexVersion);
             metadata.put("chunkId", chunk.chunkId());
             metadata.put("title", entity.title());
             metadata.put("position", chunk.position());
@@ -358,18 +362,31 @@ public class RagIndexService implements RagIndexOperations {
             documents.add(new Document(chunk.content(), chunk.chunkId(), metadata));
         }
         vectorStore.add(documents);
+        deleteVectorChunks(entity.postId(), indexVersion);
     }
 
     /**
      * 根据 postId 删除旧分片，保证重建幂等。
      */
     private void deleteVectorChunks(String postId) {
+        deleteVectorChunks(postId, null);
+    }
+
+    private void deleteVectorChunks(String postId, String keepIndexVersion) {
         if (!useVectorStore()) {
             return;
         }
         try {
             Request request = new Request("POST", "/" + ragProperties.getVector().getIndexName() + "/_delete_by_query");
-            request.setJsonEntity("{\"query\":{\"term\":{\"metadata.postId\":\"" + escapeJson(postId) + "\"}}}");
+            if (hasText(keepIndexVersion)) {
+                request.setJsonEntity("{\"query\":{\"bool\":{\"must\":[{\"term\":{\"metadata.postId\":\""
+                        + escapeJson(postId)
+                        + "\"}}],\"must_not\":[{\"term\":{\"metadata.indexVersion\":\""
+                        + escapeJson(keepIndexVersion)
+                        + "\"}}]}}}");
+            } else {
+                request.setJsonEntity("{\"query\":{\"term\":{\"metadata.postId\":\"" + escapeJson(postId) + "\"}}}");
+            }
             ragVectorRestClient.performRequest(request);
         } catch (Exception ignored) {
             // 删除失败时保留静默，后续重建仍会继续尝试写入。
@@ -386,15 +403,16 @@ public class RagIndexService implements RagIndexOperations {
         try {
             int candidateSize = Math.max(
                     Math.max(1, ragProperties.getVector().getCandidateSize()),
-                    Math.max(1, topK) * 3
+                    Math.max(1, topK) * 5
             );
-            List<Document> documents = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query(normalizedQuestion)
-                            .topK(candidateSize)
-                            .similarityThresholdAll()
-                            .build()
-            );
+            SearchRequest.Builder requestBuilder = SearchRequest.builder()
+                    .query(normalizedQuestion)
+                    .topK(candidateSize)
+                    .similarityThresholdAll();
+            if (hasText(postId)) {
+                requestBuilder.filterExpression("postId == '" + postId + "'");
+            }
+            List<Document> documents = vectorStore.similaritySearch(requestBuilder.build());
             if (documents == null || documents.isEmpty()) {
                 return List.of();
             }
@@ -448,6 +466,22 @@ public class RagIndexService implements RagIndexOperations {
         } catch (Exception ex) {
             return null;
         }
+    }
+
+    private String buildIndexVersion(KnowPostEntity entity) {
+        if (entity == null) {
+            return "missing";
+        }
+        if (hasText(entity.contentSha256())) {
+            return "sha256:" + entity.contentSha256();
+        }
+        if (hasText(entity.contentEtag())) {
+            return "etag:" + entity.contentEtag();
+        }
+        if (entity.updatedAt() != null) {
+            return "updated:" + entity.updatedAt().toEpochMilli();
+        }
+        return "post:" + entity.postId();
     }
 
     private List<IndexedPost> searchSinglePost(String postId) {

@@ -17,6 +17,7 @@ import com.zhiguang.be.social.mapper.SocialMapper;
 import com.zhiguang.be.social.service.FollowService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -70,6 +71,7 @@ public class FollowServiceImpl implements FollowService {
     private final SocialMapper socialMapper;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final RelationEventProcessor relationEventProcessor;
+    private final RelationProjectionRepairService relationProjectionRepairService;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final boolean localProjectionEnabled;
@@ -93,6 +95,7 @@ public class FollowServiceImpl implements FollowService {
             SocialMapper socialMapper,
             SnowflakeIdGenerator snowflakeIdGenerator,
             RelationEventProcessor relationEventProcessor,
+            ObjectProvider<RelationProjectionRepairService> relationProjectionRepairServiceProvider,
             StringRedisTemplate stringRedisTemplate,
             ObjectMapper objectMapper,
             @Value("${social.relation.outbox.local-projection-enabled:true}") boolean localProjectionEnabled,
@@ -102,6 +105,7 @@ public class FollowServiceImpl implements FollowService {
         this.socialMapper = socialMapper;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.relationEventProcessor = relationEventProcessor;
+        this.relationProjectionRepairService = relationProjectionRepairServiceProvider.getIfAvailable();
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.localProjectionEnabled = localProjectionEnabled;
@@ -307,6 +311,12 @@ public class FollowServiceImpl implements FollowService {
      */
     private List<FollowUserItem> readFollowItemsFromCache(long userId, int offset, int size, boolean followingMode) {
         String key = followingMode ? SocialRedisKeys.followingKey(userId) : SocialRedisKeys.followerKey(userId);
+        String sentinelKey = followingMode
+                ? SocialRedisKeys.followEmptySentinelKey(userId, true)
+                : SocialRedisKeys.followEmptySentinelKey(userId, false);
+        if (Boolean.TRUE.equals(stringRedisTemplate.hasKey(sentinelKey))) {
+            return Collections.emptyList();
+        }
         Set<ZSetOperations.TypedTuple<String>> tuples = stringRedisTemplate.opsForZSet()
                 .reverseRangeWithScores(key, offset, offset + size - 1L);
         if (tuples == null || tuples.isEmpty()) {
@@ -369,6 +379,10 @@ public class FollowServiceImpl implements FollowService {
                 ? socialMapper.listFollowingItems(userId, safeNeed, 0)
                 : socialMapper.listFollowerItems(userId, safeNeed, 0);
         if (rows == null || rows.isEmpty()) {
+            String sentinelKey = followingMode
+                    ? SocialRedisKeys.followEmptySentinelKey(userId, true)
+                    : SocialRedisKeys.followEmptySentinelKey(userId, false);
+            stringRedisTemplate.opsForValue().set(sentinelKey, "1", FOLLOW_CACHE_TTL);
             return;
         }
 
@@ -518,6 +532,14 @@ public class FollowServiceImpl implements FollowService {
         } catch (Exception ex) {
             log.warn("本地关系投影失败，eventId={}, eventType={}",
                     payload.getEventId(), payload.getEventType(), ex);
+            if (relationProjectionRepairService != null) {
+                try {
+                    relationProjectionRepairService.repairSingleRelation(payload);
+                } catch (Exception repairEx) {
+                    log.warn("本地关系投影定向修复失败，eventId={}, eventType={}",
+                            payload.getEventId(), payload.getEventType(), repairEx);
+                }
+            }
         }
     }
 

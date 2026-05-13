@@ -37,7 +37,7 @@ public class CommentController {
             @RequestParam(defaultValue = "20") @Min(1) int size,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(commentService.listComments(postId, optionalUserId(jwt), page, size));
+        return ApiResponse.success(commentService.listComments(postId, JwtSubjects.optionalUserId(jwt), page, size));
     }
 
     @PostMapping
@@ -46,14 +46,6 @@ public class CommentController {
             @Valid @RequestBody CreateCommentRequest request,
             @AuthenticationPrincipal Jwt jwt
     ) {
-        return ApiResponse.success(commentService.createComment(requireUserId(jwt), postId, request));
-    }
-
-    private long requireUserId(Jwt jwt) {
-        return JwtSubjects.requireUserId(jwt);
-    }
-
-    private Long optionalUserId(Jwt jwt) {
-        return JwtSubjects.optionalUserId(jwt);
+        return ApiResponse.success(commentService.createComment(JwtSubjects.requireUserId(jwt), postId, request));
     }
 }

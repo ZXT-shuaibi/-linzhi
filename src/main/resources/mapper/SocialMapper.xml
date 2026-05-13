@@ -280,6 +280,28 @@
           AND rel_status = 1
     </select>
 
+    <select id="countLikesReceivedByCreatorId" resultType="long">
+        SELECT COUNT(1)
+        FROM like_favorite lf
+        JOIN know_posts p ON p.id = lf.target_id
+        WHERE p.creator_id = #{creatorId}
+          AND p.status = 'published'
+          AND lf.target_type = 'post'
+          AND lf.action_type = 'like'
+          AND lf.rel_status = 1
+    </select>
+
+    <select id="countFavoritesReceivedByCreatorId" resultType="long">
+        SELECT COUNT(1)
+        FROM like_favorite lf
+        JOIN know_posts p ON p.id = lf.target_id
+        WHERE p.creator_id = #{creatorId}
+          AND p.status = 'published'
+          AND lf.target_type = 'post'
+          AND lf.action_type = 'favorite'
+          AND lf.rel_status = 1
+    </select>
+
     <insert id="insertOutboxEvent">
         INSERT INTO outbox (
             id,

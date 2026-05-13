@@ -71,7 +71,8 @@
 ### 3.2 HTTP 接口
 | 方法 | 路径 | 说明 | 请求模型 | 返回模型 | 错误码 | 成熟度 |
 | --- | --- | --- | --- | --- | --- | --- |
-| POST | `/auth/register` | 用户注册并返回会话 | `RegisterRequest` | `AuthSessionData` | 400/409/429 | 已实现 |
+| POST | `/auth/send-code` | 发送验证码 | `SendCodeRequest` | `SendCodeResponse` | 400/429 | 已实现 |
+| POST | `/auth/register` | 用户注册（不自动登录） | `RegisterRequest` | `RegisterResult` | 400/409/429 | 已实现 |
 | POST | `/auth/login` | 用户登录并返回会话 | `LoginRequest` | `AuthSessionData` | 400/401/429 | 已实现 |
 | POST | `/auth/token/refresh` | 刷新令牌 | `RefreshTokenRequest` | `AuthTokens` | 400/401 | 已实现 |
 | POST | `/auth/logout` | 用户登出（支持范围） | `LogoutRequest` | `ActionResult` | 401 | 已实现 |
@@ -87,8 +88,10 @@
 - 建议内部审计事件（实现可选）：`auth-login-success`、`auth-refresh-rotated`、`auth-logout`。
 
 ### 3.4 数据模型
+- `RegisterResult`：`userId`（注册后不自动签发令牌，前端需额外调用 /auth/login）
 - `AuthTokens`：`accessToken/accessExpiresAt/refreshToken/refreshExpiresAt/tokenType`
-- `AuthSessionData`：`userId + tokens`
+- `AuthSessionData`：`userId + tokens`（仅 /auth/login 返回）
+- `SendCodeResponse`：`sent/expireAt`
 - Redis 关键键（来自技术文档）：
   - `auth:rt:{uid}:{jti}`（refresh 白名单）
   - `auth:fail:{identifier}`（登录失败计数）

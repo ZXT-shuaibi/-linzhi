@@ -48,7 +48,7 @@ public class CommentServiceImpl implements CommentService {
             rows = rows.subList(0, safeSize);
         }
         int total = commentMapper.countComments(postId);
-        return new CommentPageData(toItems(rows), new CommentPageData.CommentPageMeta(safePage, safeSize, total));
+        return new CommentPageData(toItems(rows), new CommentPageData.CommentPageMeta(safePage, safeSize, total), hasMore);
     }
 
     @Override

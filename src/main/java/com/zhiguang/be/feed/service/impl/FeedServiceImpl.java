@@ -235,9 +235,9 @@ public class FeedServiceImpl implements FeedService {
 
         scoredItems.sort(Comparator
                 .comparing(ScoredFeedItem::isTop).reversed()
-                .thenComparing(ScoredFeedItem::hotScore).reversed()
-                .thenComparing(ScoredFeedItem::publishedAt, Comparator.nullsLast(Comparator.reverseOrder()))
-                .thenComparing(ScoredFeedItem::postId, Comparator.reverseOrder()));
+                .thenComparing(Comparator.comparingDouble(ScoredFeedItem::hotScore).reversed())
+                .thenComparing(Comparator.comparing(ScoredFeedItem::publishedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .thenComparing(Comparator.comparing(ScoredFeedItem::postId).reversed()));
 
         int offset = (page - 1) * size;
         if (offset >= scoredItems.size()) {

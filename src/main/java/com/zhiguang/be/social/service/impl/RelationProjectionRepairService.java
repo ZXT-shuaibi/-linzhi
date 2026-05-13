@@ -46,7 +46,7 @@ public class RelationProjectionRepairService {
             SocialMapper socialMapper,
             RelationEventProcessor relationEventProcessor,
             UserSocialCounterService userSocialCounterService,
-            @Value("${social.relation.repair.enabled:false}") boolean enabled,
+            @Value("${social.relation.repair.enabled:true}") boolean enabled,
             @Value("${social.relation.repair.batch-size:100}") int batchSize,
             @Value("${social.relation.repair.max-batches-per-run:20}") int maxBatchesPerRun
     ) {
@@ -85,6 +85,21 @@ public class RelationProjectionRepairService {
      * @param affectedUsers 受影响用户集合
      * @return 补齐数量
      */
+    public void repairSingleRelation(FollowEventPayload payload) {
+        if (payload == null) {
+            return;
+        }
+        relationEventProcessor.process(payload);
+        long followerId = Numbers.toLongOrZero(payload.getFollowerId());
+        long followeeId = Numbers.toLongOrZero(payload.getFolloweeId());
+        if (followerId > 0L) {
+            userSocialCounterService.rebuildAllCounters(followerId);
+        }
+        if (followeeId > 0L && followeeId != followerId) {
+            userSocialCounterService.rebuildAllCounters(followeeId);
+        }
+    }
+
     private int repairMissingFollowerProjections(Set<Long> affectedUsers) {
         int repaired = 0;
         long cursor = 0L;

@@ -62,8 +62,13 @@ public class DbSearchProvider implements SearchProvider {
         int safePage = Math.max(page, 1);
         int safeSize = normalizePageSize(size);
         SearchCursor cursor = decodeAfter(searchAfter);
-        int offset = cursor == null ? (safePage - 1) * safeSize : 0;
-        int fetchLimit = normalizeFetchLimit(safeSize);
+        boolean radiusPaging = cursor == null && hasRadiusFilter(lat, lng, radius);
+        int pageStart = radiusPaging ? (safePage - 1) * safeSize : 0;
+        int requiredItems = radiusPaging ? safePage * safeSize + 1 : safeSize + 1;
+        int offset = cursor == null && !radiusPaging ? (safePage - 1) * safeSize : 0;
+        int fetchLimit = radiusPaging
+                ? normalizeFetchLimit(Math.max(requiredItems, safeSize * 3))
+                : normalizeFetchLimit(safeSize);
         String keyword = "%" + q.trim().toLowerCase() + "%";
         String tagKeyword = hasText(tag) ? "%" + tag.trim().toLowerCase() + "%" : null;
 
@@ -81,7 +86,7 @@ public class DbSearchProvider implements SearchProvider {
         List<SearchResultItem> items = new ArrayList<SearchResultItem>();
         for (SearchPostRow row : rows) {
             Double distanceMeters = computeDistanceMeters(lat, lng, row.latitude(), row.longitude());
-            if (radius != null && distanceMeters != null && distanceMeters > radius.doubleValue()) {
+            if (hasRadiusFilter(lat, lng, radius) && (distanceMeters == null || distanceMeters > radius.doubleValue())) {
                 continue;
             }
             List<String> rowSearchAfter = buildSearchAfter(row);
@@ -106,13 +111,16 @@ public class DbSearchProvider implements SearchProvider {
                     distanceMeters,
                     rowSearchAfter
             ));
-            if (items.size() >= safeSize + 1) {
+            if (items.size() >= requiredItems) {
                 break;
             }
         }
 
-        boolean hasMore = items.size() > safeSize;
-        List<SearchResultItem> pageItems = hasMore ? new ArrayList<SearchResultItem>(items.subList(0, safeSize)) : items;
+        boolean hasMore = items.size() > pageStart + safeSize;
+        int pageEnd = Math.min(pageStart + safeSize, items.size());
+        List<SearchResultItem> pageItems = pageStart >= items.size()
+                ? List.of()
+                : new ArrayList<SearchResultItem>(items.subList(pageStart, pageEnd));
         String nextAfter = null;
         List<String> nextSearchAfter = List.of();
         if (!pageItems.isEmpty()) {
@@ -125,6 +133,10 @@ public class DbSearchProvider implements SearchProvider {
                 pageItems,
                 new CursorPageMeta(safePage, safeSize, hasMore, nextAfter, nextSearchAfter)
         );
+    }
+
+    private boolean hasRadiusFilter(Double lat, Double lng, Double radius) {
+        return lat != null && lng != null && radius != null && radius.doubleValue() >= 0D;
     }
 
     @Override
