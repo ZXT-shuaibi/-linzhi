@@ -82,6 +82,16 @@ public final class SocialRedisKeys {
     }
 
     /**
+     * 返回计数事件幂等去重键。
+     *
+     * @param eventId 业务事件 ID
+     * @return Redis 键
+     */
+    public static String counterEventDedupKey(String eventId) {
+        return "dedup:counter:" + eventId;
+    }
+
+    /**
      * 返回实体计数重建锁键。
      *
      * @param targetType 目标类型

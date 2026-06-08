@@ -60,6 +60,21 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     private static final int OFFSET_FAVORITE = SocialCounterSchema.offsetOf(SocialCounterSchema.IDX_FAV);
     private static final String AGGREGATE_FIELD_LIKE = String.valueOf(SocialCounterSchema.IDX_LIKE);
     private static final String AGGREGATE_FIELD_FAVORITE = String.valueOf(SocialCounterSchema.IDX_FAV);
+    static final String AGGREGATE_EVENT_CONSUME_SCRIPT =
+            "local dedupKey = KEYS[1]\n"
+                    + "local aggKey = KEYS[2]\n"
+                    + "local seenValue = ARGV[1]\n"
+                    + "local ttlSeconds = tonumber(ARGV[2])\n"
+                    + "local field = ARGV[3]\n"
+                    + "local delta = tonumber(ARGV[4])\n"
+                    + "local marked = redis.call('SET', dedupKey, seenValue, 'NX', 'EX', ttlSeconds)\n"
+                    + "if not marked then return 0 end\n"
+                    + "local result = redis.pcall('HINCRBY', aggKey, field, delta)\n"
+                    + "if type(result) == 'table' and result['err'] then\n"
+                    + "  redis.call('DEL', dedupKey)\n"
+                    + "  return -1\n"
+                    + "end\n"
+                    + "return 1\n";
 
     private final SocialMapper socialMapper;
     private final FollowService followService;
@@ -73,6 +88,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     private final DefaultRedisScript<Long> bitmapToggleScript;
     private final DefaultRedisScript<Long> entityCounterIncrementScript;
     private final DefaultRedisScript<String> aggregateFoldScript;
+    private final DefaultRedisScript<Long> aggregateEventConsumeScript;
     private final DefaultRedisScript<Long> rebuildRateLimitScript;
     private final DefaultRedisScript<Long> rebuildLockReleaseScript;
 
@@ -86,6 +102,8 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     private long rebuildBackoffBaseMs;
     @Value("${social.counter.rebuild.backoff.max-ms:30000}")
     private long rebuildBackoffMaxMs;
+    @Value("${social.counter.event-dedup-ttl-days:7}")
+    private long counterEventDedupTtlDays = 7L;
 
     /**
      * 构造互动服务。
@@ -207,6 +225,10 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                         + "redis.call('DEL', aggKey)\n"
                         + "return tostring(likeDelta) .. ',' .. tostring(favoriteDelta)\n"
         );
+
+        this.aggregateEventConsumeScript = new DefaultRedisScript<Long>();
+        this.aggregateEventConsumeScript.setResultType(Long.class);
+        this.aggregateEventConsumeScript.setScriptText(AGGREGATE_EVENT_CONSUME_SCRIPT);
 
         this.rebuildRateLimitScript = new DefaultRedisScript<Long>();
         this.rebuildRateLimitScript.setResultType(Long.class);
@@ -406,7 +428,8 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                 currentUserId,
                 action,
                 active,
-                delta
+                delta,
+                String.valueOf(eventId)
         ));
 
         return buildActionData(targetType, targetId, action, active, true);
@@ -419,7 +442,8 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
             long currentUserId,
             String action,
             boolean active,
-            int delta
+            int delta,
+            String eventId
     ) {
         boolean needsRedisRetry = false;
         try {
@@ -431,7 +455,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         }
 
         try {
-            projectEntityCounterDelta(targetType, targetId, currentUserId, action, delta);
+            projectEntityCounterDelta(targetType, targetId, currentUserId, action, delta, eventId);
         } catch (Exception ex) {
             needsRedisRetry = true;
             log.warn("project interaction counter failed, userId={}, targetType={}, targetId={}, action={}, delta={}",
@@ -1056,18 +1080,36 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         stringRedisTemplate.opsForHash().increment(aggKey, field, delta);
     }
 
-    private void projectEntityCounterDelta(String targetType, long targetId, long userId, String action, int delta) {
+    /**
+     * 投影实体计数增量。
+     * Kafka 开启时优先发布事件；发布失败属于“不确定是否已写入 Kafka”的场景，
+     * 本地 fallback 也必须走同一 eventId 原子去重脚本，避免 Kafka 实际写入成功后 consumer 重复计数。
+     *
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param userId 操作用户 ID
+     * @param action 动作类型
+     * @param delta 计数增量
+     * @param eventId 业务事件 ID
+     */
+    private void projectEntityCounterDelta(String targetType, long targetId, long userId, String action, int delta, String eventId) {
         CounterEvent counterEvent = CounterEvent.of(
                 targetType,
                 String.valueOf(targetId),
                 resolveBitmapMetric(action),
                 resolveCounterFieldIndex(action),
                 userId,
-                delta
+                delta,
+                eventId
         );
-        if (!counterEventProducer.isEnabled() || !counterEventProducer.publish(counterEvent)) {
-            incrementAggregateBucket(targetType, targetId, action, delta);
+        if (counterEventProducer.isEnabled()) {
+            if (counterEventProducer.publish(counterEvent)) {
+                return;
+            }
+            consumeAggregateEventAtomically(counterEvent, targetId, action);
+            return;
         }
+        incrementAggregateBucket(targetType, targetId, action, delta);
     }
 
     /**
@@ -1209,7 +1251,54 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
             return;
         }
 
-        incrementAggregateBucket(event.getEntityType(), targetId, action, event.getDelta());
+        if (!consumeAggregateEventAtomically(event, targetId, action)) {
+            return;
+        }
+    }
+
+    /**
+     * 原子消费计数事件。
+     * 新事件在同一个 Redis Lua 脚本中完成 eventId 去重和聚合桶增量写入，避免两步操作导致重复或丢计数；
+     * 旧消息没有 eventId 时保持兼容，继续走原来的聚合桶写入。
+     *
+     * @param event Kafka 计数事件
+     * @param targetId 目标 ID
+     * @param action 动作类型
+     * @return 首次消费或旧消息返回 true，重复事件返回 false
+     */
+    private boolean consumeAggregateEventAtomically(CounterEvent event, long targetId, String action) {
+        String eventId = event.getEventId();
+        if (eventId == null || eventId.trim().isEmpty()) {
+            log.debug("consume legacy counter event without eventId, entityType={}, entityId={}, metric={}",
+                    event.getEntityType(), event.getEntityId(), event.getMetric());
+            incrementAggregateBucket(event.getEntityType(), targetId, action, event.getDelta());
+            return true;
+        }
+
+        String field = "like".equals(action) ? AGGREGATE_FIELD_LIKE : AGGREGATE_FIELD_FAVORITE;
+        Long result = stringRedisTemplate.execute(
+                aggregateEventConsumeScript,
+                java.util.Arrays.asList(
+                        SocialRedisKeys.counterEventDedupKey(eventId),
+                        SocialRedisKeys.aggregateBucketKey(event.getEntityType(), targetId)
+                ),
+                "1",
+                String.valueOf(Duration.ofDays(Math.max(1L, counterEventDedupTtlDays)).getSeconds()),
+                field,
+                String.valueOf(event.getDelta())
+        );
+        if (result == null) {
+            throw new IllegalStateException("counter event atomic consume script returned null");
+        }
+        if (result.longValue() < 0L) {
+            throw new IllegalStateException("counter event aggregate write failed inside atomic script");
+        }
+        if (result.longValue() == 0L) {
+            log.debug("ignore duplicate counter event, eventId={}, entityType={}, entityId={}",
+                    eventId, event.getEntityType(), event.getEntityId());
+            return false;
+        }
+        return true;
     }
 
     /**

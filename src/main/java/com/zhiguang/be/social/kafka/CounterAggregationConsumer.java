@@ -56,6 +56,7 @@ public class CounterAggregationConsumer {
         } catch (Exception ex) {
             log.warn("consume counter event failed, entityType={}, entityId={}, metric={}",
                     event.getEntityType(), event.getEntityId(), event.getMetric(), ex);
+            throw ex;
         }
     }
 
