@@ -281,4 +281,5 @@ security:
     refresh-token-ttl-days: 7
     public-key: ""
     private-key: ""
-    allow-ephemeral-keys: true
+    allow-ephemeral-keys: false
+    verification-keys: []

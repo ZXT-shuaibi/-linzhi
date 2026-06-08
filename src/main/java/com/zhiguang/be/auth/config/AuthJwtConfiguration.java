@@ -1,9 +1,12 @@
 package com.zhiguang.be.auth.config;
 
+import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.JWKSource;
+import com.nimbusds.jose.proc.JWSVerificationKeySelector;
 import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -25,7 +28,11 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * JWT 编解码配置类。
@@ -50,7 +57,7 @@ public class AuthJwtConfiguration {
             if (publicPem != null && !publicPem.isBlank() && privatePem != null && !privatePem.isBlank()) {
                 RSAPublicKey publicKey = readPublicKey(publicPem);
                 RSAPrivateKey privateKey = readPrivateKey(privatePem);
-                return new RsaKeyMaterial(publicKey, privateKey);
+                return new RsaKeyMaterial(publicKey, privateKey, readVerificationKeys(properties));
             }
 
             if (!properties.isAllowEphemeralKeys()) {
@@ -60,7 +67,7 @@ public class AuthJwtConfiguration {
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
             KeyPair pair = generator.generateKeyPair();
-            return new RsaKeyMaterial((RSAPublicKey) pair.getPublic(), (RSAPrivateKey) pair.getPrivate());
+            return new RsaKeyMaterial((RSAPublicKey) pair.getPublic(), (RSAPrivateKey) pair.getPrivate(), Map.of());
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to initialize RSA key pair", ex);
         }
@@ -94,7 +101,7 @@ public class AuthJwtConfiguration {
      */
     @Bean("accessJwtDecoder")
     public JwtDecoder accessJwtDecoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(keyMaterial.publicKey()).build();
+        NimbusJwtDecoder decoder = jwtDecoder(keyMaterial, properties);
 
         OAuth2TokenValidator<Jwt> baseValidator = JwtValidators.createDefaultWithIssuer(properties.getIssuer());
         OAuth2TokenValidator<Jwt> accessTypeValidator = jwt -> {
@@ -119,9 +126,75 @@ public class AuthJwtConfiguration {
      */
     @Bean("tokenJwtDecoder")
     public JwtDecoder tokenJwtDecoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(keyMaterial.publicKey()).build();
+        NimbusJwtDecoder decoder = jwtDecoder(keyMaterial, properties);
         decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(properties.getIssuer()));
         return decoder;
+    }
+
+    /**
+     * 创建支持多 kid 验签的 Nimbus 解码器。
+     * 当前 Spring Security 版本没有 withJwkSource 工厂方法，因此直接注入 Nimbus JWTProcessor。
+     */
+    private NimbusJwtDecoder jwtDecoder(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
+        DefaultJWTProcessor<SecurityContext> jwtProcessor = new DefaultJWTProcessor<>();
+        jwtProcessor.setJWSKeySelector(new JWSVerificationKeySelector<>(
+                JWSAlgorithm.RS256,
+                verificationJwkSource(keyMaterial, properties)
+        ));
+        return new NimbusJwtDecoder(jwtProcessor);
+    }
+
+    /**
+     * 构造 JWT 验签 JWKSource。
+     * JWKSet 会同时包含当前签发公钥和历史验签公钥，Nimbus 会根据 JWT header 中的 kid 自动选择公钥。
+     */
+    private JWKSource<SecurityContext> verificationJwkSource(RsaKeyMaterial keyMaterial, AuthJwtProperties properties) {
+        List<com.nimbusds.jose.jwk.JWK> keys = new ArrayList<>();
+        keys.add(new RSAKey.Builder(keyMaterial.publicKey())
+                .keyID(properties.getKeyId())
+                .build());
+        keyMaterial.verificationKeys().forEach((kid, publicKey) ->
+                keys.add(new RSAKey.Builder(publicKey)
+                        .keyID(kid)
+                        .build()));
+        JWKSet jwkSet = new JWKSet(keys);
+        return (selector, context) -> {
+            // 必须依赖 JWT header 中的 kid 选钥，避免缺少 kid 的令牌在轮换窗口内被任意公钥兜底验签。
+            if (selector.getMatcher() == null
+                    || selector.getMatcher().getKeyIDs() == null
+                    || selector.getMatcher().getKeyIDs().stream().noneMatch(keyId -> keyId != null && !keyId.isBlank())) {
+                return List.of();
+            }
+            return selector.select(jwkSet);
+        };
+    }
+
+    /**
+     * 读取历史验签公钥配置。
+     * 当前 keyId 对应的公钥会由当前签发密钥提供，这里会跳过重复 kid，避免 JWKSet 出现两个同名 key。
+     */
+    private Map<String, RSAPublicKey> readVerificationKeys(AuthJwtProperties properties) throws Exception {
+        Map<String, RSAPublicKey> keys = new LinkedHashMap<>();
+        if (properties.getVerificationKeys() == null) {
+            return keys;
+        }
+        for (AuthJwtProperties.VerificationKey verificationKey : properties.getVerificationKeys()) {
+            if (verificationKey == null || verificationKey.isBlank()) {
+                continue;
+            }
+            if (!verificationKey.hasCompleteKeyMaterial()) {
+                throw new IllegalStateException("JWT verification key must configure both key-id and public-key");
+            }
+            String keyId = verificationKey.getKeyId().trim();
+            if (keyId.equals(properties.getKeyId())) {
+                throw new IllegalStateException("JWT verification key must not reuse current key-id: " + keyId);
+            }
+            if (keys.containsKey(keyId)) {
+                throw new IllegalStateException("Duplicate JWT verification key-id: " + keyId);
+            }
+            keys.put(keyId, readPublicKey(verificationKey.getPublicKey()));
+        }
+        return keys;
     }
 
     /**

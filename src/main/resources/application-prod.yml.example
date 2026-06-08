@@ -31,3 +31,7 @@ security:
     private-key: ${JWT_PRIVATE_KEY}
     # 生产环境必须设置为 false
     allow-ephemeral-keys: false
+    # 历史 kid 公钥只用于验签，不参与新 token 签发；滚动换钥时保留到旧 token 自然过期
+    # verification-keys:
+    #   - key-id: zhiguang-rsa-previous
+    #     public-key: ${JWT_PREVIOUS_PUBLIC_KEY}

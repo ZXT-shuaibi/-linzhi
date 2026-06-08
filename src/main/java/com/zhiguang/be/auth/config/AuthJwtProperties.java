@@ -2,6 +2,9 @@ package com.zhiguang.be.auth.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * JWT 配置属性。
  * 用于承接配置文件中的签发方、密钥标识和令牌有效期等参数。
@@ -16,6 +19,7 @@ public class AuthJwtProperties {
     private String publicKey = "";
     private String privateKey = "";
     private boolean allowEphemeralKeys = false;
+    private List<VerificationKey> verificationKeys = new ArrayList<>();
 
     /**
      * 获取 JWT 签发方。
@@ -141,5 +145,61 @@ public class AuthJwtProperties {
      */
     public void setAllowEphemeralKeys(boolean allowEphemeralKeys) {
         this.allowEphemeralKeys = allowEphemeralKeys;
+    }
+
+    /**
+     * 返回仅用于验签的历史公钥配置。
+     * 这些公钥不会参与新令牌签发，只用于支持 kid 滚动换钥期间的旧令牌验签。
+     */
+    public List<VerificationKey> getVerificationKeys() {
+        return verificationKeys;
+    }
+
+    /**
+     * 设置仅用于验签的历史公钥配置。
+     */
+    public void setVerificationKeys(List<VerificationKey> verificationKeys) {
+        this.verificationKeys = verificationKeys == null ? new ArrayList<>() : verificationKeys;
+    }
+
+    /**
+     * JWT 验签公钥配置项。
+     */
+    public static class VerificationKey {
+
+        private String keyId;
+        private String publicKey = "";
+
+        public String getKeyId() {
+            return keyId;
+        }
+
+        public void setKeyId(String keyId) {
+            this.keyId = keyId;
+        }
+
+        public String getPublicKey() {
+            return publicKey;
+        }
+
+        public void setPublicKey(String publicKey) {
+            this.publicKey = publicKey;
+        }
+
+        /**
+         * 判断该条历史公钥配置是否完全为空。
+         * 空条目通常来自占位配置，可以安全忽略。
+         */
+        public boolean isBlank() {
+            return (keyId == null || keyId.isBlank()) && (publicKey == null || publicKey.isBlank());
+        }
+
+        /**
+         * 判断历史公钥配置是否具备完整的 kid 与公钥材料。
+         * 只配置其中一项属于高风险换钥配置错误，调用方应 fail-fast。
+         */
+        public boolean hasCompleteKeyMaterial() {
+            return keyId != null && !keyId.isBlank() && publicKey != null && !publicKey.isBlank();
+        }
     }
 }
