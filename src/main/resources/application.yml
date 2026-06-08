@@ -243,6 +243,12 @@ social:
       backoff-max-ms: 30000
   rebuild:
     enabled: false
+    group-id: counter-rebuild
+    target-type:
+    entity-id-min: -1
+    entity-id-max: -1
+    dry-run: false
+    dedup-ttl-days: 7
 
 trade:
   kafka:
