@@ -6,6 +6,7 @@ import com.zhiguang.be.common.tx.Transactions;
 import com.zhiguang.be.feed.FeedCacheKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -31,6 +32,7 @@ public class FeedCacheInvalidationService {
     @Value("${feed.cache.version:v1}")
     private String cacheVersion;
 
+    @Autowired
     public FeedCacheInvalidationService(CacheService cacheService) {
         this(cacheService, CompletableFuture.delayedExecutor(DOUBLE_DELETE_DELAY_MILLIS, TimeUnit.MILLISECONDS));
     }
