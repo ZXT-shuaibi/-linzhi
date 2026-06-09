@@ -435,6 +435,19 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         return buildActionData(targetType, targetId, action, active, true);
     }
 
+    /**
+     * 异步投影互动事件的 Redis 侧状态。
+     * 位图与计数任一链路失败时只登记重试标记，不回滚主库互动事实，保证用户操作先落库再最终一致补偿。
+     *
+     * @param snapshot 目标内容快照
+     * @param targetType 目标类型
+     * @param targetId 目标 ID
+     * @param currentUserId 当前用户 ID
+     * @param action 动作类型
+     * @param active true 表示生效，false 表示取消
+     * @param delta 计数增量
+     * @param eventId 业务事件 ID
+     */
     private void applyInteractionProjection(
             PostTargetSnapshot snapshot,
             String targetType,
@@ -1045,6 +1058,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
 
     /**
      * 同步互动位图。
+     * Lua 必须明确返回 0 或 1，null/负数视为写入链路异常，交给外层投影流程登记重试标记。
      *
      * @param targetType 目标类型
      * @param targetId 目标 ID
@@ -1055,12 +1069,18 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     private void syncBitmap(String targetType, long targetId, long userId, String action, boolean active) {
         String metric = resolveBitmapMetric(action);
         String key = SocialRedisKeys.bitmapKey(metric, targetType, targetId, SocialRedisKeys.chunkOf(userId));
-        stringRedisTemplate.execute(
+        Long result = stringRedisTemplate.execute(
                 bitmapToggleScript,
                 Collections.singletonList(key),
                 String.valueOf(SocialRedisKeys.bitOffsetOf(userId)),
                 active ? "add" : "remove"
         );
+        if (result == null) {
+            throw new IllegalStateException("interaction bitmap toggle script returned null");
+        }
+        if (result.longValue() < 0L) {
+            throw new IllegalStateException("interaction bitmap toggle script returned invalid operation");
+        }
     }
 
     /**
@@ -1598,6 +1618,12 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         return "like".equals(action) ? "like" : "fav";
     }
 
+    /**
+     * 将互动动作映射到 SDS 实体计数字段下标，保证 Kafka 事件与本地紧凑计数布局一致。
+     *
+     * @param action 动作类型
+     * @return SDS 字段下标
+     */
     private int resolveCounterFieldIndex(String action) {
         return "like".equals(action) ? SocialCounterSchema.IDX_LIKE : SocialCounterSchema.IDX_FAV;
     }

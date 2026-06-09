@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 import java.time.Duration;
@@ -38,6 +39,7 @@ class InteractionServiceImplTest {
 
     private StringRedisTemplate redisTemplate;
     private HashOperations<String, Object, Object> hashOperations;
+    private ValueOperations<String, String> valueOperations;
     private SocialMapper socialMapper;
     private SnowflakeIdGenerator snowflakeIdGenerator;
     private CounterEventProducer counterEventProducer;
@@ -48,10 +50,12 @@ class InteractionServiceImplTest {
     void setUp() {
         redisTemplate = mock(StringRedisTemplate.class);
         hashOperations = mock(HashOperations.class);
+        valueOperations = mock(ValueOperations.class);
         socialMapper = mock(SocialMapper.class);
         snowflakeIdGenerator = mock(SnowflakeIdGenerator.class);
         counterEventProducer = mock(CounterEventProducer.class);
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.execute(
                 any(DefaultRedisScript.class),
                 eq(List.of(
@@ -277,6 +281,34 @@ class InteractionServiceImplTest {
                 eq(SocialRedisKeys.aggregateBucketKey("post", 1006L)),
                 eq(String.valueOf(SocialCounterSchema.IDX_LIKE)),
                 eq(1)
+        );
+    }
+
+    @Test
+    void likeShouldScheduleRetryWhenBitmapScriptReturnsNull() {
+        when(socialMapper.findPostSnapshot(1007L)).thenReturn(Map.of(
+                "postId", 1007L,
+                "creatorId", 20L,
+                "status", "published",
+                "visible", "public"
+        ));
+        when(socialMapper.reactivateInteraction(7L, "post", 1007L, "like")).thenReturn(0);
+        when(socialMapper.existsActiveInteraction(7L, "post", 1007L, "like")).thenReturn(0);
+        when(snowflakeIdGenerator.nextId()).thenReturn(92001L, 92002L);
+        when(counterEventProducer.isEnabled()).thenReturn(false);
+        when(redisTemplate.execute(
+                any(DefaultRedisScript.class),
+                eq(List.of(SocialRedisKeys.bitmapKey("like", "post", 1007L, SocialRedisKeys.chunkOf(7L)))),
+                eq(String.valueOf(SocialRedisKeys.bitOffsetOf(7L))),
+                eq("add")
+        )).thenReturn(null);
+
+        service.like(7L, "post", 1007L);
+
+        verify(valueOperations).set(
+                SocialRedisKeys.interactionRetryKey("post", 1007L, 7L, "like"),
+                "1",
+                Duration.ofMinutes(5)
         );
     }
 }
