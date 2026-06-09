@@ -218,6 +218,7 @@ public class SearchProperties {
         private boolean kafkaEnabled = false;
         private String topic = "canal-outbox";
         private String groupId = "search-index-consumer";
+        private long dedupTtlMinutes = 10;
 
         public boolean isLocalSyncEnabled() {
             return localSyncEnabled;
@@ -249,6 +250,14 @@ public class SearchProperties {
 
         public void setGroupId(String groupId) {
             this.groupId = groupId;
+        }
+
+        public long getDedupTtlMinutes() {
+            return dedupTtlMinutes;
+        }
+
+        public void setDedupTtlMinutes(long dedupTtlMinutes) {
+            this.dedupTtlMinutes = dedupTtlMinutes;
         }
     }
 }

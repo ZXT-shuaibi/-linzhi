@@ -153,6 +153,7 @@ search:
     kafka-enabled: false
     topic: canal-outbox
     group-id: search-index-consumer
+    dedup-ttl-minutes: 10
 
 rag:
   query:
