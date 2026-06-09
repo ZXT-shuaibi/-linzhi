@@ -44,6 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -73,6 +74,7 @@ public class ContentServiceImpl implements ContentService {
     private static final String EVENT_POST_DELETED = "POST_DELETED";
 
     private static final String DISCOVER_TYPE = "knowledge";
+    private static final String SHA256_HEX_PATTERN = "^[0-9a-fA-F]{64}$";
 
     private final KnowPostMapper knowPostMapper;
     private final LbsDiscoverService lbsDiscoverService;
@@ -183,9 +185,10 @@ public class ContentServiceImpl implements ContentService {
         if (!request.objectKey().startsWith("posts/" + postIdStr + "/content/")) {
             throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "objectKey 与当前文章不匹配");
         }
+        String normalizedSha256 = normalizeSha256(request.sha256());
 
         if (hasText(entity.contentObjectKey())) {
-            if (isSameConfirmedContent(entity, request)) {
+            if (isSameConfirmedContent(entity, request, normalizedSha256)) {
                 return;
             }
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "正文已确认，不能重复覆盖");
@@ -198,12 +201,12 @@ public class ContentServiceImpl implements ContentService {
                 postIdStr, String.valueOf(creatorId),
                 nextStatus,
                 storageService.toPublicUrl(request.objectKey()),
-                request.objectKey(), request.etag(), request.size(), request.sha256(),
+                request.objectKey(), request.etag(), request.size(), normalizedSha256,
                 Instant.now()
         );
         if (updated == 0) {
             KnowPostEntity latest = knowPostMapper.findById(postIdStr);
-            if (isSameConfirmedContent(latest, request)) {
+            if (isSameConfirmedContent(latest, request, normalizedSha256)) {
                 return;
             }
             throw new BusinessException(ErrorCode.CONFLICT, HttpStatus.CONFLICT, "正文确认失败，请刷新后重试");
@@ -511,12 +514,27 @@ public class ContentServiceImpl implements ContentService {
         }
     }
 
-    private boolean isSameConfirmedContent(KnowPostEntity entity, ConfirmContentRequest request) {
+    private boolean isSameConfirmedContent(KnowPostEntity entity, ConfirmContentRequest request, String normalizedSha256) {
         return entity != null
                 && Objects.equals(entity.contentObjectKey(), request.objectKey())
                 && Objects.equals(entity.contentEtag(), request.etag())
                 && Objects.equals(entity.contentSize(), request.size())
-                && Objects.equals(entity.contentSha256(), request.sha256());
+                && Objects.equals(normalizeStoredSha256(entity.contentSha256()), normalizedSha256);
+    }
+
+    private String normalizeSha256(String sha256) {
+        if (sha256 == null || !sha256.matches(SHA256_HEX_PATTERN)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, HttpStatus.BAD_REQUEST, "sha256 必须是 64 位十六进制字符串");
+        }
+        // 摘要统一小写落库，避免大小写差异破坏确认幂等和后续内容重建。
+        return sha256.toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeStoredSha256(String sha256) {
+        if (sha256 == null || !sha256.matches(SHA256_HEX_PATTERN)) {
+            return sha256;
+        }
+        return sha256.toLowerCase(Locale.ROOT);
     }
 
     private boolean wasPublishedBeforeDelete(KnowPostEntity beforeDelete, KnowPostEntity afterDelete) {

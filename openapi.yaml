@@ -2128,6 +2128,9 @@ components:
           type: string
         sha256:
           type: string
+          minLength: 64
+          maxLength: 64
+          pattern: '^[0-9a-fA-F]{64}$'
         size:
           type: integer
     UpdatePostMetadataRequest:
@@ -2627,6 +2630,9 @@ components:
           type: string
         sha256:
           type: string
+          minLength: 64
+          maxLength: 64
+          pattern: '^[0-9a-fA-F]{64}$'
         size:
           type: integer
     ConfirmContentData:

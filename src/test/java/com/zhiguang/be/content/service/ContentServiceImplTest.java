@@ -199,6 +199,170 @@ class ContentServiceImplTest {
     }
 
     @Test
+    void confirmContentShouldRejectNonHexSha256BeforeStorageValidation() {
+        ConfirmContentRequest request = new ConfirmContentRequest(
+                "posts/1001/content/content.md",
+                "\"etag-1\"",
+                sha('g'),
+                128L
+        );
+        when(knowPostMapper.findById("1001")).thenReturn(unconfirmedPost("1001", "7", "draft"));
+
+        assertThrows(
+                BusinessException.class,
+                () -> service.confirmContent(7L, 1001L, request)
+        );
+
+        verify(storageService, never()).validateUploadedObject(anyString(), anyString(), any());
+        verify(knowPostMapper, never()).updateContent(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                any(),
+                anyString(),
+                any()
+        );
+    }
+
+    @Test
+    void confirmContentShouldRejectSha256WithSurroundingWhitespaceBeforeStorageValidation() {
+        ConfirmContentRequest request = new ConfirmContentRequest(
+                "posts/1001/content/content.md",
+                "\"etag-1\"",
+                " " + sha('a') + " ",
+                128L
+        );
+        when(knowPostMapper.findById("1001")).thenReturn(unconfirmedPost("1001", "7", "draft"));
+
+        assertThrows(
+                BusinessException.class,
+                () -> service.confirmContent(7L, 1001L, request)
+        );
+
+        verify(storageService, never()).validateUploadedObject(anyString(), anyString(), any());
+        verify(knowPostMapper, never()).updateContent(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                any(),
+                anyString(),
+                any()
+        );
+    }
+
+    @Test
+    void confirmContentShouldTreatDuplicateWithUppercaseSha256AsIdempotent() {
+        String lowercaseSha256 = "abcdef0123456789".repeat(4);
+        String uppercaseSha256 = "ABCDEF0123456789".repeat(4);
+        KnowPostEntity confirmed = confirmedPost(
+                "1001",
+                "7",
+                "posts/1001/content/content.md",
+                "\"etag-1\"",
+                12L,
+                lowercaseSha256
+        );
+        when(knowPostMapper.findById("1001")).thenReturn(confirmed);
+
+        service.confirmContent(
+                7L,
+                1001L,
+                new ConfirmContentRequest("posts/1001/content/content.md", "\"etag-1\"", uppercaseSha256, 12L)
+        );
+
+        verify(knowPostMapper, never()).updateContent(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                any(),
+                anyString(),
+                any()
+        );
+    }
+
+    @Test
+    void confirmContentShouldTreatLegacyUppercaseStoredSha256AsIdempotent() {
+        String lowercaseSha256 = "abcdef0123456789".repeat(4);
+        String uppercaseSha256 = "ABCDEF0123456789".repeat(4);
+        KnowPostEntity confirmed = confirmedPost(
+                "1001",
+                "7",
+                "posts/1001/content/content.md",
+                "\"etag-1\"",
+                12L,
+                uppercaseSha256
+        );
+        when(knowPostMapper.findById("1001")).thenReturn(confirmed);
+
+        service.confirmContent(
+                7L,
+                1001L,
+                new ConfirmContentRequest("posts/1001/content/content.md", "\"etag-1\"", lowercaseSha256, 12L)
+        );
+
+        verify(knowPostMapper, never()).updateContent(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                anyString(),
+                any(),
+                anyString(),
+                any()
+        );
+    }
+
+    @Test
+    void confirmContentShouldPersistNormalizedLowercaseSha256() {
+        String uppercaseSha256 = "ABCDEF0123456789".repeat(4);
+        String lowercaseSha256 = "abcdef0123456789".repeat(4);
+        ConfirmContentRequest request = new ConfirmContentRequest(
+                "posts/1001/content/content.md",
+                "\"etag-1\"",
+                uppercaseSha256,
+                128L
+        );
+        when(knowPostMapper.findById("1001")).thenReturn(unconfirmedPost("1001", "7", "draft"));
+        when(storageService.toPublicUrl("posts/1001/content/content.md"))
+                .thenReturn("https://oss.local/posts/1001/content/content.md");
+        when(knowPostMapper.updateContent(
+                eq("1001"),
+                eq("7"),
+                eq("metadata_completed"),
+                eq("https://oss.local/posts/1001/content/content.md"),
+                eq("posts/1001/content/content.md"),
+                eq("\"etag-1\""),
+                eq(128L),
+                eq(lowercaseSha256),
+                any()
+        )).thenReturn(1);
+
+        service.confirmContent(7L, 1001L, request);
+
+        verify(knowPostMapper).updateContent(
+                eq("1001"),
+                eq("7"),
+                eq("metadata_completed"),
+                eq("https://oss.local/posts/1001/content/content.md"),
+                eq("posts/1001/content/content.md"),
+                eq("\"etag-1\""),
+                eq(128L),
+                eq(lowercaseSha256),
+                any()
+        );
+    }
+
+    @Test
     void publishShouldReturnCurrentDetailWhenPostIsAlreadyPublished() {
         Instant publishedAt = Instant.now().minusSeconds(3600);
         when(knowPostMapper.findById("1001")).thenReturn(post("1001", "7", "published", publishedAt));
