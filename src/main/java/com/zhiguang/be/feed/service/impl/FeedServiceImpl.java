@@ -12,6 +12,7 @@ import com.zhiguang.be.common.geo.GeoDistances;
 import com.zhiguang.be.common.util.Jsons;
 import com.zhiguang.be.content.dto.PostAuthor;
 import com.zhiguang.be.feed.FeedData;
+import com.zhiguang.be.feed.FeedCacheKeys;
 import com.zhiguang.be.feed.FeedItem;
 import com.zhiguang.be.feed.FeedPostRow;
 import com.zhiguang.be.feed.mapper.FeedMapper;
@@ -23,6 +24,7 @@ import com.zhiguang.be.social.UserSocialCounterData;
 import com.zhiguang.be.social.service.FollowService;
 import com.zhiguang.be.social.service.InteractionService;
 import com.zhiguang.be.social.service.UserSocialCounterService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -50,11 +52,11 @@ public class FeedServiceImpl implements FeedService {
     private static final long LOCAL_CACHE_TTL_MILLIS = 5_000L;
     private static final Duration PAGE_CACHE_TTL = Duration.ofSeconds(30);
     private static final Duration FRAGMENT_CACHE_TTL = Duration.ofSeconds(90);
-    private static final String FRAGMENT_CACHE_KEY_PREFIX = "feed:fragment:post:";
     private static final int DEFAULT_CANDIDATE_WINDOW = 100;
     private static final int MAX_CANDIDATE_WINDOW = 500;
     private static final int SINGLE_FLIGHT_MAX_LOCKS = 1024;
     private static final long SINGLE_FLIGHT_IDLE_TTL_MILLIS = 30_000L;
+    private static final String TRUSTED_LEGACY_PAGE_MIRROR = "__trusted_legacy_page_mirror__";
 
     private final FeedMapper feedMapper;
     private final CacheService cacheService;
@@ -64,6 +66,9 @@ public class FeedServiceImpl implements FeedService {
     private final InteractionService interactionService;
     private final UserSocialCounterService userSocialCounterService;
     private final ConcurrentHashMap<String, SingleFlightLock> singleFlightLocks = new ConcurrentHashMap<String, SingleFlightLock>();
+
+    @Value("${feed.cache.version:v1}")
+    private String cacheVersion;
 
     /**
      * 注入 Feed 服务依赖。
@@ -108,14 +113,17 @@ public class FeedServiceImpl implements FeedService {
         int safeSize = normalizePageSize(size);
         validateLocation(lat, lng);
 
-        String cacheKey = buildCacheKey(safePage, safeSize, lat, lng, geoHash);
+        String locationSegment = resolveLocationSegment(lat, lng, geoHash);
+        String cacheKey = buildCacheKey(locationSegment, safePage, safeSize);
+        String legacyCacheKey = buildLegacyCacheKey(locationSegment, safePage, safeSize);
         hotKeyDetector.record(cacheKey);
         FeedData localCached = readLocalCache(cacheKey);
-        if (localCached != null) {
+        String legacyPageMirror = readTrustedLegacyPageMirror(cacheKey, legacyCacheKey);
+        if (localCached != null && legacyPageMirror != null && areLegacyFragmentMirrorsTrusted(localCached)) {
             return enrichFeedData(localCached, viewerId, "L2");
         }
 
-        FeedData redisCached = readRedisPage(cacheKey, "L1+L0");
+        FeedData redisCached = readRedisPage(cacheKey, legacyCacheKey, legacyPageMirror, "L1+L0");
         if (redisCached != null) {
             writeLocalCache(cacheKey, redisCached);
             return enrichFeedData(redisCached, viewerId, "L1+L0");
@@ -125,11 +133,12 @@ public class FeedServiceImpl implements FeedService {
         synchronized (lock) {
             try {
                 FeedData localCachedAgain = readLocalCache(cacheKey);
-                if (localCachedAgain != null) {
+                legacyPageMirror = readTrustedLegacyPageMirror(cacheKey, legacyCacheKey);
+                if (localCachedAgain != null && legacyPageMirror != null && areLegacyFragmentMirrorsTrusted(localCachedAgain)) {
                     return enrichFeedData(localCachedAgain, viewerId, "L2");
                 }
 
-                FeedData redisCachedAgain = readRedisPage(cacheKey, "L1+L0");
+                FeedData redisCachedAgain = readRedisPage(cacheKey, legacyCacheKey, legacyPageMirror, "L1+L0");
                 if (redisCachedAgain != null) {
                     writeLocalCache(cacheKey, redisCachedAgain);
                     return enrichFeedData(redisCachedAgain, viewerId, "L1+L0");
@@ -138,7 +147,7 @@ public class FeedServiceImpl implements FeedService {
                 FeedData freshData = hasLocation(lat, lng)
                         ? buildMixedFeed(safePage, safeSize, lat, lng)
                         : buildLatestFeed(safePage, safeSize);
-                writeRedisCaches(cacheKey, freshData);
+                writeRedisCaches(cacheKey, legacyCacheKey, freshData);
                 writeLocalCache(cacheKey, freshData);
                 return enrichFeedData(freshData, viewerId, "DB");
             } finally {
@@ -469,7 +478,10 @@ public class FeedServiceImpl implements FeedService {
      * @param cacheLayer 命中层级标记
      * @return 装配成功返回 Feed 数据；骨架或碎片缺失时返回 null
      */
-    private FeedData readRedisPage(String cacheKey, String cacheLayer) {
+    private FeedData readRedisPage(String cacheKey, String legacyCacheKey, String legacyPageMirror, String cacheLayer) {
+        if (!StringUtils.hasText(legacyPageMirror)) {
+            return null;
+        }
         CachedFeedPage cachedPage = cacheService.getRedisJson(cacheKey, CachedFeedPage.class);
         if (cachedPage == null || cachedPage.items() == null) {
             return null;
@@ -484,10 +496,14 @@ public class FeedServiceImpl implements FeedService {
      * @param cacheKey 页面骨架缓存 key
      * @param feedData Feed 数据
      */
-    private void writeRedisCaches(String cacheKey, FeedData feedData) {
+    private void writeRedisCaches(String cacheKey, String legacyCacheKey, FeedData feedData) {
         Duration fragmentTtl = hotKeyDetector.ttl(cacheKey, FRAGMENT_CACHE_TTL);
         writeFeedFragments(feedData.items(), fragmentTtl);
-        cacheService.putRedisJson(cacheKey, CachedFeedPage.from(feedData), hotKeyDetector.ttl(cacheKey, PAGE_CACHE_TTL));
+        CachedFeedPage cachedPage = CachedFeedPage.from(feedData);
+        Duration pageTtl = hotKeyDetector.ttl(cacheKey, PAGE_CACHE_TTL);
+        cacheService.putRedisJson(cacheKey, cachedPage, pageTtl);
+        // 迁移期镜像旧 key：旧节点只会删除 legacy key，新节点据此识别 versioned 缓存是否仍可信。
+        cacheService.putRedisJson(legacyCacheKey, cachedPage, pageTtl);
     }
 
     /**
@@ -529,20 +545,53 @@ public class FeedServiceImpl implements FeedService {
      */
     private Map<String, CachedFeedFragment> readFeedFragments(List<CachedFeedPageItem> pageItems) {
         List<String> fragmentKeys = new ArrayList<String>(pageItems.size());
+        List<String> legacyFragmentKeys = new ArrayList<String>(pageItems.size());
         for (CachedFeedPageItem pageItem : pageItems) {
             fragmentKeys.add(buildFragmentKey(pageItem.postId()));
+            legacyFragmentKeys.add(FeedCacheKeys.legacyFragmentKey(pageItem.postId()));
         }
 
         List<String> rawFragments = cacheService.getRedisStrings(fragmentKeys);
+        List<String> rawLegacyFragments = cacheService.getRedisStrings(legacyFragmentKeys);
         Map<String, CachedFeedFragment> fragmentMap = new HashMap<String, CachedFeedFragment>();
         for (int index = 0; index < pageItems.size(); index++) {
             String raw = index < rawFragments.size() ? rawFragments.get(index) : null;
+            String legacyRaw = index < rawLegacyFragments.size() ? rawLegacyFragments.get(index) : null;
+            if (!isSameCachePayload(raw, legacyRaw)) {
+                return new HashMap<String, CachedFeedFragment>();
+            }
             CachedFeedFragment fragment = parseFragment(raw);
             if (fragment != null) {
                 fragmentMap.put(pageItems.get(index).postId(), fragment);
             }
         }
         return fragmentMap;
+    }
+
+    /**
+     * 校验本地缓存条目的 versioned/legacy 碎片镜像是否一致。
+     * 本地缓存没有 Redis 原始内容，必须回查碎片镜像，避免旧节点重建 legacy 后误信旧本地页。
+     */
+    private boolean areLegacyFragmentMirrorsTrusted(FeedData feedData) {
+        if (feedData == null || feedData.items() == null || feedData.items().isEmpty()) {
+            return true;
+        }
+        List<String> fragmentKeys = new ArrayList<String>(feedData.items().size());
+        List<String> legacyFragmentKeys = new ArrayList<String>(feedData.items().size());
+        for (FeedItem item : feedData.items()) {
+            fragmentKeys.add(buildFragmentKey(item.postId()));
+            legacyFragmentKeys.add(FeedCacheKeys.legacyFragmentKey(item.postId()));
+        }
+        List<String> rawFragments = cacheService.getRedisStrings(fragmentKeys);
+        List<String> rawLegacyFragments = cacheService.getRedisStrings(legacyFragmentKeys);
+        for (int index = 0; index < feedData.items().size(); index++) {
+            String raw = index < rawFragments.size() ? rawFragments.get(index) : null;
+            String legacyRaw = index < rawLegacyFragments.size() ? rawLegacyFragments.get(index) : null;
+            if (!isSameCachePayload(raw, legacyRaw)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -587,7 +636,7 @@ public class FeedServiceImpl implements FeedService {
             FeedItem item = toFeedItem(row, null, calculateHotScore(null, row.publishTime(), row.isTop()));
             CachedFeedFragment fragment = CachedFeedFragment.from(item, summaryMap.get(item.postId()));
             fragmentMap.put(item.postId(), fragment);
-            cacheService.putRedisJson(buildFragmentKey(item.postId()), fragment, fragmentTtl);
+            writeFeedFragment(item.postId(), fragment, fragmentTtl);
         }
         return fragmentMap;
     }
@@ -608,12 +657,36 @@ public class FeedServiceImpl implements FeedService {
         }
         Map<String, InteractionSummary> summaryMap = interactionService.summaryBatch(0L, "post", targetIds);
         for (FeedItem item : items) {
-            cacheService.putRedisJson(
-                    buildFragmentKey(item.postId()),
-                    CachedFeedFragment.from(item, summaryMap.get(item.postId())),
-                    ttl
-            );
+            writeFeedFragment(item.postId(), CachedFeedFragment.from(item, summaryMap.get(item.postId())), ttl);
         }
+    }
+
+    /**
+     * 写入帖子碎片缓存，并同步写 legacy 镜像以兼容滚动发布期间的旧实例失效事件。
+     */
+    private void writeFeedFragment(String postId, CachedFeedFragment fragment, Duration ttl) {
+        cacheService.putRedisJson(buildFragmentKey(postId), fragment, ttl);
+        cacheService.putRedisJson(FeedCacheKeys.legacyFragmentKey(postId), fragment, ttl);
+    }
+
+    /**
+     * 读取并校验 legacy 页面镜像。
+     * 旧实例可能只刷新 legacy，因此 versioned 与 legacy 内容不一致时必须放弃缓存命中。
+     */
+    private String readTrustedLegacyPageMirror(String cacheKey, String legacyCacheKey) {
+        String versioned = cacheService.getRedisString(cacheKey);
+        String legacy = cacheService.getRedisString(legacyCacheKey);
+        if (!isSameCachePayload(versioned, legacy)) {
+            return null;
+        }
+        return TRUSTED_LEGACY_PAGE_MIRROR;
+    }
+
+    /**
+     * 判断 versioned 和 legacy 的原始缓存内容是否仍然一致。
+     */
+    private boolean isSameCachePayload(String versioned, String legacy) {
+        return StringUtils.hasText(versioned) && StringUtils.hasText(legacy) && versioned.equals(legacy);
     }
 
     /**
@@ -641,7 +714,7 @@ public class FeedServiceImpl implements FeedService {
      * @return 碎片 key
      */
     private String buildFragmentKey(String postId) {
-        return FRAGMENT_CACHE_KEY_PREFIX + postId;
+        return FeedCacheKeys.fragmentKey(cacheVersion, postId);
     }
 
     /**
@@ -675,13 +748,15 @@ public class FeedServiceImpl implements FeedService {
      * @param geoHash GeoHash
      * @return 页面缓存 key
      */
-    private String buildCacheKey(int page, int size, Double lat, Double lng, String geoHash) {
-        return "feed:page:home:"
-                + resolveLocationSegment(lat, lng, geoHash)
-                + ":"
-                + page
-                + ":"
-                + size;
+    private String buildCacheKey(String locationSegment, int page, int size) {
+        return FeedCacheKeys.homePageKey(cacheVersion, locationSegment, page, size);
+    }
+
+    /**
+     * 生成旧版无版本页面缓存 key，用于滚动发布期间的兼容镜像。
+     */
+    private String buildLegacyCacheKey(String locationSegment, int page, int size) {
+        return FeedCacheKeys.legacyHomePageKey(locationSegment, page, size);
     }
 
     /**

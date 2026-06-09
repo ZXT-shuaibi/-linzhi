@@ -3,12 +3,15 @@ package com.zhiguang.be.feed.service;
 import com.zhiguang.be.cache.CacheRegions;
 import com.zhiguang.be.cache.service.CacheService;
 import com.zhiguang.be.common.tx.Transactions;
+import com.zhiguang.be.feed.FeedCacheKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -20,14 +23,21 @@ public class FeedCacheInvalidationService {
 
     private static final Logger log = LoggerFactory.getLogger(FeedCacheInvalidationService.class);
 
-    private static final String FEED_HOME_PAGE_PATTERN = "feed:page:home:*";
-    private static final String FEED_FRAGMENT_KEY_PREFIX = "feed:fragment:post:";
     private static final long DOUBLE_DELETE_DELAY_MILLIS = 80L;
 
     private final CacheService cacheService;
+    private final Executor delayedDeleteExecutor;
+
+    @Value("${feed.cache.version:v1}")
+    private String cacheVersion;
 
     public FeedCacheInvalidationService(CacheService cacheService) {
+        this(cacheService, CompletableFuture.delayedExecutor(DOUBLE_DELETE_DELAY_MILLIS, TimeUnit.MILLISECONDS));
+    }
+
+    FeedCacheInvalidationService(CacheService cacheService, Executor delayedDeleteExecutor) {
         this.cacheService = cacheService;
+        this.delayedDeleteExecutor = delayedDeleteExecutor;
     }
 
     /**
@@ -51,7 +61,7 @@ public class FeedCacheInvalidationService {
      */
     private void doubleDeletePost(String postId) {
         deletePostOnce(postId);
-        CompletableFuture.delayedExecutor(DOUBLE_DELETE_DELAY_MILLIS, TimeUnit.MILLISECONDS).execute(() -> deletePostOnce(postId));
+        delayedDeleteExecutor.execute(() -> deletePostOnce(postId));
     }
 
     /**
@@ -61,8 +71,11 @@ public class FeedCacheInvalidationService {
      */
     private void deletePostOnce(String postId) {
         cacheService.evictLocalRegion(CacheRegions.FEED_HOME);
-        long pageDeleted = cacheService.deleteRedisByPattern(FEED_HOME_PAGE_PATTERN);
-        cacheService.deleteRedis(FEED_FRAGMENT_KEY_PREFIX + postId);
+        long pageDeleted = cacheService.deleteRedisByPattern(FeedCacheKeys.homePagePattern(cacheVersion));
+        cacheService.deleteRedis(FeedCacheKeys.fragmentKey(cacheVersion, postId));
+        // 迁移期兼容旧实例：滚动发布或回滚时，旧无版本缓存也必须被同一事件清理。
+        pageDeleted += cacheService.deleteRedisByPattern(FeedCacheKeys.legacyHomePagePattern());
+        cacheService.deleteRedis(FeedCacheKeys.legacyFragmentKey(postId));
         log.debug("feed cache invalidated, postId={}, pageDeleted={}", postId, pageDeleted);
     }
 }
