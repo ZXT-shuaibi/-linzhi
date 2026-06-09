@@ -40,9 +40,9 @@ public class CanalOutboxConsumer {
     @KafkaListener(
             topics = "${social.relation.outbox.topic:${canal.topic:canal-outbox}}",
             groupId = "${social.relation.outbox.group-id:relation-outbox-consumer}",
-            containerFactory = "kafkaManualAckListenerContainerFactory"
+            containerFactory = "kafkaRelationOutboxListenerContainerFactory"
     )
-    public void onMessage(String message, Acknowledgment acknowledgment) {
+    public void onMessage(String message, Acknowledgment acknowledgment) throws Exception {
         List<JsonNode> rows = OutboxMessageUtil.extractRows(objectMapper, message);
         if (rows.isEmpty()) {
             acknowledgment.acknowledge();
@@ -68,9 +68,10 @@ public class CanalOutboxConsumer {
                 relationEventProcessor.process(payload);
             } catch (JsonProcessingException ex) {
                 log.warn("关系 outbox payload 解析失败，payload={}", payloadNode.asText(), ex);
+                throw ex;
             } catch (Exception ex) {
                 log.warn("关系 outbox 投影失败，message={}", message, ex);
-                return;
+                throw ex;
             }
         }
 

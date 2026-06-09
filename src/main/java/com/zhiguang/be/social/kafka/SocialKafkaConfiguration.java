@@ -8,6 +8,7 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.util.backoff.BackOff;
 import org.springframework.util.backoff.FixedBackOff;
 
 /**
@@ -48,17 +49,44 @@ public class SocialKafkaConfiguration {
             ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
             ConsumerFactory<Object, Object> consumerFactory
     ) {
+        return blockingRetryListenerContainerFactory(configurer, consumerFactory);
+    }
+
+    /**
+     * 关系 Outbox 专用监听容器。
+     * 关系投影失败时必须保留 offset，避免 follower、缓存和计数等伪从静默漂移。
+     */
+    @Bean("kafkaRelationOutboxListenerContainerFactory")
+    public ConcurrentKafkaListenerContainerFactory<Object, Object> kafkaRelationOutboxListenerContainerFactory(
+            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
+            ConsumerFactory<Object, Object> consumerFactory
+    ) {
+        return blockingRetryListenerContainerFactory(configurer, consumerFactory);
+    }
+
+    /**
+     * 构造失败阻塞重试的监听容器，适用于不能跳过 offset 的修复/投影链路。
+     */
+    private ConcurrentKafkaListenerContainerFactory<Object, Object> blockingRetryListenerContainerFactory(
+            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
+            ConsumerFactory<Object, Object> consumerFactory
+    ) {
         ConcurrentKafkaListenerContainerFactory<Object, Object> factory =
                 new ConcurrentKafkaListenerContainerFactory<Object, Object>();
         configurer.configure(factory, consumerFactory);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
         factory.getContainerProperties().setMissingTopicsFatal(false);
 
-        DefaultErrorHandler errorHandler = new DefaultErrorHandler(
-                new FixedBackOff(1000L, FixedBackOff.UNLIMITED_ATTEMPTS)
-        );
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(blockingRetryBackOff());
         errorHandler.setAckAfterHandle(false);
         factory.setCommonErrorHandler(errorHandler);
         return factory;
+    }
+
+    /**
+     * 失败阻塞重试策略，显式使用无限尝试，防止关键投影链路被默认恢复器吞掉 offset。
+     */
+    static BackOff blockingRetryBackOff() {
+        return new FixedBackOff(1000L, FixedBackOff.UNLIMITED_ATTEMPTS);
     }
 }
