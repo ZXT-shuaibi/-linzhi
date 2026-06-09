@@ -7,16 +7,22 @@ import com.zhiguang.be.content.model.KnowPostFeedRow;
 import com.zhiguang.be.rag.config.RagProperties;
 import org.elasticsearch.client.RestClient;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.support.StaticListableBeanFactory;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -91,6 +97,75 @@ class RagIndexServiceTest {
         assertTrue(result.references().size() <= 2);
     }
 
+    @Test
+    void vectorSearchShouldOnlyUseCurrentPostVersionChunks() {
+        KnowPostMapper knowPostMapper = mock(KnowPostMapper.class);
+        VectorStore vectorStore = mock(VectorStore.class);
+        RestClient restClient = mock(RestClient.class);
+        RagIndexService service = new RagIndexService(
+                knowPostMapper,
+                ragProperties(),
+                new ObjectMapper(),
+                constantEmbeddingGateway(),
+                provider(RestClient.class, restClient),
+                provider(VectorStore.class, vectorStore)
+        );
+
+        when(knowPostMapper.findById("post-9")).thenReturn(entity(
+                "post-9",
+                "Dorm rules",
+                "Current answer says lights out at 11 PM.",
+                "[\"campus\",\"dorm\"]",
+                "North dormitory"
+        ));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(
+                vectorDocument("post-9", "post-9#old#0", "sha:stale-sha", "Dorm rule old answer lights out at 10 PM."),
+                vectorDocument("post-9", "post-9#summary#0", "sha256:sha-post-9", "Dorm rule current answer lights out at 11 PM.")
+        ));
+
+        RagIndexService.SearchResult result = service.search("lights out", "post-9", null, null, 5);
+
+        assertEquals(1, result.hits().size());
+        assertEquals("post-9#summary#0", result.hits().get(0).chunkId());
+        assertTrue(result.hits().get(0).content().contains("11 PM"));
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void reindexShouldWriteChunkIdAsVectorDocumentIdAndChunkContentAsText() {
+        KnowPostMapper knowPostMapper = mock(KnowPostMapper.class);
+        VectorStore vectorStore = mock(VectorStore.class);
+        RestClient restClient = mock(RestClient.class);
+        RagIndexService service = new RagIndexService(
+                knowPostMapper,
+                ragProperties(),
+                new ObjectMapper(),
+                constantEmbeddingGateway(),
+                provider(RestClient.class, restClient),
+                provider(VectorStore.class, vectorStore)
+        );
+
+        when(knowPostMapper.findById("post-9")).thenReturn(entity(
+                "post-9",
+                "Dorm rules",
+                "Current answer says lights out at 11 PM.",
+                "[\"campus\",\"dorm\"]",
+                "North dormitory"
+        ));
+
+        service.reindexSinglePost("post-9");
+
+        ArgumentCaptor<List> documentsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).add(documentsCaptor.capture());
+        List<Document> documents = documentsCaptor.getValue();
+        Optional<Document> titleDocument = documents.stream()
+                .filter(document -> "post-9#title#0".equals(document.getId()))
+                .findFirst();
+
+        assertTrue(titleDocument.isPresent());
+        assertTrue(titleDocument.get().getText().contains("Dorm rules"));
+    }
+
     private RagProperties ragProperties() {
         RagProperties properties = new RagProperties();
         properties.getQuery().setPublicSearchPageSize(2);
@@ -106,6 +181,29 @@ class RagIndexServiceTest {
 
     private <T> ObjectProvider<T> emptyProvider(Class<T> type) {
         return new StaticListableBeanFactory().getBeanProvider(type);
+    }
+
+    private <T> ObjectProvider<T> provider(Class<T> type, T bean) {
+        StaticListableBeanFactory beanFactory = new StaticListableBeanFactory();
+        beanFactory.addBean(type.getName(), bean);
+        return beanFactory.getBeanProvider(type);
+    }
+
+    private Document vectorDocument(String postId, String chunkId, String indexVersion, String content) {
+        return Document.builder()
+                .id(chunkId)
+                .text(content)
+                .metadata(Map.of(
+                        "postId", postId,
+                        "chunkId", chunkId,
+                        "indexVersion", indexVersion,
+                        "title", "Dorm rules",
+                        "position", 0,
+                        "weight", 3,
+                        "contentSha256", "sha-post-9",
+                        "contentEtag", "etag-post-9"
+                ))
+                .build();
     }
 
     private KnowPostFeedRow row(String postId, String title, String description, String tagsJson) {

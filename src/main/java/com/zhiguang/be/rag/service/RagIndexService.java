@@ -24,6 +24,7 @@ import org.springframework.web.client.RestTemplate;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -359,7 +360,11 @@ public class RagIndexService implements RagIndexOperations {
             metadata.put("contentEtag", entity.contentEtag());
             metadata.put("latitude", entity.latitude());
             metadata.put("longitude", entity.longitude());
-            documents.add(new Document(chunk.content(), chunk.chunkId(), metadata));
+            documents.add(Document.builder()
+                    .id(chunk.chunkId())
+                    .text(chunk.content())
+                    .metadata(metadata)
+                    .build());
         }
         vectorStore.add(documents);
         deleteVectorChunks(entity.postId(), indexVersion);
@@ -417,11 +422,19 @@ public class RagIndexService implements RagIndexOperations {
                 return List.of();
             }
 
+            Map<String, String> currentIndexVersions = new HashMap<String, String>();
             List<VectorChunkDocument> hits = new ArrayList<VectorChunkDocument>();
             for (Document document : documents) {
                 Map<String, Object> metadata = document.getMetadata();
                 String documentPostId = asString(metadata.get("postId"));
                 if (hasText(postId) && !postId.equals(documentPostId)) {
+                    continue;
+                }
+                if (!isCurrentVectorVersion(
+                        documentPostId,
+                        asString(metadata.get("indexVersion")),
+                        currentIndexVersions
+                )) {
                     continue;
                 }
                 Double retrievalScore = document.getScore();
@@ -446,6 +459,26 @@ public class RagIndexService implements RagIndexOperations {
         } catch (Exception ex) {
             return List.of();
         }
+    }
+
+    private boolean isCurrentVectorVersion(
+            String postId,
+            String indexVersion,
+            Map<String, String> currentIndexVersions
+    ) {
+        if (!hasText(postId) || !hasText(indexVersion)) {
+            return false;
+        }
+        String currentIndexVersion = currentIndexVersions.computeIfAbsent(postId, this::resolveCurrentIndexVersion);
+        return hasText(currentIndexVersion) && currentIndexVersion.equals(indexVersion);
+    }
+
+    private String resolveCurrentIndexVersion(String postId) {
+        KnowPostEntity entity = knowPostMapper.findById(postId);
+        if (entity == null || !isIndexable(entity)) {
+            return null;
+        }
+        return buildIndexVersion(entity);
     }
 
     private JsonNode parseResponse(Response response) throws Exception {
