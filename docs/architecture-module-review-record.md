@@ -48,7 +48,7 @@
 ## 已执行验证
 
 - `mvn.cmd -Dtest=InteractionServiceImplTest test`：通过，8 tests，0 failures，0 errors。
-- 既有全量验证记录：`mvn.cmd test` 通过，156 tests，0 failures，0 errors。
+- 既有全量验证记录：`mvn.cmd test` 通过，155 tests，0 failures，0 errors。
 - `git diff --check`：通过，仅有 Windows CRLF 提示。
 
 ## 后续建议
