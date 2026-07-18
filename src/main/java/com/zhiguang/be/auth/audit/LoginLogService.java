@@ -43,14 +43,54 @@ public class LoginLogService {
         LoginLogEntry entry = new LoginLogEntry(
                 snowflakeIdGenerator.nextId(),
                 userId,
-                identifier,
+                maskIdentifier(identifier),
                 channel,
-                ip,
+                maskIp(ip),
                 userAgent,
                 status,
                 message,
                 Instant.now()
         );
         loginLogMapper.insert(entry);
+    }
+
+    private String maskIdentifier(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
+            return identifier;
+        }
+        String trimmed = identifier.trim();
+        if (trimmed.matches("^1\\d{10}$")) {
+            return trimmed.substring(0, 3) + "****" + trimmed.substring(7);
+        }
+        if (trimmed.length() <= 4) {
+            return "****";
+        }
+        return trimmed.charAt(0) + "****" + trimmed.substring(trimmed.length() - 2);
+    }
+
+    private String maskIp(String ip) {
+        if (ip == null || ip.isBlank()) {
+            return ip;
+        }
+        String trimmed = ip.trim();
+        int lastDot = trimmed.lastIndexOf('.');
+        if (lastDot > 0 && trimmed.indexOf(':') < 0) {
+            return trimmed.substring(0, lastDot + 1) + "*";
+        }
+        int secondColon = nthIndexOf(trimmed, ':', 2);
+        if (secondColon > 0) {
+            return trimmed.substring(0, secondColon) + ":****";
+        }
+        return "****";
+    }
+
+    private int nthIndexOf(String value, char target, int count) {
+        int found = 0;
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) == target && ++found == count) {
+                return i;
+            }
+        }
+        return -1;
     }
 }

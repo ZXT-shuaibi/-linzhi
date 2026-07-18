@@ -70,6 +70,9 @@ public class FeedServiceImpl implements FeedService {
     @Value("${feed.cache.version:v1}")
     private String cacheVersion;
 
+    @Value("${feed.cache.legacy-mirror-validation-enabled:true}")
+    private boolean legacyMirrorValidationEnabled;
+
     /**
      * 注入 Feed 服务依赖。
      *
@@ -119,7 +122,7 @@ public class FeedServiceImpl implements FeedService {
         hotKeyDetector.record(cacheKey);
         FeedData localCached = readLocalCache(cacheKey);
         String legacyPageMirror = readTrustedLegacyPageMirror(cacheKey, legacyCacheKey);
-        if (localCached != null && legacyPageMirror != null && areLegacyFragmentMirrorsTrusted(localCached)) {
+        if (localCached != null && isLocalCacheTrusted(localCached, legacyPageMirror)) {
             return enrichFeedData(localCached, viewerId, "L2");
         }
 
@@ -134,7 +137,7 @@ public class FeedServiceImpl implements FeedService {
             try {
                 FeedData localCachedAgain = readLocalCache(cacheKey);
                 legacyPageMirror = readTrustedLegacyPageMirror(cacheKey, legacyCacheKey);
-                if (localCachedAgain != null && legacyPageMirror != null && areLegacyFragmentMirrorsTrusted(localCachedAgain)) {
+                if (localCachedAgain != null && isLocalCacheTrusted(localCachedAgain, legacyPageMirror)) {
                     return enrichFeedData(localCachedAgain, viewerId, "L2");
                 }
 
@@ -674,12 +677,25 @@ public class FeedServiceImpl implements FeedService {
      * 旧实例可能只刷新 legacy，因此 versioned 与 legacy 内容不一致时必须放弃缓存命中。
      */
     private String readTrustedLegacyPageMirror(String cacheKey, String legacyCacheKey) {
+        if (!legacyMirrorValidationEnabled) {
+            return TRUSTED_LEGACY_PAGE_MIRROR;
+        }
         String versioned = cacheService.getRedisString(cacheKey);
         String legacy = cacheService.getRedisString(legacyCacheKey);
         if (!isSameCachePayload(versioned, legacy)) {
             return null;
         }
         return TRUSTED_LEGACY_PAGE_MIRROR;
+    }
+
+    private boolean isLocalCacheTrusted(FeedData localCached, String legacyPageMirror) {
+        if (localCached == null) {
+            return false;
+        }
+        if (!legacyMirrorValidationEnabled) {
+            return true;
+        }
+        return legacyPageMirror != null && areLegacyFragmentMirrorsTrusted(localCached);
     }
 
     /**

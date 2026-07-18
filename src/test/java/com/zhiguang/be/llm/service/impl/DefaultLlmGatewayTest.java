@@ -38,20 +38,14 @@ class DefaultLlmGatewayTest {
         server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/llm", exchange -> {
             requestBody.set(readBody(exchange));
-            writeJson(exchange, 200, """
-                    {
-                      "output": [
-                        {
-                          "content": [
-                            {
-                              "type": "output_text",
-                              "text": "社区义卖本周末在中心广场举行"
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                    """);
+            writeJson(exchange, 200, "{"
+                    + "\"output\":[{"
+                    + "\"content\":[{"
+                    + "\"type\":\"output_text\","
+                    + "\"text\":\"Community sale happens downtown this weekend\""
+                    + "}]"
+                    + "}]"
+                    + "}");
         });
         server.start();
 
@@ -61,9 +55,9 @@ class DefaultLlmGatewayTest {
                 emptyChatClientProvider()
         );
 
-        String result = gateway.generateDescription("正文内容", 50);
+        String result = gateway.generateDescription("Post content", 50);
 
-        assertEquals("社区义卖本周末在中心广场举行", result);
+        assertEquals("Community sale happens downtown this weekend", result);
         assertTrue(requestBody.get().contains("\"task\":\"post_description\""));
         assertTrue(requestBody.get().contains("\"messages\""));
         assertTrue(requestBody.get().contains("\"role\":\"system\""));
@@ -72,26 +66,16 @@ class DefaultLlmGatewayTest {
     @Test
     void generateRagAnswerShouldReadChoicesMessageContentArray() throws Exception {
         server = HttpServer.create(new InetSocketAddress(0), 0);
-        server.createContext("/llm", exchange -> writeJson(exchange, 200, """
-                {
-                  "choices": [
-                    {
-                      "message": {
-                        "content": [
-                          {
-                            "type": "text",
-                            "text": "根据社区公告，"
-                          },
-                          {
-                            "type": "text",
-                            "text": "本周六上午九点开始。"
-                          }
-                        ]
-                      }
-                    }
-                  ]
-                }
-                """));
+        server.createContext("/llm", exchange -> writeJson(exchange, 200, "{"
+                + "\"choices\":[{"
+                + "\"message\":{"
+                + "\"content\":["
+                + "{\"type\":\"text\",\"text\":\"According to the community notice, \"},"
+                + "{\"type\":\"text\",\"text\":\"the event starts at 9 AM this Saturday.\"}"
+                + "]"
+                + "}"
+                + "}]"
+                + "}"));
         server.start();
 
         DefaultLlmGateway gateway = new DefaultLlmGateway(
@@ -101,11 +85,11 @@ class DefaultLlmGatewayTest {
         );
 
         String result = gateway.generateRagAnswer(
-                "活动什么时候开始？",
-                List.of(new RagAnswerService.Context("社区义卖", "本周六上午九点开始"))
+                "When does the event start?",
+                List.of(new RagAnswerService.Context("Community sale", "The event starts at 9 AM this Saturday."))
         );
 
-        assertEquals("根据社区公告，本周六上午九点开始。", result);
+        assertEquals("According to the community notice, the event starts at 9 AM this Saturday.", result);
     }
 
     @Test
@@ -120,9 +104,12 @@ class DefaultLlmGatewayTest {
                 emptyChatClientProvider()
         );
 
-        String result = gateway.generateDescription("社区今天举办亲子读书会。欢迎带孩子参加。", 50);
+        String result = gateway.generateDescription(
+                "The community is hosting a parent-child reading event today. Families are welcome.",
+                50
+        );
 
-        assertEquals("社区今天举办亲子读书会", result);
+        assertEquals("The community is hosting a parent-child reading ev", result);
     }
 
     private LlmProperties httpProperties(String endpoint, boolean fallbackToTemplate) {

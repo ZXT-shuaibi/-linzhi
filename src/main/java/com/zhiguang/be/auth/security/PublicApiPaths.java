@@ -33,13 +33,9 @@ public final class PublicApiPaths {
             "/api/v1/trade/activities/*",
             "/api/v1/profile/users/*",
             "/api/v1/profile/users/*/posts",
-            "/api/v1/profile/users/*/following",
-            "/api/v1/profile/users/*/followers",
             "/api/v1/interactions/targets/*/*/summary",
             "/api/v1/interactions/targets/*/summary-batch",
             "/api/v1/follows/status",
-            "/api/v1/follows/users/*/following",
-            "/api/v1/follows/users/*/followers",
             "/api/v1/social/counters/users/*"
     };
 

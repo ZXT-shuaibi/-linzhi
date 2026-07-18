@@ -846,7 +846,7 @@ public class ContentServiceImpl implements ContentService {
             return;
         }
         try {
-            ragIndexService.ensureIndexed(String.valueOf(postId));
+            ragIndexService.removeIndexedPost(String.valueOf(postId));
         } catch (Exception ex) {
             log.warn("Failed to remove post {} from RAG index: {}", postId, ex.getMessage());
         }

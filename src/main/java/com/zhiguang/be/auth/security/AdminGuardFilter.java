@@ -1,6 +1,7 @@
 package com.zhiguang.be.auth.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zhiguang.be.common.api.ErrorResponse;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -13,14 +14,18 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Collection;
+import java.util.List;
 
 public class AdminGuardFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(AdminGuardFilter.class);
+    private static final AntPathMatcher PATH_MATCHER = new AntPathMatcher();
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
@@ -50,9 +55,10 @@ public class AdminGuardFilter extends OncePerRequestFilter {
         // Protect write endpoints on these paths
         if ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method)
             || "PATCH".equalsIgnoreCase(method) || "DELETE".equalsIgnoreCase(method)) {
-            return uri.startsWith("/api/v1/rag/") && (uri.contains("/reindex") || uri.contains("/posts/"))
-                || uri.startsWith("/api/v1/discover/location")
-                || (uri.startsWith("/api/v1/platform/cache/evict"));
+            return PATH_MATCHER.match("/api/v1/rag/reindex/public", uri)
+                || PATH_MATCHER.match("/api/v1/rag/posts/*/reindex", uri)
+                || PATH_MATCHER.match("/api/v1/discover/location", uri)
+                || PATH_MATCHER.match("/api/v1/platform/cache/evict", uri);
         }
         return false;
     }
@@ -77,12 +83,16 @@ public class AdminGuardFilter extends OncePerRequestFilter {
     private void sendUnauthorized(HttpServletResponse response, String message) throws IOException {
         response.setStatus(HttpStatus.UNAUTHORIZED.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"" + message + "\"}");
+        response.getWriter().write(objectMapper.writeValueAsString(
+                ErrorResponse.of("UNAUTHORIZED", message, List.of())
+        ));
     }
 
     private void sendForbidden(HttpServletResponse response, String message) throws IOException {
         response.setStatus(HttpStatus.FORBIDDEN.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.getWriter().write("{\"code\":\"FORBIDDEN\",\"message\":\"" + message + "\"}");
+        response.getWriter().write(objectMapper.writeValueAsString(
+                ErrorResponse.of("FORBIDDEN", message, List.of())
+        ));
     }
 }

@@ -139,6 +139,14 @@ public class RagIndexService implements RagIndexOperations {
         return chunks.size();
     }
 
+    @Override
+    public void removeIndexedPost(String postId) {
+        if (!hasText(postId)) {
+            return;
+        }
+        removeIndex(postId);
+    }
+
     /**
      * 批量重建公开内容的索引。
      */

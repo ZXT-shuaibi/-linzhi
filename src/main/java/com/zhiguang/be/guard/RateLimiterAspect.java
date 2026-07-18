@@ -3,8 +3,10 @@ package com.zhiguang.be.guard;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
+import com.zhiguang.be.common.web.ClientIpResolver;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -12,6 +14,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
@@ -26,14 +30,29 @@ import java.util.UUID;
 @Component
 public class RateLimiterAspect {
 
+    private static final Logger log = LoggerFactory.getLogger(RateLimiterAspect.class);
+
     private final StringRedisTemplate stringRedisTemplate;
+    private final ClientIpResolver clientIpResolver;
     private final DefaultRedisScript<Long> rateLimiterScript;
 
     /**
      * 注入 Redis 模板并初始化限流脚本。
      */
+    /**
+     * Convenience constructor for isolated unit tests that do not provide proxy trust configuration.
+     */
     public RateLimiterAspect(StringRedisTemplate stringRedisTemplate) {
+        this(stringRedisTemplate, new ClientIpResolver(""));
+    }
+
+    /**
+     * Production injection point. Explicitly marking it prevents ambiguity with the test constructor.
+     */
+    @Autowired
+    public RateLimiterAspect(StringRedisTemplate stringRedisTemplate, ClientIpResolver clientIpResolver) {
         this.stringRedisTemplate = stringRedisTemplate;
+        this.clientIpResolver = clientIpResolver;
         this.rateLimiterScript = new DefaultRedisScript<Long>();
         this.rateLimiterScript.setResultType(Long.class);
         this.rateLimiterScript.setScriptText(
@@ -61,14 +80,20 @@ public class RateLimiterAspect {
         String limiterKey = buildKey(rateLimiter);
         long now = Instant.now().toEpochMilli();
         String member = now + ":" + UUID.randomUUID();
-        Long allowed = stringRedisTemplate.execute(
-                rateLimiterScript,
-                List.of(limiterKey),
-                String.valueOf(rateLimiter.windowMillis()),
-                String.valueOf(rateLimiter.limit()),
-                String.valueOf(now),
-                member
-        );
+        Long allowed;
+        try {
+            allowed = stringRedisTemplate.execute(
+                    rateLimiterScript,
+                    List.of(limiterKey),
+                    String.valueOf(rateLimiter.windowMillis()),
+                    String.valueOf(rateLimiter.limit()),
+                    String.valueOf(now),
+                    member
+            );
+        } catch (Exception ex) {
+            log.warn("Rate limiter check failed, fail closed. key={}", limiterKey, ex);
+            throw new RateLimitException(rateLimiter.message());
+        }
         if (allowed == null || allowed.longValue() != 1L) {
             throw new RateLimitException(rateLimiter.message());
         }
@@ -110,16 +135,7 @@ public class RateLimiterAspect {
     private String resolveIp() {
         RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
         if (attributes instanceof ServletRequestAttributes servletAttributes) {
-            HttpServletRequest request = servletAttributes.getRequest();
-            String forwardedFor = request.getHeader("X-Forwarded-For");
-            if (forwardedFor != null && !forwardedFor.isBlank()) {
-                return forwardedFor.split(",")[0].trim();
-            }
-            String realIp = request.getHeader("X-Real-IP");
-            if (realIp != null && !realIp.isBlank()) {
-                return realIp.trim();
-            }
-            return request.getRemoteAddr();
+            return clientIpResolver.resolve(servletAttributes.getRequest());
         }
         return "unknown";
     }

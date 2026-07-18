@@ -192,9 +192,10 @@ public class CounterRebuildConsumer {
     private boolean applyCounterEvent(CounterEvent event) {
         validateCounterEventForReplay(event);
         String cntKey = SocialRedisKeys.entityCounterKey(event.getEntityType(), event.getEntityId());
+        String replayDedupKey = resolveReplayDedupKey(event);
         Long result = stringRedisTemplate.execute(
                 incrementFieldScript,
-                Arrays.asList(SocialRedisKeys.counterRebuildDedupKey(event.getEventId()), cntKey),
+                Arrays.asList(replayDedupKey, cntKey),
                 "1",
                 String.valueOf(Duration.ofDays(dedupTtlDays).getSeconds()),
                 String.valueOf(SocialCounterSchema.SCHEMA_LEN),
@@ -212,12 +213,27 @@ public class CounterRebuildConsumer {
      * 校验灾难回放事件的最小安全字段，避免危险事件进入 Redis 原子脚本。
      */
     private void validateCounterEventForReplay(CounterEvent event) {
-        if (event.getEventId() == null || event.getEventId().trim().isEmpty()) {
-            throw new IllegalArgumentException("counter rebuild eventId is required");
-        }
         if (event.getIdx() < 0 || event.getIdx() >= SocialCounterSchema.SCHEMA_LEN) {
             throw new IllegalArgumentException("counter rebuild idx out of schema range: " + event.getIdx());
         }
+    }
+
+    private String resolveReplayDedupKey(CounterEvent event) {
+        if (event.getEventId() != null && !event.getEventId().trim().isEmpty()) {
+            return SocialRedisKeys.counterRebuildDedupKey(event.getEventId().trim());
+        }
+        String legacyEventId = "legacy:"
+                + safe(event.getEntityType()) + ":"
+                + safe(event.getEntityId()) + ":"
+                + safe(event.getMetric()) + ":"
+                + event.getIdx() + ":"
+                + event.getUserId() + ":"
+                + event.getDelta();
+        return SocialRedisKeys.counterRebuildDedupKey(legacyEventId);
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private boolean hasEntityIdRange() {

@@ -95,7 +95,7 @@ public class AliyunSmsVerifyService {
     }
 
     public boolean shouldExposeCode() {
-        return !props.isEnabled() || props.isExposeCode();
+        return props.isExposeCode();
     }
 
     private synchronized Client client() throws Exception {

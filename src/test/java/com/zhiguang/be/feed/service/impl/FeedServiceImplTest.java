@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -64,6 +65,8 @@ class FeedServiceImplTest {
                 interactionService,
                 userSocialCounterService
         );
+        // Mirror validation is enabled by default in the production configuration.
+        ReflectionTestUtils.setField(service, "legacyMirrorValidationEnabled", true);
     }
 
     @Test
@@ -136,6 +139,19 @@ class FeedServiceImplTest {
 
         org.junit.jupiter.api.Assertions.assertEquals("DB", result.cacheLayer());
         verify(feedMapper).listHomeFeedCandidates(20, 0);
+    }
+
+    @Test
+    void getHomeFeedShouldUseLocalCacheWhenLegacyMirrorValidationIsDisabled() {
+        ReflectionTestUtils.setField(service, "legacyMirrorValidationEnabled", false);
+        when(cacheService.getLocal(eq(CacheRegions.FEED_HOME), eq("feed:v1:page:home:global:1:20"), any()))
+                .thenReturn(cachedFeedData("cached-title"));
+
+        FeedData result = service.getHomeFeed(1, 20, null, null, null, 0L);
+
+        org.junit.jupiter.api.Assertions.assertEquals("L2", result.cacheLayer());
+        org.junit.jupiter.api.Assertions.assertEquals("cached-title", result.items().get(0).title());
+        verify(feedMapper, never()).listHomeFeedCandidates(anyInt(), anyInt());
     }
 
     private FeedPostRow row(String postId) {

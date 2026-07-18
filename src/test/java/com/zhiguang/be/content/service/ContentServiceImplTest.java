@@ -53,6 +53,7 @@ class ContentServiceImplTest {
     private UserSocialCounterService userSocialCounterService;
     private StorageService storageService;
     private SearchIndexService searchIndexService;
+    private RagIndexService ragIndexService;
     private SnowflakeIdGenerator snowflakeIdGenerator;
     private ContentServiceImpl service;
 
@@ -74,7 +75,8 @@ class ContentServiceImplTest {
         when(searchIndexService.isKafkaOutboxEnabled()).thenReturn(true);
 
         ObjectProvider<RagIndexService> ragIndexServiceProvider = mock(ObjectProvider.class);
-        when(ragIndexServiceProvider.getIfAvailable()).thenReturn(null);
+        ragIndexService = mock(RagIndexService.class);
+        when(ragIndexServiceProvider.getIfAvailable()).thenReturn(ragIndexService);
 
         when(followService.relationStatus(anyLong(), anyLong())).thenReturn(new RelationStatusData(false, false, false));
 
@@ -104,6 +106,19 @@ class ContentServiceImplTest {
         service.delete(7L, 1001L);
 
         verify(userSocialCounterService).incrementPosts(7L, -1);
+    }
+
+    @Test
+    void deleteShouldNotReindexRagWhenRemovingDeletedPost() {
+        when(knowPostMapper.findById("1001"))
+                .thenReturn(post("1001", "7", "published", Instant.now().minusSeconds(3600)))
+                .thenReturn(post("1001", "7", "deleted", Instant.now().minusSeconds(3600)));
+        when(knowPostMapper.softDelete(eq("1001"), eq("7"), any())).thenReturn(1);
+
+        service.delete(7L, 1001L);
+
+        verify(ragIndexService, never()).ensureIndexed("1001");
+        verify(ragIndexService).removeIndexedPost("1001");
     }
 
     @Test

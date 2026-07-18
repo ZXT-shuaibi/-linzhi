@@ -1,8 +1,10 @@
 package com.zhiguang.be.auth.model;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import org.springframework.util.StringUtils;
 
 /**
  * 登录请求。
@@ -25,4 +27,8 @@ public record LoginRequest(
         @Pattern(regexp = "^\\d{6}$", message = "登录验证码必须为 6 位数字")
         String captchaCode
 ) {
+    @AssertTrue(message = "password or captchaCode is required")
+    public boolean isCredentialPresent() {
+        return StringUtils.hasText(password) || StringUtils.hasText(captchaCode);
+    }
 }

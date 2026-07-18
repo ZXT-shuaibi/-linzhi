@@ -198,6 +198,35 @@ class CounterRebuildConsumerTest {
     }
 
     @Test
+    void legacyCounterEventWithoutEventIdShouldReplayAndAck() throws Exception {
+        CounterRebuildConsumer consumer = newConsumer(null, -1L, -1L, false);
+        CounterEvent event = CounterEvent.of(
+                "post",
+                "1001",
+                "like",
+                SocialCounterSchema.IDX_LIKE,
+                7L,
+                1
+        );
+        when(redisTemplate.execute(
+                any(DefaultRedisScript.class),
+                any(),
+                eq("1"),
+                any(String.class),
+                eq(String.valueOf(SocialCounterSchema.SCHEMA_LEN)),
+                eq(String.valueOf(SocialCounterSchema.FIELD_SIZE)),
+                eq(String.valueOf(SocialCounterSchema.IDX_LIKE)),
+                eq("1")
+        )).thenReturn(1L);
+
+        consumer.onMessage(objectMapper.writeValueAsString(event), acknowledgment);
+
+        verify(acknowledgment).acknowledge();
+        assertEquals(1L, consumer.getAppliedCount());
+        assertEquals(0L, consumer.getFailedCount());
+    }
+
+    @Test
     void duplicateEventIdShouldAckWithoutApplyingDeltaTwice() throws Exception {
         CounterRebuildConsumer consumer = newConsumer(null, -1L, -1L, false);
         String message = message("post", "1001");

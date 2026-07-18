@@ -473,7 +473,8 @@ public class FollowServiceImpl implements FollowService {
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
-            log.warn("关注限流检查失败，采用放行策略，userId={}", currentUserId, ex);
+            log.warn("关注限流检查失败，采用拒绝策略，userId={}", currentUserId, ex);
+            throw new BusinessException(ErrorCode.RATE_LIMITED, HttpStatus.TOO_MANY_REQUESTS, "关注/取关操作过于频繁，请稍后再试");
         }
     }
 

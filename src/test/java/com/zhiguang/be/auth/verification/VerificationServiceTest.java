@@ -2,6 +2,7 @@ package com.zhiguang.be.auth.verification;
 
 import com.zhiguang.be.auth.model.SendCodeResponse;
 import com.zhiguang.be.auth.sms.AliyunSmsVerifyService;
+import com.zhiguang.be.auth.sms.SmsProperties;
 import com.zhiguang.be.common.exception.BusinessException;
 import com.zhiguang.be.common.exception.ErrorCode;
 import org.junit.jupiter.api.Test;
@@ -64,6 +65,22 @@ class VerificationServiceTest {
         verify(codeStore).saveCode(eq("register"), eq("13800138001"), codeCaptor.capture(), eq(properties.getCodeTtl()), eq(properties.getMaxAttempts()));
         assertEquals(codeCaptor.getValue(), response.code());
         assertEquals(0, response.resendAfterSeconds());
+    }
+
+    @Test
+    void sendCodeShouldHideLocalCodeUnlessExposureIsExplicitlyEnabled() {
+        VerificationCodeStore codeStore = mock(VerificationCodeStore.class);
+        SmsProperties smsProperties = new SmsProperties();
+        AliyunSmsVerifyService smsVerifyService = new AliyunSmsVerifyService(smsProperties);
+        VerificationProperties properties = new VerificationProperties();
+        properties.setSendInterval(Duration.ZERO);
+        properties.setDailyLimit(0);
+        VerificationService service = new VerificationService(codeStore, smsVerifyService, mock(StringRedisTemplate.class), properties);
+
+        SendCodeResponse response = service.sendCode(VerificationScene.REGISTER, "13800138001");
+
+        verify(codeStore).saveCode(eq("register"), eq("13800138001"), anyString(), eq(properties.getCodeTtl()), eq(properties.getMaxAttempts()));
+        assertEquals(null, response.code());
     }
 
     @Test

@@ -16,6 +16,7 @@ import com.zhiguang.be.auth.model.SendCodeResponse;
 import com.zhiguang.be.auth.security.JwtSubjects;
 import com.zhiguang.be.auth.service.AuthService;
 import com.zhiguang.be.common.api.ApiResponse;
+import com.zhiguang.be.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -35,14 +36,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final ClientIpResolver clientIpResolver;
 
     /**
      * 构造认证控制器并注入认证服务。
      *
      * @param authService 认证领域服务
      */
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, ClientIpResolver clientIpResolver) {
         this.authService = authService;
+        this.clientIpResolver = clientIpResolver;
     }
 
     /**
@@ -135,25 +138,6 @@ public class AuthController {
      * @return 客户端信息
      */
     private ClientInfo resolveClient(HttpServletRequest request) {
-        return new ClientInfo(extractClientIp(request), request.getHeader("User-Agent"));
-    }
-
-    /**
-     * 解析客户端 IP。
-     * 优先使用代理头中的真实 IP，缺失时回退到 Servlet 容器提供的远端地址。
-     *
-     * @param request HTTP 请求对象
-     * @return 客户端 IP
-     */
-    private String extractClientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (realIp != null && !realIp.isBlank()) {
-            return realIp.trim();
-        }
-        return request.getRemoteAddr();
+        return new ClientInfo(clientIpResolver.resolve(request), request.getHeader("User-Agent"));
     }
 }

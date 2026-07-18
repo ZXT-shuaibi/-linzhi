@@ -30,8 +30,13 @@ import org.springframework.security.oauth2.server.resource.web.authentication.Be
 import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -45,6 +50,10 @@ public class SecurityConfiguration {
 
     static final String RAG_PUBLIC_REINDEX_PATH = "/api/v1/rag/reindex/public";
     static final String RAG_POST_REINDEX_PATH = "/api/v1/rag/posts/*/reindex";
+    static final List<String> DEFAULT_CORS_ALLOWED_ORIGINS = List.of(
+            "http://localhost:5173",
+            "http://127.0.0.1:5173"
+    );
 
     private static final Logger log = LoggerFactory.getLogger(SecurityConfiguration.class);
 
@@ -71,6 +80,7 @@ public class SecurityConfiguration {
         AuthorizationManager<RequestAuthorizationContext> adminAccess = latestRoleAuthorizationManager(authUserMapper, "ADMIN");
 
         http
+                .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
@@ -104,6 +114,39 @@ public class SecurityConfiguration {
                 .anonymous(Customizer.withDefaults());
 
         return http.build();
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource(
+            @Value("${security.cors.allowed-origins:}") List<String> allowedOrigins
+    ) {
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", buildCorsConfiguration(allowedOrigins));
+        return source;
+    }
+
+    static CorsConfiguration buildCorsConfiguration(List<String> allowedOrigins) {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowCredentials(true);
+        configuration.setAllowedOrigins(normalizeAllowedOrigins(allowedOrigins));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Request-Id"));
+        configuration.setExposedHeaders(List.of("X-Request-Id"));
+        configuration.setMaxAge(3600L);
+        return configuration;
+    }
+
+    private static List<String> normalizeAllowedOrigins(List<String> allowedOrigins) {
+        List<String> normalized = new ArrayList<>();
+        if (allowedOrigins != null) {
+            for (String origin : allowedOrigins) {
+                if (origin == null || origin.isBlank() || "*".equals(origin.trim())) {
+                    continue;
+                }
+                normalized.add(origin.trim());
+            }
+        }
+        return normalized.isEmpty() ? DEFAULT_CORS_ALLOWED_ORIGINS : normalized;
     }
 
     /**
