@@ -70,6 +70,13 @@ public class FeedServiceImpl implements FeedService {
     @Value("${feed.cache.version:v1}")
     private String cacheVersion;
 
+    /**
+     * Feed 缓存总开关。
+     * 压测基线可关闭该开关，以同一接口和数据集直接比较数据库回源与三级缓存效果。
+     */
+    @Value("${feed.cache.enabled:true}")
+    private boolean cacheEnabled;
+
     @Value("${feed.cache.legacy-mirror-validation-enabled:true}")
     private boolean legacyMirrorValidationEnabled;
 
@@ -115,6 +122,13 @@ public class FeedServiceImpl implements FeedService {
         int safePage = normalizePage(page);
         int safeSize = normalizePageSize(size);
         validateLocation(lat, lng);
+
+        if (!cacheEnabled) {
+            FeedData freshData = hasLocation(lat, lng)
+                    ? buildMixedFeed(safePage, safeSize, lat, lng)
+                    : buildLatestFeed(safePage, safeSize);
+            return enrichFeedData(freshData, viewerId, "DB");
+        }
 
         String locationSegment = resolveLocationSegment(lat, lng, geoHash);
         String cacheKey = buildCacheKey(locationSegment, safePage, safeSize);

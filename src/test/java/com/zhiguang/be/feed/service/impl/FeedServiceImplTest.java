@@ -65,6 +65,8 @@ class FeedServiceImplTest {
                 interactionService,
                 userSocialCounterService
         );
+        // Tests instantiate the service directly, so set the Spring default explicitly.
+        ReflectionTestUtils.setField(service, "cacheEnabled", true);
         // Mirror validation is enabled by default in the production configuration.
         ReflectionTestUtils.setField(service, "legacyMirrorValidationEnabled", true);
     }
@@ -152,6 +154,21 @@ class FeedServiceImplTest {
         org.junit.jupiter.api.Assertions.assertEquals("L2", result.cacheLayer());
         org.junit.jupiter.api.Assertions.assertEquals("cached-title", result.items().get(0).title());
         verify(feedMapper, never()).listHomeFeedCandidates(anyInt(), anyInt());
+    }
+
+    @Test
+    void getHomeFeedShouldBypassAllFeedCacheLayersWhenCacheIsDisabled() {
+        ReflectionTestUtils.setField(service, "cacheEnabled", false);
+        when(feedMapper.countHomeFeed()).thenReturn(1L);
+        when(feedMapper.listHomeFeedCandidates(20, 0)).thenReturn(List.of(row("1001")));
+
+        FeedData result = service.getHomeFeed(1, 20, null, null, null, 0L);
+
+        org.junit.jupiter.api.Assertions.assertEquals("DB", result.cacheLayer());
+        verify(cacheService, never()).getLocal(anyString(), anyString(), any());
+        verify(cacheService, never()).getRedisString(anyString());
+        verify(cacheService, never()).putLocal(anyString(), anyString(), any(), any(Duration.class));
+        verify(cacheService, never()).putRedisJson(anyString(), any(), any(Duration.class));
     }
 
     private FeedPostRow row(String postId) {

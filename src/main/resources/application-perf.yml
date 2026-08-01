@@ -1,0 +1,36 @@
+spring:
+  config:
+    activate:
+      on-profile: perf
+  datasource:
+    # Override the default H2 datasource with the isolated performance-test database.
+    url: ${PERF_MYSQL_URL:jdbc:mysql://127.0.0.1:3306/linzhi_perf?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia%2FShanghai&useSSL=false&allowPublicKeyRetrieval=true}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${PERF_MYSQL_USERNAME:root}
+    password: ${PERF_MYSQL_PASSWORD:}
+  sql:
+    # The schema is created explicitly by scripts/perf/00-init-linzhi-perf.sql.
+    init:
+      mode: never
+  data:
+    redis:
+      host: ${PERF_REDIS_HOST:127.0.0.1}
+      port: ${PERF_REDIS_PORT:6379}
+      password: ${PERF_REDIS_PASSWORD:}
+
+server:
+  # Keep the pressure-test process separate from a locally running development instance.
+  port: ${PERF_SERVER_PORT:8081}
+
+security:
+  jwt:
+    # Anonymous Feed requests are public; this only permits local application startup.
+    allow-ephemeral-keys: true
+
+feed:
+  cache:
+    # Set PERF_FEED_CACHE_ENABLED=false for the database baseline, true for the cache run.
+    enabled: ${PERF_FEED_CACHE_ENABLED:true}
+    version: perf-v1
+    # No mixed-version nodes participate in a local pressure test.
+    legacy-mirror-validation-enabled: false
