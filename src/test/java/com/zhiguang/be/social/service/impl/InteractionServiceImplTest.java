@@ -19,7 +19,9 @@ import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.ArrayList;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -80,7 +82,8 @@ class InteractionServiceImplTest {
                 lbsDiscoverServiceProvider,
                 feedCacheInvalidationServiceProvider,
                 redisTemplate,
-                new ObjectMapper().findAndRegisterModules()
+                new ObjectMapper().findAndRegisterModules(),
+                Runnable::run
         );
     }
 
@@ -237,6 +240,40 @@ class InteractionServiceImplTest {
         ArgumentCaptor<CounterEvent> eventCaptor = forClass(CounterEvent.class);
         verify(counterEventProducer).publish(eventCaptor.capture());
         Assertions.assertEquals("90002", eventCaptor.getValue().getEventId());
+    }
+
+    @Test
+    void likeShouldEnqueueProjectionWhenAsyncModeIsEnabled() {
+        List<Runnable> submittedProjections = new ArrayList<Runnable>();
+        ObjectProvider<LbsDiscoverService> lbsDiscoverServiceProvider = mock(ObjectProvider.class);
+        ObjectProvider<FeedCacheInvalidationService> feedCacheInvalidationServiceProvider = mock(ObjectProvider.class);
+        service = new InteractionServiceImpl(
+                socialMapper,
+                mock(FollowService.class),
+                snowflakeIdGenerator,
+                mock(UserSocialCounterService.class),
+                counterEventProducer,
+                lbsDiscoverServiceProvider,
+                feedCacheInvalidationServiceProvider,
+                redisTemplate,
+                new ObjectMapper().findAndRegisterModules(),
+                submittedProjections::add
+        );
+        ReflectionTestUtils.setField(service, "asyncProjectionEnabled", true);
+        when(socialMapper.findPostSnapshot(1008L)).thenReturn(Map.of(
+                "postId", 1008L,
+                "creatorId", 20L,
+                "status", "published",
+                "visible", "public"
+        ));
+        when(socialMapper.reactivateInteraction(7L, "post", 1008L, "like")).thenReturn(0);
+        when(socialMapper.existsActiveInteraction(7L, "post", 1008L, "like")).thenReturn(0);
+        when(snowflakeIdGenerator.nextId()).thenReturn(93001L, 93002L);
+
+        service.like(7L, "post", 1008L);
+
+        Assertions.assertEquals(1, submittedProjections.size());
+        verify(counterEventProducer, never()).publish(any(CounterEvent.class));
     }
 
     @Test

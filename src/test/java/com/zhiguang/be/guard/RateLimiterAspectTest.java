@@ -57,6 +57,17 @@ class RateLimiterAspectTest {
         assertThrows(RateLimitException.class, () -> aspect.around(mock(ProceedingJoinPoint.class), rateLimiter));
     }
 
+    @Test
+    void interactionLimitShouldUseConfiguredPerfOverride() {
+        RateLimiterAspect aspect = new RateLimiterAspect(mock(StringRedisTemplate.class));
+        ReflectionTestUtils.setField(aspect, "interactionWriteLimit", 1000L);
+        RateLimiter rateLimiter = mock(RateLimiter.class);
+        when(rateLimiter.keyPrefix()).thenReturn("interaction:write");
+        when(rateLimiter.limit()).thenReturn(30L);
+
+        assertEquals(1000L, ((Long) ReflectionTestUtils.invokeMethod(aspect, "effectiveLimit", rateLimiter)).longValue());
+    }
+
     private void bind(HttpServletRequest request) {
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     }

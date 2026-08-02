@@ -235,6 +235,9 @@ social:
   counter:
     kafka:
       enabled: false
+      # Production keeps broker acknowledgement in the request-side projection by default.
+      sync-send: true
+      send-timeout-ms: 3000
       flush-delay-ms: 1000
     rebuild:
       lock-ttl-ms: 5000
@@ -242,6 +245,9 @@ social:
       rate-window-seconds: 10
       backoff-base-ms: 500
       backoff-max-ms: 30000
+  interaction-projection:
+    # Kept synchronous outside the isolated pressure-test profile.
+    async-enabled: false
   rebuild:
     enabled: false
     group-id: counter-rebuild

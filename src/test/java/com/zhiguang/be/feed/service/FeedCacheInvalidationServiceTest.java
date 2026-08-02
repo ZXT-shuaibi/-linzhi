@@ -6,11 +6,26 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class FeedCacheInvalidationServiceTest {
+
+    @Test
+    void invalidatePostFragmentAfterCommitShouldAvoidHomePagePatternScan() {
+        CacheService cacheService = mock(CacheService.class);
+        FeedCacheInvalidationService service = new FeedCacheInvalidationService(cacheService, Runnable::run);
+
+        service.invalidatePostFragmentAfterCommit("1001");
+
+        verify(cacheService, times(2)).evictLocalRegion(CacheRegions.FEED_HOME);
+        verify(cacheService, times(2)).deleteRedis("feed:v1:fragment:post:1001");
+        verify(cacheService, times(2)).deleteRedis("feed:fragment:post:1001");
+        verify(cacheService, never()).deleteRedisByPattern(anyString());
+    }
 
     @Test
     void invalidatePostAfterCommitShouldDeleteVersionedPageAndFragmentKeys() {

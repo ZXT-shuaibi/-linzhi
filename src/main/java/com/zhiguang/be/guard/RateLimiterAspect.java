@@ -7,6 +7,7 @@ import com.zhiguang.be.common.web.ClientIpResolver;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -35,6 +36,8 @@ public class RateLimiterAspect {
     private final StringRedisTemplate stringRedisTemplate;
     private final ClientIpResolver clientIpResolver;
     private final DefaultRedisScript<Long> rateLimiterScript;
+    @Value("${security.rate-limit.interaction-write-limit:30}")
+    private long interactionWriteLimit = 30L;
 
     /**
      * 注入 Redis 模板并初始化限流脚本。
@@ -86,7 +89,7 @@ public class RateLimiterAspect {
                     rateLimiterScript,
                     List.of(limiterKey),
                     String.valueOf(rateLimiter.windowMillis()),
-                    String.valueOf(rateLimiter.limit()),
+                    String.valueOf(effectiveLimit(rateLimiter)),
                     String.valueOf(now),
                     member
             );
@@ -98,6 +101,13 @@ public class RateLimiterAspect {
             throw new RateLimitException(rateLimiter.message());
         }
         return joinPoint.proceed();
+    }
+
+    private long effectiveLimit(RateLimiter rateLimiter) {
+        if ("interaction:write".equals(rateLimiter.keyPrefix())) {
+            return Math.max(1L, interactionWriteLimit);
+        }
+        return rateLimiter.limit();
     }
 
     /**

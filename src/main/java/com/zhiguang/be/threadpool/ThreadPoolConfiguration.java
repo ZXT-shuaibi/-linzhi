@@ -44,6 +44,14 @@ public class ThreadPoolConfiguration {
     }
 
     /**
+     * Interaction projections run after the primary database transaction commits.
+     */
+    @Bean(name = "interactionProjectionExecutor", destroyMethod = "shutdown")
+    public Executor interactionProjectionExecutor() {
+        return buildExecutor(threadPoolProperties.getInteractionProjection());
+    }
+
+    /**
      * 根据配置构建自适应缓冲线程池。
      */
     private AdaptiveBufferedThreadPoolExecutor buildExecutor(ThreadPoolProperties.PoolProperties properties) {

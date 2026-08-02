@@ -57,6 +57,20 @@ public class FeedCacheInvalidationService {
     }
 
     /**
+     * Invalidates only the per-post fragment after an interaction count changes.
+     * The post remains on the same Feed pages, so scanning and deleting every home-page key is unnecessary.
+     *
+     * @param postId post identifier whose interaction counters changed
+     */
+    public void invalidatePostFragmentAfterCommit(String postId) {
+        if (!StringUtils.hasText(postId)) {
+            return;
+        }
+        Runnable task = () -> doubleDeletePostFragment(postId.trim());
+        Transactions.runAfterCommit(task);
+    }
+
+    /**
      * 立即执行指定文章的双删失效。
      *
      * @param postId 文章 ID
@@ -64,6 +78,11 @@ public class FeedCacheInvalidationService {
     private void doubleDeletePost(String postId) {
         deletePostOnce(postId);
         delayedDeleteExecutor.execute(() -> deletePostOnce(postId));
+    }
+
+    private void doubleDeletePostFragment(String postId) {
+        deletePostFragmentOnce(postId);
+        delayedDeleteExecutor.execute(() -> deletePostFragmentOnce(postId));
     }
 
     /**
@@ -79,5 +98,13 @@ public class FeedCacheInvalidationService {
         pageDeleted += cacheService.deleteRedisByPattern(FeedCacheKeys.legacyHomePagePattern());
         cacheService.deleteRedis(FeedCacheKeys.legacyFragmentKey(postId));
         log.debug("feed cache invalidated, postId={}, pageDeleted={}", postId, pageDeleted);
+    }
+
+    private void deletePostFragmentOnce(String postId) {
+        // Local Feed pages are cheap to discard; Redis home-page scans are reserved for membership changes.
+        cacheService.evictLocalRegion(CacheRegions.FEED_HOME);
+        cacheService.deleteRedis(FeedCacheKeys.fragmentKey(cacheVersion, postId));
+        cacheService.deleteRedis(FeedCacheKeys.legacyFragmentKey(postId));
+        log.debug("feed fragment invalidated after interaction, postId={}", postId);
     }
 }

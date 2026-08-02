@@ -8,6 +8,12 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: ${PERF_MYSQL_USERNAME:root}
     password: ${PERF_MYSQL_PASSWORD:}
+    hikari:
+      # The default pool of 10 connections throttles independent local pressure-test requests.
+      # The writer test has 100 request threads; keep enough connections for those independent transactions.
+      maximum-pool-size: ${PERF_HIKARI_MAXIMUM_POOL_SIZE:100}
+      minimum-idle: ${PERF_HIKARI_MINIMUM_IDLE:20}
+      connection-timeout: ${PERF_HIKARI_CONNECTION_TIMEOUT_MS:3000}
   sql:
     # The schema is created explicitly by scripts/perf/00-init-linzhi-perf.sql.
     init:
@@ -17,20 +23,58 @@ spring:
       host: ${PERF_REDIS_HOST:127.0.0.1}
       port: ${PERF_REDIS_PORT:6379}
       password: ${PERF_REDIS_PASSWORD:}
+      database: ${PERF_REDIS_DATABASE:15}
+  kafka:
+    # The perf profile uses the isolated local KRaft broker, never the business default.
+    bootstrap-servers: ${PERF_KAFKA_BOOTSTRAP_SERVERS:127.0.0.1:9092}
 
 server:
   # Keep the pressure-test process separate from a locally running development instance.
   port: ${PERF_SERVER_PORT:8081}
 
 security:
+  rate-limit:
+    # The isolated benchmark uses 200 rotating users; keep the normal 30/10s business guard unchanged.
+    interaction-write-limit: ${PERF_INTERACTION_WRITE_RATE_LIMIT:1000}
   jwt:
     # Anonymous Feed requests are public; this only permits local application startup.
     allow-ephemeral-keys: true
+    # Keep pressure-test tokens valid for the whole preparation and test window.
+    access-token-ttl-minutes: ${PERF_ACCESS_TOKEN_TTL_MINUTES:120}
+    refresh-token-ttl-days: ${PERF_REFRESH_TOKEN_TTL_DAYS:7}
+
+sms:
+  aliyun:
+    # The local sender stores codes in Redis; exposing them makes test-user setup scriptable.
+    # This setting is strictly limited to the isolated perf profile.
+    expose-code: true
+
+social:
+  counter:
+    # Enable the real bitmap -> Kafka -> aggregate bucket -> SDS path for pressure tests.
+    kafka:
+      enabled: ${PERF_SOCIAL_COUNTER_KAFKA_ENABLED:true}
+      # Benchmark the asynchronous producer path; the committed outbox remains recoverable evidence.
+      sync-send: ${PERF_SOCIAL_COUNTER_KAFKA_SYNC_SEND:false}
+      send-timeout-ms: ${PERF_SOCIAL_COUNTER_KAFKA_SEND_TIMEOUT_MS:3000}
+  interaction-projection:
+    # Do not let Redis/SDS/cache projection time occupy the HTTP request thread after commit.
+    async-enabled: ${PERF_SOCIAL_INTERACTION_PROJECTION_ASYNC_ENABLED:true}
+
+threadpool:
+  interaction-projection:
+    core-pool-size: ${PERF_INTERACTION_PROJECTION_CORE_POOL_SIZE:8}
+    maximum-pool-size: ${PERF_INTERACTION_PROJECTION_MAXIMUM_POOL_SIZE:16}
+    queue-capacity: ${PERF_INTERACTION_PROJECTION_QUEUE_CAPACITY:5000}
+    rejection-policy: caller-runs
 
 feed:
   cache:
     # Set PERF_FEED_CACHE_ENABLED=false for the database baseline, true for the cache run.
     enabled: ${PERF_FEED_CACHE_ENABLED:true}
+    # Toggle individual Feed cache layers for isolated pressure-test comparisons.
+    local-enabled: ${PERF_FEED_LOCAL_CACHE_ENABLED:true}
+    redis-enabled: ${PERF_FEED_REDIS_CACHE_ENABLED:true}
     version: perf-v1
     # No mixed-version nodes participate in a local pressure test.
     legacy-mirror-validation-enabled: false

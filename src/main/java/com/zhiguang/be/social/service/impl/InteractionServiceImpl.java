@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.Cursor;
@@ -45,6 +46,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * 社交互动服务实现。
@@ -85,6 +88,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     private final FeedCacheInvalidationService feedCacheInvalidationService;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+    private final Executor interactionProjectionExecutor;
     private final DefaultRedisScript<Long> bitmapToggleScript;
     private final DefaultRedisScript<Long> entityCounterIncrementScript;
     private final DefaultRedisScript<String> aggregateFoldScript;
@@ -104,6 +108,8 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     private long rebuildBackoffMaxMs;
     @Value("${social.counter.event-dedup-ttl-days:7}")
     private long counterEventDedupTtlDays = 7L;
+    @Value("${social.interaction-projection.async-enabled:false}")
+    private boolean asyncProjectionEnabled;
 
     /**
      * 构造互动服务。
@@ -123,7 +129,8 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
             ObjectProvider<LbsDiscoverService> lbsDiscoverServiceProvider,
             ObjectProvider<FeedCacheInvalidationService> feedCacheInvalidationServiceProvider,
             StringRedisTemplate stringRedisTemplate,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            @Qualifier("interactionProjectionExecutor") Executor interactionProjectionExecutor
     ) {
         this.socialMapper = socialMapper;
         this.followService = followService;
@@ -134,6 +141,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         this.feedCacheInvalidationService = feedCacheInvalidationServiceProvider.getIfAvailable();
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+        this.interactionProjectionExecutor = interactionProjectionExecutor;
 
         this.bitmapToggleScript = new DefaultRedisScript<Long>();
         this.bitmapToggleScript.setResultType(Long.class);
@@ -421,18 +429,25 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                 SocialServiceSupport.serialize(objectMapper, CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId, delta))
         );
 
-        Transactions.runAfterCommit(() -> applyInteractionProjection(
-                snapshot,
-                targetType,
-                targetId,
-                currentUserId,
-                action,
-                active,
-                delta,
-                String.valueOf(eventId)
-        ));
+        Transactions.runAfterCommit(() -> dispatchInteractionProjection(() -> applyInteractionProjection(
+                snapshot, targetType, targetId, currentUserId, action, active, delta, String.valueOf(eventId)
+        )));
 
         return buildActionData(targetType, targetId, action, active, true);
+    }
+
+    private void dispatchInteractionProjection(Runnable projection) {
+        if (!asyncProjectionEnabled) {
+            projection.run();
+            return;
+        }
+        try {
+            interactionProjectionExecutor.execute(projection);
+        } catch (RejectedExecutionException ex) {
+            // Keep correctness ahead of latency when the bounded projection queue is saturated.
+            log.warn("interaction projection executor rejected task; running on caller thread", ex);
+            projection.run();
+        }
     }
 
     /**
@@ -562,7 +577,7 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
         if (feedCacheInvalidationService == null || !"post".equalsIgnoreCase(targetType)) {
             return;
         }
-        feedCacheInvalidationService.invalidatePostAfterCommit(String.valueOf(targetId));
+        feedCacheInvalidationService.invalidatePostFragmentAfterCommit(String.valueOf(targetId));
     }
 
     /**

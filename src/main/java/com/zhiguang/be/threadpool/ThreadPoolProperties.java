@@ -11,6 +11,7 @@ public class ThreadPoolProperties {
 
     private PoolProperties tradeOrder = new PoolProperties();
     private PoolProperties ragQuery = new PoolProperties();
+    private PoolProperties interactionProjection = new PoolProperties();
 
     public ThreadPoolProperties() {
         tradeOrder.setThreadNamePrefix("trade-order-");
@@ -23,6 +24,11 @@ public class ThreadPoolProperties {
         ragQuery.setMaximumPoolSize(4);
         ragQuery.setQueueCapacity(100);
         ragQuery.setRejectionPolicy("abort");
+
+        interactionProjection.setThreadNamePrefix("interaction-projection-");
+        interactionProjection.setCorePoolSize(4);
+        interactionProjection.setMaximumPoolSize(8);
+        interactionProjection.setQueueCapacity(1000);
     }
 
     public PoolProperties getTradeOrder() {
@@ -39,6 +45,14 @@ public class ThreadPoolProperties {
 
     public void setRagQuery(PoolProperties ragQuery) {
         this.ragQuery = ragQuery;
+    }
+
+    public PoolProperties getInteractionProjection() {
+        return interactionProjection;
+    }
+
+    public void setInteractionProjection(PoolProperties interactionProjection) {
+        this.interactionProjection = interactionProjection;
     }
 
     /**
