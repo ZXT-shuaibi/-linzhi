@@ -277,6 +277,38 @@ class InteractionServiceImplTest {
     }
 
     @Test
+    void favoriteShouldSkipProjectionWhenMysqlOnlyModeIsEnabled() {
+        List<Runnable> submittedProjections = new ArrayList<Runnable>();
+        service = new InteractionServiceImpl(
+                socialMapper,
+                mock(FollowService.class),
+                snowflakeIdGenerator,
+                mock(UserSocialCounterService.class),
+                counterEventProducer,
+                mock(ObjectProvider.class),
+                mock(ObjectProvider.class),
+                redisTemplate,
+                new ObjectMapper().findAndRegisterModules(),
+                submittedProjections::add
+        );
+        ReflectionTestUtils.setField(service, "interactionProjectionEnabled", false);
+        when(socialMapper.findPostSnapshot(1009L)).thenReturn(Map.of(
+                "postId", 1009L,
+                "creatorId", 20L,
+                "status", "published",
+                "visible", "public"
+        ));
+        when(socialMapper.reactivateInteraction(7L, "post", 1009L, "favorite")).thenReturn(0);
+        when(socialMapper.existsActiveInteraction(7L, "post", 1009L, "favorite")).thenReturn(0);
+        when(snowflakeIdGenerator.nextId()).thenReturn(94001L, 94002L);
+
+        service.favorite(7L, "post", 1009L);
+
+        Assertions.assertTrue(submittedProjections.isEmpty());
+        verify(counterEventProducer, never()).publish(any(CounterEvent.class));
+    }
+
+    @Test
     void likeShouldFallbackThroughCounterEventDedupWhenKafkaPublishFails() {
         when(socialMapper.findPostSnapshot(1006L)).thenReturn(Map.of(
                 "postId", 1006L,

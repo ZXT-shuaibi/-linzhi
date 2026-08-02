@@ -110,6 +110,8 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
     private long counterEventDedupTtlDays = 7L;
     @Value("${social.interaction-projection.async-enabled:false}")
     private boolean asyncProjectionEnabled;
+    @Value("${social.interaction-projection.enabled:true}")
+    private boolean interactionProjectionEnabled = true;
 
     /**
      * 构造互动服务。
@@ -429,9 +431,11 @@ public class InteractionServiceImpl implements InteractionService, CounterAggreg
                 SocialServiceSupport.serialize(objectMapper, CounterEventPayload.of(eventId, eventType, targetType, targetId, action, currentUserId, delta))
         );
 
-        Transactions.runAfterCommit(() -> dispatchInteractionProjection(() -> applyInteractionProjection(
-                snapshot, targetType, targetId, currentUserId, action, active, delta, String.valueOf(eventId)
-        )));
+        if (interactionProjectionEnabled) {
+            Transactions.runAfterCommit(() -> dispatchInteractionProjection(() -> applyInteractionProjection(
+                    snapshot, targetType, targetId, currentUserId, action, active, delta, String.valueOf(eventId)
+            )));
+        }
 
         return buildActionData(targetType, targetId, action, active, true);
     }

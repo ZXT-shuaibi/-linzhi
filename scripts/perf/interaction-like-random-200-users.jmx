@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Interaction Random Like - 200 Users" enabled="true">
-      <stringProp name="TestPlan.comments">200 concurrent writers rotate 200 authenticated users and choose a random public post for every request. The isolated perf profile raises only this endpoint's benchmark rate-limit guard; the business profile remains unchanged.</stringProp>
+      <stringProp name="TestPlan.comments">200 concurrent writers rotate 200 authenticated users and choose a random public post for every request. Set action=like or action=favorite for the comparison mode. The isolated perf profile raises only this endpoint's benchmark rate-limit guard.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
     </TestPlan>
@@ -25,7 +25,7 @@
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST random post like" enabled="true">
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true"><collectionProp name="Arguments.arguments"/></elementProp>
           <stringProp name="HTTPSampler.domain">${__P(host,127.0.0.1)}</stringProp><stringProp name="HTTPSampler.port">${__P(port,8081)}</stringProp><stringProp name="HTTPSampler.protocol">http</stringProp>
-          <stringProp name="HTTPSampler.path">/api/v1/interactions/targets/post/${__Random(900000000100000001,900000000100000500)}/like</stringProp><stringProp name="HTTPSampler.method">POST</stringProp><boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <stringProp name="HTTPSampler.path">/api/v1/interactions/targets/post/${__Random(900000000100000001,900000000100000500)}/${__P(action,favorite)}</stringProp><stringProp name="HTTPSampler.method">POST</stringProp><boolProp name="HTTPSampler.use_keepalive">true</boolProp>
         </HTTPSamplerProxy>
         <hashTree>
           <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="JWT Authorization" enabled="true"><collectionProp name="HeaderManager.headers"><elementProp name="Authorization" elementType="Header"><stringProp name="Header.name">Authorization</stringProp><stringProp name="Header.value">Bearer ${access_token}</stringProp></elementProp></collectionProp></HeaderManager>

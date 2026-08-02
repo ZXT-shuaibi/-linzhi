@@ -58,6 +58,8 @@ social:
       sync-send: ${PERF_SOCIAL_COUNTER_KAFKA_SYNC_SEND:false}
       send-timeout-ms: ${PERF_SOCIAL_COUNTER_KAFKA_SEND_TIMEOUT_MS:3000}
   interaction-projection:
+    # Toggle the business projection for isolated baselines; the default full mode remains enabled.
+    enabled: ${PERF_SOCIAL_INTERACTION_PROJECTION_ENABLED:true}
     # Do not let Redis/SDS/cache projection time occupy the HTTP request thread after commit.
     async-enabled: ${PERF_SOCIAL_INTERACTION_PROJECTION_ASYNC_ENABLED:true}
 
